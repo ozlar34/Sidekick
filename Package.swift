@@ -6,9 +6,15 @@ let package = Package(
     platforms: [
         .macOS(.v14)
     ],
+    dependencies: [
+        .package(url: "https://github.com/siteline/SwiftUI-Introspect", from: "1.0.0"),
+    ],
     targets: [
         .executableTarget(
             name: "Sidekick",
+            dependencies: [
+                .product(name: "SwiftUIIntrospect", package: "SwiftUI-Introspect"),
+            ],
             path: "Sources/Sidekick"
         ),
         .testTarget(

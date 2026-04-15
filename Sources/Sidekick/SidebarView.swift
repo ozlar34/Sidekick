@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SwiftUIIntrospect
 
 struct SidebarView: View {
     @ObservedObject var store: NoteStore
@@ -10,6 +11,7 @@ struct SidebarView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             NoteListView(store: store, selectedID: $selectedID)
                 .navigationSplitViewColumnWidth(min: 140, ideal: 140, max: 140)
+                .background(VisualEffectBackground())
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
@@ -39,6 +41,12 @@ struct SidebarView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(.textBackgroundColor))
+            }
+        }
+        .introspect(.navigationSplitView, on: .macOS(.v14, .v15)) { splitview in
+            if let delegate = splitview.delegate as? NSSplitViewController {
+                delegate.splitViewItems.first?.canCollapse = false
+                delegate.splitViewItems.first?.canCollapseFromWindowResize = false
             }
         }
     }
