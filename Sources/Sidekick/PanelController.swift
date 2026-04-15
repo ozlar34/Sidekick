@@ -11,6 +11,7 @@ import SwiftUI
 final class PanelController {
 
     private(set) var panel: SidekickPanel?
+    var store: NoteStore?
     private var escMonitor: Any?
 
     private let panelWidth: CGFloat = 380          // CONTEXT.md locks 380pt
@@ -68,7 +69,17 @@ final class PanelController {
         let initialFrame = anchoredFrame()
         let panel = SidekickPanel(contentRect: initialFrame)
 
-        let hosting = NSHostingView(rootView: PlaceholderView())
+        guard let store = self.store else {
+            NSLog("[Sidekick] PanelController.makePanel: store is nil — cannot build SidebarView")
+            fatalError("PanelController.store must be set before toggle() is invoked")
+        }
+
+        let rootView = SidebarView(store: store)
+            .environment(\.setDocumentEdited) { [weak panel] edited in
+                panel?.isDocumentEdited = edited
+            }
+
+        let hosting = NSHostingView(rootView: rootView)
         hosting.frame = panel.contentRect(forFrameRect: panel.frame)
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
