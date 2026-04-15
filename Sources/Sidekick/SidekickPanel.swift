@@ -23,6 +23,7 @@ final class SidekickPanel: NSPanel {
         hidesOnDeactivate = false
         isMovable = false
         backgroundColor = .clear
+        isOpaque = false           // required for vibrancy to composite behind the window
         hasShadow = true
         animationBehavior = .none  // we animate frame manually
     }

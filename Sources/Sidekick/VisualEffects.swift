@@ -6,9 +6,10 @@ import SwiftUI
 struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .sidebar
+        v.material = .underWindowBackground
         v.blendingMode = .behindWindow
         v.state = .active
+        v.alphaValue = 1.0
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}

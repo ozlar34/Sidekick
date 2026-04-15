@@ -1,52 +1,69 @@
 import AppKit
 import SwiftUI
-import SwiftUIIntrospect
 
 struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @State private var selectedID: UUID?
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    private var selectedNote: Note? {
+        guard let id = selectedID else { return nil }
+        return store.notes.first(where: { $0.id == id })
+    }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            NoteListView(store: store, selectedID: $selectedID)
-                .navigationSplitViewColumnWidth(min: 140, ideal: 140, max: 140)
-                .background(VisualEffectBackground())
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
+        HStack(spacing: 0) {
+            // Sidebar — 140pt, vibrancy via ZStack
+            ZStack {
+                VisualEffectBackground()
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Notes")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Spacer()
                         Button {
                             Task { @MainActor in
                                 let note = await store.create()
                                 selectedID = note.id
                             }
                         } label: {
-                            Label("New Note", systemImage: "plus")
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .medium))
                         }
+                        .buttonStyle(.plain)
                         .help("New Note")
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+
+                    Divider()
+
+                    NoteListView(store: store, selectedID: $selectedID)
                 }
-                .toolbar(removing: .sidebarToggle)
-        } detail: {
-            if let id = selectedID,
-               let note = store.notes.first(where: { $0.id == id }) {
-                EditorPaneView(store: store, note: note, selectedID: $selectedID)
-            } else {
-                VStack(spacing: 24) {
-                    Text("No Notes Yet")
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                    Text("Press + to create your first note.")
-                        .font(.subheadline)
-                }
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.textBackgroundColor))
             }
-        }
-        .introspect(.navigationSplitView, on: .macOS(.v14, .v15)) { splitview in
-            if let delegate = splitview.delegate as? NSSplitViewController {
-                delegate.splitViewItems.first?.canCollapse = false
-                delegate.splitViewItems.first?.canCollapseFromWindowResize = false
+            .frame(width: 140)
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(Color(.separatorColor))
+                    .frame(width: 1)
+            }
+
+            // Editor — plain opaque background
+            Group {
+                if let note = selectedNote {
+                    EditorPaneView(store: store, note: note, selectedID: $selectedID)
+                } else {
+                    VStack(spacing: 24) {
+                        Text("No Notes Yet")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                        Text("Press + to create your first note.")
+                            .font(.subheadline)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.textBackgroundColor))
+                }
             }
         }
     }
