@@ -6,9 +6,15 @@ let package = Package(
     platforms: [
         .macOS(.v14)
     ],
+    dependencies: [
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.1"),
+    ],
     targets: [
         .executableTarget(
             name: "Sidekick",
+            dependencies: [
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+            ],
             path: "Sources/Sidekick"
         ),
         .testTarget(
