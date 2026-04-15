@@ -26,12 +26,8 @@ struct SidebarView: View {
                 .toolbar(removing: .sidebarToggle)
         } detail: {
             if let id = selectedID,
-               store.notes.first(where: { $0.id == id }) != nil {
-                // Plan 02 replaces this stub with EditorPaneView(store:note:selectedID:)
-                Text("Editor pane — wired in Plan 02")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.textBackgroundColor))
+               let note = store.notes.first(where: { $0.id == id }) {
+                EditorPaneView(store: store, note: note, selectedID: $selectedID)
             } else {
                 VStack(spacing: 24) {
                     Text("No Notes Yet")
