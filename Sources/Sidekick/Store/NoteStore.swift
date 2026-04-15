@@ -6,8 +6,7 @@
 ///   - RESEARCH.md §Architecture Patterns / §Code Examples "NoteStore wiring"
 ///   - PATTERNS.md: analog PanelController (orchestrator style)
 ///   - CONTEXT.md: API shape locked
-///
-/// NOTE: Plan 02-02 adds FolderWatcher wiring to the watcherTask.
+///   - RESEARCH.md §Pattern 1 (FolderWatcher integration, watcher restart on folder deletion)
 import Foundation
 import Combine
 
@@ -19,8 +18,9 @@ final class NoteStore: ObservableObject {
     @Published private(set) var notes: [Note] = []
     let externalChanges: AsyncStream<ChangeEvent>
 
+    private let folder: URL
     private let io: IOActor
-    // FolderWatcher intentionally absent — Plan 02-02 wires it.
+    private var watcher: FolderWatcher
     private var watcherTask: Task<Void, Never>?
     private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
 
@@ -30,7 +30,9 @@ final class NoteStore: ObservableObject {
             withIntermediateDirectories: true,
             attributes: nil
         )
+        self.folder = folder
         self.io = IOActor(folder: folder)
+        self.watcher = FolderWatcher(url: folder)
 
         var cont: AsyncStream<ChangeEvent>.Continuation!
         self.externalChanges = AsyncStream { cont = $0 }
@@ -39,10 +41,12 @@ final class NoteStore: ObservableObject {
         // No background reload on init — callers drive reconciliation via
         // explicit `await store.reload()`. Fire-and-forget Task would race
         // with create/update calls in tests and production alike.
+        startWatcher()
     }
 
     deinit {
         watcherTask?.cancel()
+        watcher.stop()
         changesContinuation?.finish()
     }
 
@@ -154,6 +158,18 @@ final class NoteStore: ObservableObject {
     }
 
     func reload() async {
+        // Folder-deletion recovery (RESEARCH Pitfall 2):
+        // If the notes folder was deleted, recreate it and restart the watcher
+        // so subsequent changes are observed (T-02-09 mitigation).
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            try? FileManager.default.createDirectory(
+                at: folder,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            restartWatcherAfterFolderRecreated()
+        }
+
         let snapshot = (try? await io.scan()) ?? []
         let existingIndex = await io.loadIndex()
         let (newIndex, changed) = reconcile(snapshot: snapshot, index: existingIndex)
@@ -162,6 +178,51 @@ final class NoteStore: ObservableObject {
     }
 
     // MARK: - Reconciliation
+
+    private func handleExternalChange() async {
+        // Snapshot current ids to diff AFTER reconcile for externalChanges emission.
+        let beforeIds = Set(self.notes.map(\.id))
+        let beforeBodiesByID = Dictionary(uniqueKeysWithValues: self.notes.map { ($0.id, $0.body) })
+        await self.reload()
+        let afterIds = Set(self.notes.map(\.id))
+        let afterBodiesByID = Dictionary(uniqueKeysWithValues: self.notes.map { ($0.id, $0.body) })
+
+        // ids that appeared OR disappeared OR changed body
+        var changedIDs = beforeIds.symmetricDifference(afterIds)
+        for id in beforeIds.intersection(afterIds) {
+            if beforeBodiesByID[id] != afterBodiesByID[id] { changedIDs.insert(id) }
+        }
+        if !changedIDs.isEmpty {
+            changesContinuation?.yield(.externalModification(ids: changedIDs))
+        }
+    }
+
+    // MARK: - Watcher lifecycle
+
+    private func startWatcher() {
+        do {
+            try self.watcher.start()
+        } catch {
+            NSLog("[Sidekick] NoteStore: watcher.start failed: \(error)")
+            return
+        }
+        self.watcherTask?.cancel()
+        self.watcherTask = Task { [weak self] in
+            guard let self else { return }
+            for await _ in self.watcher.events {
+                // External filesystem change detected — reconcile and emit.
+                // Per RESEARCH §Pattern 2 and Anti-Patterns, we don't try to
+                // diff individual events; always run a full reconcile.
+                await self.handleExternalChange()
+            }
+        }
+    }
+
+    private func restartWatcherAfterFolderRecreated() {
+        self.watcher.stop()
+        self.watcher = FolderWatcher(url: folder)
+        startWatcher()
+    }
 
     // MARK: - Internal helpers
 
