@@ -1,0 +1,186 @@
+/// @MainActor orchestrator for the notes folder. Owns the index
+/// (authoritative) and exposes observable `notes` + `externalChanges`.
+/// All disk I/O delegated to `IOActor`; reconciliation via pure `reconcile`.
+///
+/// Pattern sources:
+///   - RESEARCH.md §Architecture Patterns / §Code Examples "NoteStore wiring"
+///   - PATTERNS.md: analog PanelController (orchestrator style)
+///   - CONTEXT.md: API shape locked
+///
+/// NOTE: Plan 02-02 adds FolderWatcher wiring to the watcherTask.
+import Foundation
+import Combine
+
+@MainActor
+final class NoteStore: ObservableObject {
+
+    // MARK: - Public API
+
+    @Published private(set) var notes: [Note] = []
+    let externalChanges: AsyncStream<ChangeEvent>
+
+    private let io: IOActor
+    // FolderWatcher intentionally absent — Plan 02-02 wires it.
+    private var watcherTask: Task<Void, Never>?
+    private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
+
+    init(folder: URL) throws {
+        try FileManager.default.createDirectory(
+            at: folder,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        self.io = IOActor(folder: folder)
+
+        var cont: AsyncStream<ChangeEvent>.Continuation!
+        self.externalChanges = AsyncStream { cont = $0 }
+        self.changesContinuation = cont
+
+        // No background reload on init — callers drive reconciliation via
+        // explicit `await store.reload()`. Fire-and-forget Task would race
+        // with create/update calls in tests and production alike.
+    }
+
+    deinit {
+        watcherTask?.cancel()
+        changesContinuation?.finish()
+    }
+
+    func create() async -> Note {
+        let id = UUID()
+        let uuid8 = String(id.uuidString.prefix(8)).lowercased()
+        let filename = "untitled-\(uuid8).md"
+
+        // Load current index (or start empty) to compute correct order.
+        let currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
+        let order = currentIndex.notes.count
+
+        // Write empty body to disk.
+        try? await io.writeNote("", filename: filename)
+
+        // Append entry to index and save.
+        var newIndex = currentIndex
+        newIndex.notes.append(IndexEntry(id: id, filename: filename, pinned: false, order: order))
+        try? await io.saveIndex(newIndex)
+
+        let note = Note(id: id, filename: filename, body: "", pinned: false, order: order)
+        notes.append(note)
+        return note
+    }
+
+    func update(_ id: UUID, body: String) async throws {
+        var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
+        guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
+
+        var entry = currentIndex.notes[entryIdx]
+        let oldFilename = entry.filename
+
+        // Compute new filename from first heading.
+        var newFilename = oldFilename
+        if let heading = HeadingExtractor.firstHeading(in: body) {
+            let slugBase = await io.slug(for: heading, excluding: id, index: currentIndex)
+            if !slugBase.isEmpty {
+                newFilename = slugBase + ".md"
+            }
+        }
+
+        // Rename if heading changed.
+        if newFilename != oldFilename {
+            try await io.renameNote(oldFilename: oldFilename, newFilename: newFilename)
+            entry.filename = newFilename
+            currentIndex.notes[entryIdx] = entry
+            try await io.saveIndex(currentIndex)
+        }
+
+        // Write body to disk.
+        try await io.writeNote(body, filename: newFilename)
+
+        // Update in-memory notes.
+        if let noteIdx = notes.firstIndex(where: { $0.id == id }) {
+            notes[noteIdx].body = body
+            notes[noteIdx].filename = newFilename
+        }
+    }
+
+    func delete(_ id: UUID) async throws {
+        var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
+        guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
+        let filename = currentIndex.notes[entryIdx].filename
+
+        try await io.deleteNote(filename: filename)
+        currentIndex.notes.remove(at: entryIdx)
+
+        // Reassign dense order.
+        for i in currentIndex.notes.indices {
+            currentIndex.notes[i].order = i
+        }
+        try await io.saveIndex(currentIndex)
+
+        notes.removeAll { $0.id == id }
+        // Re-sort to maintain dense order.
+        notes.sort { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
+    }
+
+    func setPinned(_ id: UUID, _ pinned: Bool) async throws {
+        var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
+        guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
+        currentIndex.notes[entryIdx].pinned = pinned
+
+        let snapshot = (try? await io.scan()) ?? []
+        let (newIndex, _) = reconcile(snapshot: snapshot, index: currentIndex)
+        try await io.saveIndex(newIndex)
+        await applyIndex(newIndex)
+    }
+
+    func reorder(_ ids: [UUID]) async throws {
+        var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
+
+        // Re-order entries to match provided ids sequence.
+        var reordered: [IndexEntry] = []
+        for id in ids {
+            if let entry = currentIndex.notes.first(where: { $0.id == id }) {
+                reordered.append(entry)
+            }
+        }
+        // Append any entries not in ids (safety fallback).
+        for entry in currentIndex.notes where !ids.contains(entry.id) {
+            reordered.append(entry)
+        }
+        // Assign dense order.
+        for i in reordered.indices { reordered[i].order = i }
+        currentIndex.notes = reordered
+        try await io.saveIndex(currentIndex)
+        await applyIndex(currentIndex)
+    }
+
+    func reload() async {
+        let snapshot = (try? await io.scan()) ?? []
+        let existingIndex = await io.loadIndex()
+        let (newIndex, changed) = reconcile(snapshot: snapshot, index: existingIndex)
+        if changed { try? await io.saveIndex(newIndex) }
+        await applyIndex(newIndex)
+    }
+
+    // MARK: - Reconciliation
+
+    // MARK: - Internal helpers
+
+    private func applyIndex(_ index: NoteIndex) async {
+        var materialized: [Note] = []
+        for entry in index.notes {
+            let body = (try? await io.readNote(filename: entry.filename)) ?? ""
+            materialized.append(Note(
+                id: entry.id,
+                filename: entry.filename,
+                body: body,
+                pinned: entry.pinned,
+                order: entry.order
+            ))
+        }
+        // Sort: pinned first, then by order.
+        notes = materialized.sorted {
+            if $0.pinned != $1.pinned { return $0.pinned }
+            return $0.order < $1.order
+        }
+    }
+}
