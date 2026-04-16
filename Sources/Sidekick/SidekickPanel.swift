@@ -10,6 +10,18 @@ final class SidekickPanel: NSPanel {
     override var canBecomeKey: Bool { true }   // required so Escape reaches us
     override var canBecomeMain: Bool { false } // stays a utility window
 
+    /// G-05: nonactivating panels bypass Cocoa's global menu-bar key-equivalent
+    /// dispatcher — Cmd+Z / Cmd+Shift+Z / Cmd+Q reach the *previously active*
+    /// app's menu bar, not ours. Manually scan NSApp.mainMenu so items like
+    /// Undo/Redo/Cut/Copy/Paste/Quit route to our first responder (the
+    /// NSTextView inside SwiftUI TextEditor).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
