@@ -82,23 +82,19 @@ final class PanelController {
         targetScreenMaxX
     }
 
-    /// Just off the right edge — used as slide-in start and slide-out end.
+    /// Just off the right edge of ALL screens — used as slide-in start and slide-out end.
     ///
-    /// Multi-monitor correctness (P7-BUG-01): The start/end x must be the
-    /// target screen's PHYSICAL right edge (`screen.frame.maxX`), not the
-    /// visibleFrame maxX or the input frame's maxX. On setups where the
-    /// target screen is not the rightmost display, `visibleFrame.maxX`
-    /// equals the LEFT edge of a neighbor screen — making the panel
-    /// momentarily visible on the wrong monitor during animation.
-    ///
-    /// Target screen is resolved from the input frame's midpoint (a point
-    /// guaranteed to sit inside the on-screen final frame) using the same
-    /// idiom as `anchoredFrame()`.
+    /// Multi-monitor correctness (P7-BUG-01): The start x must be beyond every
+    /// connected display's right edge. Using only the target screen's `frame.maxX`
+    /// is insufficient — when the target is not the rightmost display, `frame.maxX`
+    /// is the LEFT edge of the next monitor, so the panel starts visibly on the
+    /// neighbor. Taking the global max across all screens guarantees the panel
+    /// is off-screen on every display before the animation begins.
     private func offScreenFrame(for frame: NSRect) -> NSRect {
-        let targetScreen = NSScreen.screens.first {
-            $0.visibleFrame.contains(NSPoint(x: frame.minX, y: frame.midY))
-        } ?? NSScreen.main ?? NSScreen.screens[0]
-        let offX = PanelController.offScreenX(targetScreenMaxX: targetScreen.frame.maxX)
+        let rightmostX = NSScreen.screens.map { $0.frame.maxX }.max()
+                       ?? NSScreen.main?.frame.maxX
+                       ?? frame.maxX
+        let offX = PanelController.offScreenX(targetScreenMaxX: rightmostX)
         return NSRect(x: offX,
                       y: frame.origin.y,
                       width: frame.width,
@@ -157,10 +153,20 @@ final class PanelController {
 
     // MARK: - Animation
 
+    // Horizontal slide offset for show/hide animation. Small enough that the
+    // brief overlap with an adjacent screen happens only at near-zero alpha,
+    // making any bleed imperceptible, while still giving a clear right-to-left
+    // slide feel.
+    private let slideOffset: CGFloat = 20
+
     private func slideIn(to finalFrame: NSRect) {
         guard let panel else { return }
-        let start = offScreenFrame(for: finalFrame)
-        panel.setFrame(start, display: false)
+        let startFrame = NSRect(x: finalFrame.origin.x + slideOffset,
+                                y: finalFrame.origin.y,
+                                width: finalFrame.width,
+                                height: finalFrame.height)
+        panel.alphaValue = 0
+        panel.setFrame(startFrame, display: false)
         panel.orderFrontRegardless()
         // makeKey() is required so the local Escape monitor fires
         // (RESEARCH.md Pitfall #1).
@@ -170,19 +176,25 @@ final class PanelController {
             ctx.duration = slideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().setFrame(finalFrame, display: true)
+            panel.animator().alphaValue = 1.0
         }
     }
 
     private func slideOut() {
         guard let panel, panel.isVisible else { return }
-        let off = offScreenFrame(for: panel.frame)
+        let endFrame = NSRect(x: panel.frame.origin.x + slideOffset,
+                              y: panel.frame.origin.y,
+                              width: panel.frame.width,
+                              height: panel.frame.height)
 
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = slideDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().setFrame(off, display: true)
+            panel.animator().setFrame(endFrame, display: true)
+            panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             panel.orderOut(nil)
+            panel.alphaValue = 1.0  // reset for next appearance
             self?.removeDismissHandlers()
         })
     }
