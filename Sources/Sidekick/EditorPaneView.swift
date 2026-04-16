@@ -15,40 +15,77 @@ struct EditorPaneView: View {
     @State private var isPreviewMode: Bool = false
     @State private var cursorOffset: Int = 0
 
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            if isPreviewMode {
-                MarkdownPreviewView(content: localBody)
-            } else {
-                TextEditor(text: $localBody)
-                    .focused($editorFocused)
-                    .font(.body)
-                    .padding(.horizontal, 8)
-                    .padding(.top, 8)
-                    .onChange(of: localBody) { _, newValue in
-                        scheduleAutoSave(body: newValue)
-                    }
+    // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
+    @State private var showExternalChangeBanner = false
+    @State private var diskWriteError: Bool = false
 
-                if localBody.isEmpty {
-                    Text("Start writing...")
-                        .foregroundStyle(.secondary)
-                        .font(.body)
-                        .padding(.leading, 13)   // TextEditor internal inset (~5pt) + 8pt outer pad
-                        .padding(.top, 16)        // TextEditor internal inset (~8pt) + 8pt outer pad
-                        .allowsHitTesting(false)
+    var body: some View {
+        VStack(spacing: 0) {
+            // External-edit banner (STORE-07) — top of editor
+            if showExternalChangeBanner {
+                HStack {
+                    Text("⚠ File changed on disk").font(.body)
+                    Spacer()
+                    Button("Reload") {
+                        Task { await reloadFromDisk() }
+                    }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(Color.yellow.opacity(0.15))
             }
 
-            // Hidden ⌘R carrier — must remain in hierarchy in both modes
-            // (RESEARCH Pitfall 4: ScrollView holds focus in preview; ZStack-embedded
-            // Button still receives the shortcut). D-03: no visible mode indicator.
-            Button("") { togglePreviewMode() }
-                .keyboardShortcut("r", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .allowsHitTesting(false)
+            // Editor / preview content
+            ZStack(alignment: .topLeading) {
+                if isPreviewMode {
+                    MarkdownPreviewView(content: localBody)
+                } else {
+                    TextEditor(text: $localBody)
+                        .focused($editorFocused)
+                        .font(.body)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 8)
+                        .onChange(of: localBody) { _, newValue in
+                            scheduleAutoSave(body: newValue)
+                        }
+
+                    if localBody.isEmpty {
+                        Text("Start writing...")
+                            .foregroundStyle(.secondary)
+                            .font(.body)
+                            .padding(.leading, 13)   // TextEditor internal inset (~5pt) + 8pt outer pad
+                            .padding(.top, 16)        // TextEditor internal inset (~8pt) + 8pt outer pad
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                // Hidden ⌘R carrier — must remain in hierarchy in both modes
+                // (RESEARCH Pitfall 4: ScrollView holds focus in preview; ZStack-embedded
+                // Button still receives the shortcut). D-03: no visible mode indicator.
+                Button("") { togglePreviewMode() }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .allowsHitTesting(false)
+            }
+            .background(Color(.textBackgroundColor))
+
+            // Disk-write failure toast (REL-01) — bottom of editor
+            if diskWriteError {
+                HStack {
+                    Text("Could not save — check disk permissions.").font(.body)
+                    Spacer()
+                    Button("Retry") {
+                        diskWriteError = false
+                        scheduleAutoSave(body: localBody)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(Color(.controlBackgroundColor))
+                .shadow(radius: 4)
+            }
         }
-        .background(Color(.textBackgroundColor))
         .onAppear {
             localBody = note.body
             focusEditorAfterDelay()
@@ -57,6 +94,8 @@ struct EditorPaneView: View {
             localBody = note.body
             cursorOffset = 0          // reset stale offset on note switch
             isPreviewMode = false     // return to edit mode on note switch
+            showExternalChangeBanner = false
+            diskWriteError = false
             focusEditorAfterDelay()
         }
         .task(id: note.id) {
@@ -75,9 +114,18 @@ struct EditorPaneView: View {
         let storeRef = store
         Task {
             await debouncer.schedule {
-                try? await storeRef.update(id, body: body)
-                await MainActor.run {
-                    editedSetter(false)
+                do {
+                    try await storeRef.update(id, body: body)
+                    await MainActor.run { editedSetter(false) }
+                } catch {
+                    NSLog("[Sidekick] autosave failed: \(error.localizedDescription)")
+                    await MainActor.run {
+                        diskWriteError = true
+                        editedSetter(false)
+                    }
+                    // Auto-dismiss after 5s
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    await MainActor.run { diskWriteError = false }
                 }
             }
         }
@@ -92,16 +140,22 @@ struct EditorPaneView: View {
         }
     }
 
-    // MARK: - External changes (CONTEXT.md: silent reload, no banner in Phase 3)
+    // MARK: - External changes (Phase 5: banner trigger instead of silent reload)
 
     private func consumeExternalChanges() async {
         for await event in store.externalChanges {
-            if case .externalModification(let ids) = event,
-               ids.contains(note.id),
-               let updated = store.notes.first(where: { $0.id == note.id }) {
-                localBody = updated.body
+            if case .externalModification(let ids) = event, ids.contains(note.id) {
+                showExternalChangeBanner = true
             }
         }
+    }
+
+    private func reloadFromDisk() async {
+        await store.reloadNote(id: note.id)
+        if let updated = store.notes.first(where: { $0.id == note.id }) {
+            localBody = updated.body
+        }
+        showExternalChangeBanner = false
     }
 
     // MARK: - Phase 4 markdown preview toggle (EDIT-02, D-04)

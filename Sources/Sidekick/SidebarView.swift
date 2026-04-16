@@ -5,6 +5,7 @@ struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @State private var selectedID: UUID?
     @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
+    @State private var showMissingFolderSheet = false
 
     private var panelController: PanelController? {
         (NSApp.delegate as? AppDelegate)?.panelController
@@ -104,9 +105,60 @@ struct SidebarView: View {
             } else if selectedID == nil {
                 selectedID = store.notes.first?.id
             }
+            // Check whether the configured notes folder exists (STORE-04 / MF-01)
+            let configured = UserDefaults.standard.string(forKey: Defaults.notesFolder) ?? ""
+            let folder = configured.isEmpty
+                ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/Sidekick")
+                : URL(fileURLWithPath: configured)
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir)
+            if !exists || !isDir.boolValue {
+                showMissingFolderSheet = true
+            }
         }
         .onChange(of: selectedID) { _, new in
             lastSelectedNoteID = new?.uuidString ?? ""
+        }
+        .sheet(isPresented: $showMissingFolderSheet) {
+            VStack(spacing: 16) {
+                Text("Notes Folder Not Found").font(.headline)
+                Text("The notes folder could not be found. Create it now or choose a different location.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    Button("Choose Folder...") { chooseFolder() }
+                        .buttonStyle(.bordered)
+                    Button("Create Folder") { createFolder() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(24)
+            .frame(width: 360)
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: Defaults.notesFolder)
+            showMissingFolderSheet = false
+            Task { await store.reload() }
+        }
+    }
+
+    private func createFolder() {
+        let target = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/Sidekick")
+        do {
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            UserDefaults.standard.set(target.path, forKey: Defaults.notesFolder)
+            showMissingFolderSheet = false
+            Task { await store.reload() }
+        } catch {
+            NSLog("[Sidekick] createFolder failed: \(error.localizedDescription)")
         }
     }
 }
