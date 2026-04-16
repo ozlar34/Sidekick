@@ -16,8 +16,14 @@ struct EditorPaneView: View {
     @State private var cursorOffset: Int = 0
 
     // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
-    @State private var showExternalChangeBanner = false
+    // Banner state is derived from store.externallyChangedIDs (WR-06): a single
+    // long-lived @Published Set on NoteStore means we don't miss events across
+    // note switches or while the editor is unmounted (empty state).
     @State private var diskWriteError: Bool = false
+
+    private var showExternalChangeBanner: Bool {
+        store.externallyChangedIDs.contains(note.id)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -94,12 +100,8 @@ struct EditorPaneView: View {
             localBody = note.body
             cursorOffset = 0          // reset stale offset on note switch
             isPreviewMode = false     // return to edit mode on note switch
-            showExternalChangeBanner = false
             diskWriteError = false
             focusEditorAfterDelay()
-        }
-        .task(id: note.id) {
-            await consumeExternalChanges()
         }
     }
 
@@ -142,20 +144,12 @@ struct EditorPaneView: View {
 
     // MARK: - External changes (Phase 5: banner trigger instead of silent reload)
 
-    private func consumeExternalChanges() async {
-        for await event in store.externalChanges {
-            if case .externalModification(let ids) = event, ids.contains(note.id) {
-                showExternalChangeBanner = true
-            }
-        }
-    }
-
     private func reloadFromDisk() async {
         await store.reloadNote(id: note.id)
         if let updated = store.notes.first(where: { $0.id == note.id }) {
             localBody = updated.body
         }
-        showExternalChangeBanner = false
+        store.acknowledgeExternalChange(id: note.id)
     }
 
     // MARK: - Phase 4 markdown preview toggle (EDIT-02, D-04)

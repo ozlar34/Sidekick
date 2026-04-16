@@ -17,6 +17,7 @@ final class NoteStore: ObservableObject {
 
     @Published private(set) var notes: [Note] = []
     @Published private(set) var folderMissing: Bool = false
+    @Published private(set) var externallyChangedIDs: Set<UUID> = []
     let externalChanges: AsyncStream<ChangeEvent>
 
     private let folder: URL
@@ -216,8 +217,13 @@ final class NoteStore: ObservableObject {
             if beforeBodiesByID[id] != afterBodiesByID[id] { changedIDs.insert(id) }
         }
         if !changedIDs.isEmpty {
+            externallyChangedIDs.formUnion(changedIDs)
             changesContinuation?.yield(.externalModification(ids: changedIDs))
         }
+    }
+
+    func acknowledgeExternalChange(id: UUID) {
+        externallyChangedIDs.remove(id)
     }
 
     // MARK: - Watcher lifecycle
