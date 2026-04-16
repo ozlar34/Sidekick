@@ -69,6 +69,14 @@ struct SettingsView: View {
                 HStack {
                     TextField("", value: $panelWidth, format: .number)
                         .frame(width: 60)
+                        .onChange(of: panelWidth) { _, newValue in
+                            let clamped = max(260, min(560, newValue))
+                            if clamped != newValue { panelWidth = clamped }
+                            if let ctrl = (NSApp.delegate as? AppDelegate)?.panelController,
+                               ctrl.panel?.isVisible == true {
+                                ctrl.resizePanel(to: clamped)
+                            }
+                        }
                     Text("pt").foregroundStyle(.secondary)
                 }
             }

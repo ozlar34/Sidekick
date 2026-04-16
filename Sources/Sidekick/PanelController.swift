@@ -16,7 +16,8 @@ final class PanelController {
 
     var panelWidth: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
-        return saved > 0 ? saved : 380
+        let raw = saved > 0 ? saved : 380
+        return max(260, min(560, raw))
     }()
     private let slideDuration: TimeInterval = 0.20 // CONTEXT.md locks 200ms
 
