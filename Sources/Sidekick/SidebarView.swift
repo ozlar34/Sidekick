@@ -4,6 +4,11 @@ import SwiftUI
 struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @State private var selectedID: UUID?
+    @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
+
+    private var panelController: PanelController? {
+        (NSApp.delegate as? AppDelegate)?.panelController
+    }
 
     private var selectedNote: Note? {
         guard let id = selectedID else { return nil }
@@ -12,6 +17,7 @@ struct SidebarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // ResizeHandleView is attached as .overlay(alignment: .leading) below
             // Sidebar — 140pt, vibrancy via ZStack
             ZStack {
                 VisualEffectBackground()
@@ -83,6 +89,24 @@ struct SidebarView: View {
                     .background(Color(.textBackgroundColor))
                 }
             }
+        }
+        .overlay(alignment: .leading) {
+            ResizeHandleView(
+                onDrag: { newWidth in panelController?.resizePanel(to: newWidth) },
+                onDragEnd: { panelController?.saveWidth() }
+            )
+            .frame(width: 6)
+        }
+        .onAppear {
+            if let uuid = UUID(uuidString: lastSelectedNoteID),
+               store.notes.contains(where: { $0.id == uuid }) {
+                selectedID = uuid
+            } else if selectedID == nil {
+                selectedID = store.notes.first?.id
+            }
+        }
+        .onChange(of: selectedID) { _, new in
+            lastSelectedNoteID = new?.uuidString ?? ""
         }
     }
 }
