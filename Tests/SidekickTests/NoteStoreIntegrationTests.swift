@@ -7,7 +7,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testCreateWritesFile() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         XCTAssertEqual(store.notes.count, 1)
         XCTAssertTrue(
             FileManager.default.fileExists(
@@ -19,7 +19,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testAtomicWriteCleanup() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         try await store.update(note.id, body: "# Hello\nsome content")
 
         let contents = try FileManager.default.contentsOfDirectory(
@@ -34,8 +34,8 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
 
-        let note1 = await store.create()
-        let note2 = await store.create()
+        let note1 = try await store.create()
+        let note2 = try await store.create()
         try await store.setPinned(note1.id, true)
         try await store.reorder([note1.id, note2.id])
 
@@ -59,7 +59,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testCorruptIndexRecovery() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        _ = await store.create()
+        _ = try await store.create()
 
         // Write garbage to .index.json.
         let indexURL = tmp.url.appendingPathComponent(".index.json")
@@ -87,7 +87,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testRenameOnHeadingChange() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         let originalFilename = note.filename
 
         try await store.update(note.id, body: "# Hello World\ncontent")
@@ -163,7 +163,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testWatcherDetectsExternalEdit() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         let filename = note.filename
 
         // Let watcher settle (avoid detecting our own create as external).
@@ -190,7 +190,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testWatcherDetectsExternalDelete() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         let filename = note.filename
         XCTAssertEqual(store.notes.count, 1)
 
@@ -214,7 +214,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testWatcherCoalescesBursts() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = await store.create()
+        let note = try await store.create()
         let filename = note.filename
 
         // Let watcher settle.
@@ -250,7 +250,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         await store.reload()
-        let note = await store.create()
+        let note = try await store.create()
         let filename = note.filename
         try await store.delete(note.id)
         // File is gone from the notes folder
@@ -264,7 +264,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         await store.reload()
-        let note = await store.create()
+        let note = try await store.create()
         try await store.update(note.id, body: "# v1")
         // Get filename after potential rename from heading
         guard let entry = store.notes.first(where: { $0.id == note.id }) else {
@@ -282,9 +282,9 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         await store.reload()
-        let noteA = await store.create()
-        let noteB = await store.create()
-        let noteC = await store.create()
+        let noteA = try await store.create()
+        let noteB = try await store.create()
+        let noteC = try await store.create()
         let a = noteA.id
         let b = noteB.id
         let c = noteC.id
@@ -296,7 +296,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testFolderDeletionRecovery() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        _ = await store.create()
+        _ = try await store.create()
         XCTAssertEqual(store.notes.count, 1)
 
         // Delete the entire notes folder.

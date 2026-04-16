@@ -50,7 +50,7 @@ final class NoteStore: ObservableObject {
         changesContinuation?.finish()
     }
 
-    func create() async -> Note {
+    func create() async throws -> Note {
         let id = UUID()
         let uuid8 = String(id.uuidString.prefix(8)).lowercased()
         let filename = "untitled-\(uuid8).md"
@@ -59,13 +59,17 @@ final class NoteStore: ObservableObject {
         let currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
         let order = currentIndex.notes.count
 
-        // Write empty body to disk.
-        try? await io.writeNote("", filename: filename)
+        // Write empty body to disk FIRST. Propagate error so the caller can
+        // surface it and avoid mutating the in-memory array when disk state
+        // diverges (WR-01).
+        try await io.writeNote("", filename: filename)
 
-        // Append entry to index and save.
+        // Append entry to index and save. If this fails the file exists on
+        // disk but is missing from .index.json — reconcile on next reload
+        // will adopt it with a new UUID, which is a recoverable state.
         var newIndex = currentIndex
         newIndex.notes.append(IndexEntry(id: id, filename: filename, pinned: false, order: order))
-        try? await io.saveIndex(newIndex)
+        try await io.saveIndex(newIndex)
 
         let note = Note(id: id, filename: filename, body: "", pinned: false, order: order)
         notes.append(note)

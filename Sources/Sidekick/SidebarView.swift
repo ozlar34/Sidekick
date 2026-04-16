@@ -6,6 +6,7 @@ struct SidebarView: View {
     @State private var selectedID: UUID?
     @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
     @State private var showMissingFolderSheet = false
+    @State private var createError: Bool = false
 
     private var panelController: PanelController? {
         (NSApp.delegate as? AppDelegate)?.panelController
@@ -41,8 +42,13 @@ struct SidebarView: View {
                     HStack {
                         Button {
                             Task { @MainActor in
-                                let note = await store.create()
-                                selectedID = note.id
+                                do {
+                                    let note = try await store.create()
+                                    selectedID = note.id
+                                } catch {
+                                    NSLog("[Sidekick] create failed: \(error.localizedDescription)")
+                                    createError = true
+                                }
                             }
                         } label: {
                             Image(systemName: "plus")
@@ -118,6 +124,11 @@ struct SidebarView: View {
         }
         .onChange(of: selectedID) { _, new in
             lastSelectedNoteID = new?.uuidString ?? ""
+        }
+        .alert("Could not create note", isPresented: $createError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Check disk permissions and that the notes folder is writable.")
         }
         .sheet(isPresented: $showMissingFolderSheet) {
             VStack(spacing: 16) {
