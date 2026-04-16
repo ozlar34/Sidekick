@@ -161,14 +161,19 @@ final class NoteStore: ObservableObject {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
 
         // Re-order entries to match provided ids sequence.
+        // IN-05: defensive dedup. If `ids` contains duplicates, `first(where:)`
+        // would append the same entry multiple times; the fallback loop below
+        // would then miss nothing because `ids.contains(entry.id)` is still
+        // true. Track seen ids explicitly so each entry appears exactly once.
+        var seen: Set<UUID> = []
         var reordered: [IndexEntry] = []
-        for id in ids {
+        for id in ids where seen.insert(id).inserted {
             if let entry = currentIndex.notes.first(where: { $0.id == id }) {
                 reordered.append(entry)
             }
         }
         // Append any entries not in ids (safety fallback).
-        for entry in currentIndex.notes where !ids.contains(entry.id) {
+        for entry in currentIndex.notes where !seen.contains(entry.id) {
             reordered.append(entry)
         }
         // Assign dense order.
