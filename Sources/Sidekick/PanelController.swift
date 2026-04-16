@@ -10,7 +10,7 @@ import SwiftUI
 ///   - StandingDeskTimer/Sources/StandingDeskTimer/AppDelegate.swift:374-390 (Escape monitor)
 ///
 /// IN-07: `@MainActor`-isolated because `toggle()`, `resizePanel(to:)`,
-/// `saveWidth()`, `slideIn(to:)`, and `installEscapeHandler()` all touch
+/// `saveWidth()`, `slideIn(to:)`, and `installDismissHandlers()` all touch
 /// `NSPanel` / `NSEvent` / `NSAnimationContext`, which must run on the main
 /// thread. KeyboardShortcuts delivers callbacks on main today, so this works
 /// in practice — the annotation makes it a compile-time guarantee and will
@@ -21,6 +21,7 @@ final class PanelController {
     private(set) var panel: SidekickPanel?
     var store: NoteStore?
     private var escMonitor: Any?
+    private var outsideClickMonitor: Any?
 
     var panelWidth: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
@@ -45,7 +46,7 @@ final class PanelController {
         // recompute the anchored frame every time.
         let target = anchoredFrame()
         slideIn(to: target)
-        installEscapeHandler()
+        installDismissHandlers()
     }
 
     /// Exposed for downstream tests. True iff `window` is the panel instance.
@@ -153,29 +154,50 @@ final class PanelController {
             panel.animator().setFrame(off, display: true)
         }, completionHandler: { [weak self] in
             panel.orderOut(nil)
-            self?.removeEscapeHandler()
+            self?.removeDismissHandlers()
         })
     }
 
-    // MARK: - Escape handling (panel-scoped, local monitor only)
+    // MARK: - Dismiss handling (panel-scoped Escape + global outside-click)
 
-    private func installEscapeHandler() {
-        guard escMonitor == nil else { return }
-        escMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            // keyCode 53 == Escape. Gate on panel identity so we don't swallow
-            // Escape elsewhere in the process.
-            if event.keyCode == 53, event.window === self?.panel {
-                self?.slideOut()
-                return nil   // swallow so Escape doesn't leak further
+    private func installDismissHandlers() {
+        // Panel-scoped Escape — unchanged from prior installEscapeHandler().
+        if escMonitor == nil {
+            escMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+                // keyCode 53 == Escape. Gate on panel identity so we don't swallow
+                // Escape elsewhere in the process.
+                if event.keyCode == 53, event.window === self?.panel {
+                    self?.slideOut()
+                    return nil   // swallow so Escape doesn't leak further
+                }
+                return event
             }
-            return event
+        }
+
+        // G-01: click-outside dismissal. Global monitor only sees events
+        // destined for OTHER apps/desktop — any mouse-down it observes is
+        // by definition outside the panel, so no inside-click filtering is
+        // required. SidekickPanel.hidesOnDeactivate remains false on purpose
+        // (HUD UX survives brief clicks into another app to copy text); the
+        // explicit monitor is the correct dismissal path for .nonactivatingPanel
+        // + .accessory activation policy.
+        if outsideClickMonitor == nil {
+            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self] _ in
+                self?.slideOut()
+            }
         }
     }
 
-    private func removeEscapeHandler() {
+    private func removeDismissHandlers() {
         if let m = escMonitor {
             NSEvent.removeMonitor(m)
             escMonitor = nil
+        }
+        if let m = outsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            outsideClickMonitor = nil
         }
     }
 }
