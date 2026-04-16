@@ -243,6 +243,55 @@ final class NoteStoreIntegrationTests: XCTestCase {
                       "Final body should reflect the last burst write")
     }
 
+    // MARK: - Phase 5 plan 03 tests
+
+    /// 5-03-01: delete(id:) moves file to Trash, not permanent delete
+    func test_delete_movesFileToTrash_notPermanentDelete() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        await store.reload()
+        let note = await store.create()
+        let filename = note.filename
+        try await store.delete(note.id)
+        // File is gone from the notes folder
+        let stillExists = FileManager.default.fileExists(atPath: tmp.url.appendingPathComponent(filename).path)
+        XCTAssertFalse(stillExists, "File should no longer exist in notes folder after delete")
+        XCTAssertNil(store.notes.first(where: { $0.id == note.id }), "Note should be removed from store")
+    }
+
+    /// 5-03-02: reloadNote(id:) picks up on-disk changes
+    func test_reloadNote_picksUpOnDiskChange() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        await store.reload()
+        let note = await store.create()
+        try await store.update(note.id, body: "# v1")
+        // Get filename after potential rename from heading
+        guard let entry = store.notes.first(where: { $0.id == note.id }) else {
+            return XCTFail("Note not found in store")
+        }
+        // Write a new body directly to disk
+        let url = tmp.url.appendingPathComponent(entry.filename)
+        try "# v2".write(to: url, atomically: true, encoding: .utf8)
+        await store.reloadNote(id: note.id)
+        XCTAssertEqual(store.notes.first(where: { $0.id == note.id })?.body, "# v2")
+    }
+
+    /// 5-03-03: reorder preserves full list without duplicates or omissions
+    func test_reorder_preservesFullList() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        await store.reload()
+        let noteA = await store.create()
+        let noteB = await store.create()
+        let noteC = await store.create()
+        let a = noteA.id
+        let b = noteB.id
+        let c = noteC.id
+        try await store.reorder([c, a, b])
+        XCTAssertEqual(store.notes.map(\.id), [c, a, b])
+    }
+
     /// 2-02-05: Folder deletion recovers — watcher is restarted on recreated folder
     func testFolderDeletionRecovery() async throws {
         let tmp = TempFolder()
