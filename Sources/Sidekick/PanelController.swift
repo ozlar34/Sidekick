@@ -71,6 +71,17 @@ final class PanelController {
         )
     }
 
+    /// Pure helper extracted for unit testing (see OffScreenFrameTests).
+    /// Returns the x-coordinate where the panel must start/end to be
+    /// fully off-screen to the right of the target screen. Identity
+    /// function on `targetScreenMaxX` — the value IS the answer. The
+    /// point of the extraction is to pin the contract that we use
+    /// `targetScreen.frame.maxX` (the physical edge) not
+    /// `visibleFrame.maxX` or the input frame's maxX.
+    internal nonisolated static func offScreenX(targetScreenMaxX: CGFloat) -> CGFloat {
+        targetScreenMaxX
+    }
+
     /// Just off the right edge — used as slide-in start and slide-out end.
     private func offScreenFrame(for frame: NSRect) -> NSRect {
         NSRect(x: frame.maxX, y: frame.origin.y, width: frame.width, height: frame.height)
