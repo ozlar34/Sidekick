@@ -28,11 +28,23 @@ enum NoteRowFormatting {
         }
         return nil
     }
+
+    /// G-03: Successor-selection rule for post-delete reassignment.
+    /// - Returns: next note's id if the deleted note is not last; previous note's
+    ///   id if the deleted note was last; nil if the deleted note was the only
+    ///   one OR not in the list.
+    static func successorID(afterDeleting id: UUID, in notes: [Note]) -> UUID? {
+        guard let idx = notes.firstIndex(where: { $0.id == id }) else { return nil }
+        guard notes.count > 1 else { return nil }
+        if idx < notes.count - 1 { return notes[idx + 1].id }
+        return notes[idx - 1].id
+    }
 }
 
 struct NoteRowView: View {
     let note: Note
     @ObservedObject var store: NoteStore
+    @Binding var selectedID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -67,7 +79,14 @@ struct NoteRowView: View {
                 }
             }
             Button("Delete", role: .destructive) {
-                Task { try? await store.delete(note.id) }
+                // G-03: compute successor from the CURRENT snapshot. store.notes is
+                // @MainActor + @Published; we read it synchronously here on the main
+                // thread before the async delete mutates it.
+                let successor = NoteRowFormatting.successorID(afterDeleting: note.id, in: store.notes)
+                Task {
+                    try? await store.delete(note.id)
+                    await MainActor.run { selectedID = successor }
+                }
             }
         }
     }

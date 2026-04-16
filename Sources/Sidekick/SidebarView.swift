@@ -81,14 +81,27 @@ struct SidebarView: View {
 
             // Editor — plain opaque background
             Group {
-                if let note = selectedNote {
-                    EditorPaneView(store: store, note: note, selectedID: $selectedID)
-                } else {
+                if store.notes.isEmpty {
+                    // True empty-state — no notes exist.
                     VStack(spacing: 24) {
                         Text("No Notes Yet")
                             .font(.headline)
                             .fontWeight(.semibold)
                         Text("Press + to create your first note.")
+                            .font(.subheadline)
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.textBackgroundColor))
+                } else if let note = selectedNote {
+                    EditorPaneView(store: store, note: note, selectedID: $selectedID)
+                } else {
+                    // Notes exist but none selected (stale UUID mid-reassignment, or
+                    // transient between delete → onChange reassign).
+                    VStack(spacing: 12) {
+                        Text("No Note Selected")
+                            .font(.headline)
+                        Text("Pick a note from the sidebar.")
                             .font(.subheadline)
                     }
                     .foregroundStyle(.secondary)
@@ -133,13 +146,22 @@ struct SidebarView: View {
         // Task. Without this, lastSelectedNoteID can never be restored —
         // the onAppear contains(where:) check already failed against an
         // empty array. Restore on the first non-empty publish.
+        // G-03: guard relaxed to also reassign when selectedID references a
+        // UUID no longer in newNotes (post-delete or post-external-deletion
+        // reconcile). Belt-and-suspenders on top of the NoteRowView delete
+        // action's successor write — covers external deletions via watcher.
         .onChange(of: store.notes) { _, newNotes in
-            guard selectedID == nil, !newNotes.isEmpty else { return }
-            if let uuid = UUID(uuidString: lastSelectedNoteID),
-               newNotes.contains(where: { $0.id == uuid }) {
-                selectedID = uuid
+            let isStale = selectedID != nil && !newNotes.contains(where: { $0.id == selectedID })
+            guard selectedID == nil || isStale else { return }
+            if !newNotes.isEmpty {
+                if let uuid = UUID(uuidString: lastSelectedNoteID),
+                   newNotes.contains(where: { $0.id == uuid }) {
+                    selectedID = uuid
+                } else {
+                    selectedID = newNotes.first?.id
+                }
             } else {
-                selectedID = newNotes.first?.id
+                selectedID = nil
             }
         }
         .alert("Could not create note", isPresented: $createError) {

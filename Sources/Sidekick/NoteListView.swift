@@ -12,7 +12,7 @@ struct NoteListView: View {
             if !pinnedNotes.isEmpty {
                 Section("Pinned") {
                     ForEach(pinnedNotes) { note in
-                        NoteRowView(note: note, store: store)
+                        NoteRowView(note: note, store: store, selectedID: $selectedID)
                             .tag(note.id)
                     }
                     .onMove { source, destination in
@@ -26,7 +26,7 @@ struct NoteListView: View {
             }
             Section("Notes") {
                 ForEach(regularNotes) { note in
-                    NoteRowView(note: note, store: store)
+                    NoteRowView(note: note, store: store, selectedID: $selectedID)
                         .tag(note.id)
                 }
                 .onMove { source, destination in
