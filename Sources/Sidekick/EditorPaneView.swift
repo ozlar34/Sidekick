@@ -49,6 +49,7 @@ struct EditorPaneView: View {
                     TextEditor(text: $localBody)
                         .focused($editorFocused)
                         .font(.body)
+                        .padding(.top, 8)   // P7-PAD-01: breathing room at note top
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
                         }
@@ -58,7 +59,7 @@ struct EditorPaneView: View {
                             .foregroundStyle(.secondary)
                             .font(.body)
                             .padding(.leading, 13)   // TextEditor internal inset (~5pt) + 8pt outer pad
-                            .padding(.top, 16)        // TextEditor internal inset (~8pt) + 8pt outer pad
+                            .padding(.top, 24)        // TextEditor internal inset (~8pt) + 16pt outer pad (8 TE pad + 8 placeholder breathing)
                             .allowsHitTesting(false)
                     }
                 }
