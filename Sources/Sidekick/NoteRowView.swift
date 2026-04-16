@@ -4,19 +4,15 @@ import SwiftUI
 /// Pure-function formatters for note row title + preview. Extracted so
 /// formatting can be unit-tested without SwiftUI view instantiation.
 enum NoteRowFormatting {
-    static func title(for body: String) -> String {
-        HeadingExtractor.firstHeading(in: body) ?? "Untitled"
-    }
-
-    static func preview(for body: String) -> String? {
+    /// G-04: First non-empty, non-heading, whitespace-guarded-bullet-stripped line.
+    /// Shared between title() (cap 80) and preview() (cap 50). No cap applied here —
+    /// callers handle their own truncation.
+    /// IN-02 rule: only strip `- `, `* `, `> ` when followed by whitespace.
+    static func firstMeaningfulLine(for body: String) -> String? {
         for line in body.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = String(line).trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
             if trimmed.hasPrefix("#") { continue }
-            // IN-02: only strip list/quote prefix when the token is followed
-            // by whitespace. `drop(while:)` on "-*>" characters would turn
-            // `-42 is the answer` into `42 is the answer`; real markdown
-            // bullets/quotes always include a trailing space.
             let stripped: String
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("> ") {
                 stripped = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
@@ -24,9 +20,29 @@ enum NoteRowFormatting {
                 stripped = trimmed
             }
             guard !stripped.isEmpty else { continue }
-            return String(stripped.prefix(50))
+            return stripped
         }
         return nil
+    }
+
+    /// G-04: Title derivation chain —
+    ///   firstHeading → firstMeaningfulLine → "Untitled"
+    /// Cap at 80 chars (SwiftUI .lineLimit(1).truncationMode(.tail) further truncates visually,
+    /// but the 80-char hard cap avoids pathological thousand-character single-line bodies).
+    static func title(for body: String) -> String {
+        if let heading = HeadingExtractor.firstHeading(in: body) {
+            return String(heading.prefix(80))
+        }
+        if let line = firstMeaningfulLine(for: body) {
+            return String(line.prefix(80))
+        }
+        return "Untitled"
+    }
+
+    /// Preview line — consumes firstMeaningfulLine, applies 50-char cap.
+    static func preview(for body: String) -> String? {
+        guard let line = firstMeaningfulLine(for: body) else { return nil }
+        return String(line.prefix(50))
     }
 
     /// G-03: Successor-selection rule for post-delete reassignment.

@@ -6,7 +6,8 @@ final class NoteRowFormattingTests: XCTestCase {
         XCTAssertEqual(NoteRowFormatting.title(for: "# Hello\nbody"), "Hello")
     }
     func testTitleFallsBackToUntitled() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "no heading body"), "Untitled")
+        // G-04: plain text is now derived from body (not "Untitled"); only empty/whitespace falls back.
+        XCTAssertEqual(NoteRowFormatting.title(for: "no heading body"), "no heading body")
     }
     func testPreviewFirstNonHeadingLine() {
         XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\nfirst body line\nsecond"), "first body line")
