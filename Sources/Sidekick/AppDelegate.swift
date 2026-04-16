@@ -1,6 +1,11 @@
 import AppKit
 import Foundation
 
+// IN-07: @MainActor propagation. `panelController = PanelController()` is a
+// stored-property initializer; now that PanelController is @MainActor, its
+// init is main-actor-isolated and the enclosing type must be too. NSApp
+// delegate callbacks already run on main, so this matches the runtime reality.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkeyManager = HotkeyManager()

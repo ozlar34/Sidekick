@@ -8,6 +8,14 @@ import SwiftUI
 ///   - RESEARCH.md §Slide-In Animation / §Screen-Under-Cursor Frame / §Escape Handler
 ///   - StandingDeskTimer/Sources/StandingDeskTimer/AppDelegate.swift:332-338 (NSHostingView)
 ///   - StandingDeskTimer/Sources/StandingDeskTimer/AppDelegate.swift:374-390 (Escape monitor)
+///
+/// IN-07: `@MainActor`-isolated because `toggle()`, `resizePanel(to:)`,
+/// `saveWidth()`, `slideIn(to:)`, and `installEscapeHandler()` all touch
+/// `NSPanel` / `NSEvent` / `NSAnimationContext`, which must run on the main
+/// thread. KeyboardShortcuts delivers callbacks on main today, so this works
+/// in practice — the annotation makes it a compile-time guarantee and will
+/// reject future misuse (e.g. calls from `Task.detached`).
+@MainActor
 final class PanelController {
 
     private(set) var panel: SidekickPanel?
