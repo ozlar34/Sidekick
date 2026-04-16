@@ -59,6 +59,15 @@ struct SidebarView: View {
 
                         Spacer()
 
+                        Button {
+                            Task { await store.reload() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Refresh notes from disk")
+
                         Button(action: {
                             (NSApp.delegate as? AppDelegate)?.openSettings()
                         }) {
