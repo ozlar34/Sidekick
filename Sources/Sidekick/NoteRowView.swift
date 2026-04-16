@@ -59,6 +59,9 @@ struct NoteRowView: View {
                     Task { try? await store.setPinned(note.id, true) }
                 }
             }
+            Button("Delete", role: .destructive) {
+                Task { try? await store.delete(note.id) }
+            }
         }
     }
 }

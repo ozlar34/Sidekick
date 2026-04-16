@@ -15,12 +15,26 @@ struct NoteListView: View {
                         NoteRowView(note: note, store: store)
                             .tag(note.id)
                     }
+                    .onMove { source, destination in
+                        var pinnedIDs = pinnedNotes.map(\.id)
+                        pinnedIDs.move(fromOffsets: source, toOffset: destination)
+                        let regularIDs = regularNotes.map(\.id)
+                        let fullOrder = pinnedIDs + regularIDs
+                        Task { try? await store.reorder(fullOrder) }
+                    }
                 }
             }
             Section("Notes") {
                 ForEach(regularNotes) { note in
                     NoteRowView(note: note, store: store)
                         .tag(note.id)
+                }
+                .onMove { source, destination in
+                    var regularIDs = regularNotes.map(\.id)
+                    regularIDs.move(fromOffsets: source, toOffset: destination)
+                    let pinnedIDs = pinnedNotes.map(\.id)
+                    let fullOrder = pinnedIDs + regularIDs
+                    Task { try? await store.reorder(fullOrder) }
                 }
             }
         }
