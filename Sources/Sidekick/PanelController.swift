@@ -14,7 +14,10 @@ final class PanelController {
     var store: NoteStore?
     private var escMonitor: Any?
 
-    private let panelWidth: CGFloat = 380          // CONTEXT.md locks 380pt
+    var panelWidth: CGFloat = {
+        let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
+        return saved > 0 ? saved : 380
+    }()
     private let slideDuration: TimeInterval = 0.20 // CONTEXT.md locks 200ms
 
     // MARK: - Public API
@@ -85,6 +88,29 @@ final class PanelController {
         panel.contentView = hosting
 
         return panel
+    }
+
+    // MARK: - Resize API
+
+    /// Resizes the panel live, keeping the right edge anchored.
+    /// Width is clamped to [260, 560] per CONTEXT.md P-04.
+    func resizePanel(to newWidth: CGFloat) {
+        guard let panel else { return }
+        let clamped = max(260, min(560, newWidth))
+        var f = panel.frame
+        let rightEdge = f.maxX
+        f.origin.x = rightEdge - clamped
+        f.size.width = clamped
+        panel.setFrame(f, display: true)
+        panelWidth = clamped
+    }
+
+    /// Persists the current panel width to UserDefaults.
+    /// Call on drag-end so writes are infrequent.
+    func saveWidth() {
+        guard let panel else { return }
+        UserDefaults.standard.set(panel.frame.width, forKey: Defaults.panelWidth)
+        NSLog("[Sidekick] panelWidth saved: \(panel.frame.width)")
     }
 
     // MARK: - Animation

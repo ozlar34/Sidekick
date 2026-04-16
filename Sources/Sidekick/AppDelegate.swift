@@ -4,7 +4,7 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkeyManager = HotkeyManager()
-    private let panelController = PanelController()
+    let panelController = PanelController()
     private var store: NoteStore?
     private var settingsWindowController: SettingsWindowController?
 
@@ -19,9 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         NSLog("[Sidekick] launched")
 
-        // NoteStore root: ~/Documents/Sidekick/ — Phase 3 hardcoded; Phase 5 makes configurable via Settings.
-        let folder = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/Sidekick")
+        // NoteStore root: read from UserDefaults if set, otherwise ~/Documents/Sidekick/
+        let configuredPath = UserDefaults.standard.string(forKey: Defaults.notesFolder)
+        let folder: URL = (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/Sidekick")
         do {
             let s = try NoteStore(folder: folder)
             self.store = s
