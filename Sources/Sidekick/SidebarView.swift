@@ -193,22 +193,27 @@ struct SidebarView: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            UserDefaults.standard.set(url.path, forKey: Defaults.notesFolder)
             showMissingFolderSheet = false
-            Task { await store.reload() }
+            Task {
+                do {
+                    try await store.rebind(to: url)
+                } catch {
+                    NSLog("[Sidekick] chooseFolder rebind failed: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
     private func createFolder() {
         let target = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/Sidekick")
-        do {
-            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-            UserDefaults.standard.set(target.path, forKey: Defaults.notesFolder)
-            showMissingFolderSheet = false
-            Task { await store.reload() }
-        } catch {
-            NSLog("[Sidekick] createFolder failed: \(error.localizedDescription)")
+        showMissingFolderSheet = false
+        Task {
+            do {
+                try await store.rebind(to: target)
+            } catch {
+                NSLog("[Sidekick] createFolder rebind failed: \(error.localizedDescription)")
+            }
         }
     }
 }

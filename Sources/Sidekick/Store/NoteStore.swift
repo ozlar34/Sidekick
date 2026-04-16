@@ -20,8 +20,8 @@ final class NoteStore: ObservableObject {
     @Published private(set) var externallyChangedIDs: Set<UUID> = []
     let externalChanges: AsyncStream<ChangeEvent>
 
-    private let folder: URL
-    private let io: IOActor
+    private var folder: URL
+    private var io: IOActor
     private var watcher: FolderWatcher
     private var watcherTask: Task<Void, Never>?
     private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
@@ -204,6 +204,39 @@ final class NoteStore: ObservableObject {
         let (newIndex, changed) = reconcile(snapshot: snapshot, index: existingIndex)
         if changed { try? await io.saveIndex(newIndex) }
         await applyIndex(newIndex)
+    }
+
+    /// G-06: Repoint this NoteStore at a new folder URL without destroying
+    /// its identity. Used by "Choose Folder..." / "Create Folder" flows so
+    /// the running @ObservedObject bindings in the view hierarchy continue
+    /// to work. Also writes UserDefaults inside rebind so the two sources
+    /// of truth (UserDefaults[notesFolder], self.folder) cannot drift.
+    func rebind(to newFolder: URL) async throws {
+        // 1. Stop the existing watcher and cancel its consumer task.
+        watcherTask?.cancel()
+        watcherTask = nil
+        watcher.stop()
+
+        // 2. Ensure the target directory exists on disk.
+        try FileManager.default.createDirectory(
+            at: newFolder,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        // 3. Rebuild the downstream collaborators pointing at newFolder.
+        //    IOActor.folder is `let`, so we reconstruct rather than mutate.
+        self.folder = newFolder
+        self.io = IOActor(folder: newFolder)
+        self.watcher = FolderWatcher(url: newFolder)
+
+        // 4. Persist the new path to UserDefaults — inside the rebind —
+        //    so there is only one source of truth for "where notes live."
+        UserDefaults.standard.set(newFolder.path, forKey: Defaults.notesFolder)
+
+        // 5. Restart watcher + reload notes from the new folder.
+        startWatcher()
+        await reload()
     }
 
     // MARK: - Reconciliation
