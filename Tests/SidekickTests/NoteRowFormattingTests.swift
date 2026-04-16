@@ -20,6 +20,17 @@ final class NoteRowFormattingTests: XCTestCase {
     func testPreviewStripsQuote() {
         XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\n> quote item"), "quote item")
     }
+    // IN-02: lines starting with `-`/`*`/`>` but no following space are
+    // legitimate content (e.g. negative numbers) and must NOT be stripped.
+    func testPreviewPreservesLiteralDash() {
+        XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\n-42 is the answer"), "-42 is the answer")
+    }
+    func testPreviewPreservesLiteralStar() {
+        XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\n*bold*"), "*bold*")
+    }
+    func testPreviewPreservesLiteralGreaterThan() {
+        XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\n>=42 matches"), ">=42 matches")
+    }
     func testPreviewNilWhenOnlyHeading() {
         XCTAssertNil(NoteRowFormatting.preview(for: "# Heading\n"))
     }

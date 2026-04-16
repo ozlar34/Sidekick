@@ -13,9 +13,16 @@ enum NoteRowFormatting {
             let trimmed = String(line).trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
             if trimmed.hasPrefix("#") { continue }
-            let stripped = trimmed
-                .drop(while: { "-*>".contains($0) })
-                .trimmingCharacters(in: .whitespaces)
+            // IN-02: only strip list/quote prefix when the token is followed
+            // by whitespace. `drop(while:)` on "-*>" characters would turn
+            // `-42 is the answer` into `42 is the answer`; real markdown
+            // bullets/quotes always include a trailing space.
+            let stripped: String
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("> ") {
+                stripped = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            } else {
+                stripped = trimmed
+            }
             guard !stripped.isEmpty else { continue }
             return String(stripped.prefix(50))
         }
