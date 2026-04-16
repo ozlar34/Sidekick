@@ -128,6 +128,20 @@ struct SidebarView: View {
         .onChange(of: store.folderMissing) { _, missing in
             if missing { showMissingFolderSheet = true }
         }
+        // IN-04: store.notes is empty on first appearance because
+        // applicationDidFinishLaunching kicks off reload() in a detached
+        // Task. Without this, lastSelectedNoteID can never be restored —
+        // the onAppear contains(where:) check already failed against an
+        // empty array. Restore on the first non-empty publish.
+        .onChange(of: store.notes) { _, newNotes in
+            guard selectedID == nil, !newNotes.isEmpty else { return }
+            if let uuid = UUID(uuidString: lastSelectedNoteID),
+               newNotes.contains(where: { $0.id == uuid }) {
+                selectedID = uuid
+            } else {
+                selectedID = newNotes.first?.id
+            }
+        }
         .alert("Could not create note", isPresented: $createError) {
             Button("OK", role: .cancel) {}
         } message: {
