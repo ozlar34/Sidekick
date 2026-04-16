@@ -21,6 +21,17 @@ struct SidebarView: View {
                             .font(.headline)
                             .foregroundStyle(.primary)
                         Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+
+                    Divider()
+
+                    NoteListView(store: store, selectedID: $selectedID)
+
+                    Divider()
+
+                    HStack {
                         Button {
                             Task { @MainActor in
                                 let note = await store.create()
@@ -32,13 +43,20 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("New Note")
+
+                        Spacer()
+
+                        Button(action: {
+                            (NSApp.delegate as? AppDelegate)?.openSettings()
+                        }) {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 14, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Settings")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-
-                    Divider()
-
-                    NoteListView(store: store, selectedID: $selectedID)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                 }
             }
             .frame(width: 140)
