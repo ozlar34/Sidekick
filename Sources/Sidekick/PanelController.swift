@@ -83,8 +83,26 @@ final class PanelController {
     }
 
     /// Just off the right edge — used as slide-in start and slide-out end.
+    ///
+    /// Multi-monitor correctness (P7-BUG-01): The start/end x must be the
+    /// target screen's PHYSICAL right edge (`screen.frame.maxX`), not the
+    /// visibleFrame maxX or the input frame's maxX. On setups where the
+    /// target screen is not the rightmost display, `visibleFrame.maxX`
+    /// equals the LEFT edge of a neighbor screen — making the panel
+    /// momentarily visible on the wrong monitor during animation.
+    ///
+    /// Target screen is resolved from the input frame's midpoint (a point
+    /// guaranteed to sit inside the on-screen final frame) using the same
+    /// idiom as `anchoredFrame()`.
     private func offScreenFrame(for frame: NSRect) -> NSRect {
-        NSRect(x: frame.maxX, y: frame.origin.y, width: frame.width, height: frame.height)
+        let targetScreen = NSScreen.screens.first {
+            $0.visibleFrame.contains(NSPoint(x: frame.minX, y: frame.midY))
+        } ?? NSScreen.main ?? NSScreen.screens[0]
+        let offX = PanelController.offScreenX(targetScreenMaxX: targetScreen.frame.maxX)
+        return NSRect(x: offX,
+                      y: frame.origin.y,
+                      width: frame.width,
+                      height: frame.height)
     }
 
     // MARK: - Panel construction
