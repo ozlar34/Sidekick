@@ -16,6 +16,7 @@ final class NoteStore: ObservableObject {
     // MARK: - Public API
 
     @Published private(set) var notes: [Note] = []
+    @Published private(set) var folderMissing: Bool = false
     let externalChanges: AsyncStream<ChangeEvent>
 
     private let folder: URL
@@ -178,15 +179,18 @@ final class NoteStore: ObservableObject {
 
     func reload() async {
         // Folder-deletion recovery (RESEARCH Pitfall 2):
-        // If the notes folder was deleted, recreate it and restart the watcher
-        // so subsequent changes are observed (T-02-09 mitigation).
+        // If the notes folder was deleted, publish folderMissing=true so the UI
+        // can react, then recreate it and restart the watcher (T-02-09 mitigation).
         if !FileManager.default.fileExists(atPath: folder.path) {
+            folderMissing = true
             try? FileManager.default.createDirectory(
                 at: folder,
                 withIntermediateDirectories: true,
                 attributes: nil
             )
             restartWatcherAfterFolderRecreated()
+        } else {
+            folderMissing = false
         }
 
         let snapshot = (try? await io.scan()) ?? []

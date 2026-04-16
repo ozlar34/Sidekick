@@ -125,6 +125,9 @@ struct SidebarView: View {
         .onChange(of: selectedID) { _, new in
             lastSelectedNoteID = new?.uuidString ?? ""
         }
+        .onChange(of: store.folderMissing) { _, missing in
+            if missing { showMissingFolderSheet = true }
+        }
         .alert("Could not create note", isPresented: $createError) {
             Button("OK", role: .cancel) {}
         } message: {
