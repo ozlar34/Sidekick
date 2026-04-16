@@ -292,6 +292,52 @@ final class NoteStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(store.notes.map(\.id), [c, a, b])
     }
 
+    /// IN-05 regression: reorder() must not duplicate entries when the caller
+    /// passes duplicate UUIDs. Even though NoteListView's .onMove can't produce
+    /// duplicates today, the store must be defensive against malformed input.
+    func test_reorder_deduplicatesInputIDs() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        await store.reload()
+        let a = try await store.create()
+        let b = try await store.create()
+        // Pass `a` twice — result must still be exactly [a, b].
+        try await store.reorder([a.id, a.id, b.id])
+        XCTAssertEqual(store.notes.map(\.id), [a.id, b.id],
+                       "Duplicate UUIDs in input must not duplicate entries")
+        XCTAssertEqual(store.notes.count, 2,
+                       "Store must contain exactly 2 notes after duplicate reorder input")
+    }
+
+    /// IN-06 regression: setPinned + external create (which triggers adoption
+    /// via reconcile) must not un-pin the original note. Reconcile's merge
+    /// logic preserves `pinned` from input IndexEntry for existing IDs; this
+    /// test locks that behavior in place so a future refactor can't regress it.
+    func test_setPinned_preservedAcrossReconcile() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        await store.reload()
+        let a = try await store.create()
+        try await store.setPinned(a.id, true)
+        XCTAssertEqual(store.notes.first(where: { $0.id == a.id })?.pinned, true,
+                       "Pinned flag must be true immediately after setPinned")
+
+        // Create a file externally — watcher fires, handleExternalChange
+        // invokes reload() which invokes reconcile(). The pinned note must
+        // survive that rebuild.
+        let extURL = tmp.url.appendingPathComponent("external.md")
+        try "# Outside".write(to: extURL, atomically: true, encoding: .utf8)
+
+        // Wait for watcher debounce + reconcile.
+        try await waitFor(
+            { store.notes.count == 2 },
+            timeout: 3.0,
+            description: "store.notes.count == 2 after external create"
+        )
+        XCTAssertEqual(store.notes.first(where: { $0.id == a.id })?.pinned, true,
+                       "Pinned flag must still be true after reconcile rebuild")
+    }
+
     /// 2-02-05: Folder deletion recovers — watcher is restarted on recreated folder
     func testFolderDeletionRecovery() async throws {
         let tmp = TempFolder()
