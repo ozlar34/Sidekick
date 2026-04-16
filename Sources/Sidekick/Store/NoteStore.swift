@@ -111,7 +111,7 @@ final class NoteStore: ObservableObject {
         guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
         let filename = currentIndex.notes[entryIdx].filename
 
-        try await io.deleteNote(filename: filename)
+        try await io.trashNote(filename: filename)
         currentIndex.notes.remove(at: entryIdx)
 
         // Reassign dense order.
@@ -123,6 +123,15 @@ final class NoteStore: ObservableObject {
         notes.removeAll { $0.id == id }
         // Re-sort to maintain dense order.
         notes.sort { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
+    }
+
+    func reloadNote(id: UUID) async {
+        guard let index = await io.loadIndex(),
+              let entry = index.notes.first(where: { $0.id == id }) else { return }
+        let body = (try? await io.readNote(filename: entry.filename)) ?? ""
+        if let idx = notes.firstIndex(where: { $0.id == id }) {
+            notes[idx].body = body
+        }
     }
 
     func setPinned(_ id: UUID, _ pinned: Bool) async throws {

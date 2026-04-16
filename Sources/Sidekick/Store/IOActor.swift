@@ -36,6 +36,13 @@ actor IOActor {
         try FileManager.default.removeItem(at: url)
     }
 
+    func trashNote(filename: String) throws {
+        let url = folder.appendingPathComponent(filename)
+        var resultURL: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
+        NSLog("[Sidekick] trashed \(filename) → \(resultURL?.path ?? "?")")
+    }
+
     func renameNote(oldFilename: String, newFilename: String) throws {
         guard oldFilename != newFilename else { return }
         let oldURL = folder.appendingPathComponent(oldFilename)
