@@ -75,6 +75,16 @@ struct EditorPaneView: View {
             }
             .background(Color(.textBackgroundColor))
 
+            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
+            // Hidden in preview mode because NSTextView is not in the
+            // responder chain (RESEARCH Pitfall 2).
+            if !isPreviewMode {
+                FormattingToolbarView(wrapSelection: wrapSelection)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(.controlBackgroundColor))
+            }
+
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {
                 HStack {
@@ -175,6 +185,41 @@ struct EditorPaneView: View {
     private func captureCursorOffset() {
         guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
         cursorOffset = tv.selectedRange().location
+    }
+
+    // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)
+
+    /// Bridge from FormattingToolbarView button taps to NSTextView.
+    /// Delegates all string math to `FormattingToolbarView.applyMarkdownWrap`
+    /// (unit-tested pure function), then calls NSTextView's `insertText`
+    /// which preserves the undo stack and fires textDidChange — the SwiftUI
+    /// binding to `localBody` picks up the change automatically.
+    private func wrapSelection(prefix: String, suffix: String) {
+        // Pitfall 2: NSTextView is not in the responder chain during preview mode.
+        // Gate on !isPreviewMode as belt-and-suspenders — the toolbar is also
+        // hidden entirely in preview (see body below), but a stale keyboard
+        // shortcut could still fire.
+        guard !isPreviewMode else { return }
+        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        let range = tv.selectedRange()
+        let (newBody, cursorLoc) = FormattingToolbarView.applyMarkdownWrap(
+            prefix: prefix,
+            suffix: suffix,
+            body: localBody,
+            range: range
+        )
+        // Compute the insertion string (the delta that NSTextView's replacementRange
+        // will apply). Re-derive it the same way applyMarkdownWrap does to stay
+        // consistent — we cannot just call insertText(newBody) because that would
+        // replace the entire document and blow up the undo stack.
+        let nsBody = localBody as NSString
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+        let selected = safeLength > 0 ? nsBody.substring(with: safeRange) : ""
+        let insert = selected.isEmpty ? (prefix + suffix) : (prefix + selected + suffix)
+        tv.insertText(insert, replacementRange: safeRange)
+        tv.setSelectedRange(NSRange(location: cursorLoc, length: 0))
     }
 
     private func restoreCursorOffset() {

@@ -9,8 +9,49 @@ struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
 
     var body: some View {
-        // TASK 2 implements this — stub for now to satisfy the type.
-        EmptyView()
+        HStack(spacing: 12) {
+            Button {
+                wrapSelection("**", "**")
+            } label: {
+                Image(systemName: "bold")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Bold (⌘B)")
+            .keyboardShortcut("b", modifiers: .command)
+
+            Button {
+                wrapSelection("*", "*")
+            } label: {
+                Image(systemName: "italic")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Italic (⌘I)")
+            .keyboardShortcut("i", modifiers: .command)
+
+            Button {
+                wrapSelection("`", "`")
+            } label: {
+                Image(systemName: "curlybraces")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Inline code (⌘⌥C)")
+            .keyboardShortcut("c", modifiers: [.command, .option])
+
+            Button {
+                wrapSelection("[", "]()")
+            } label: {
+                Image(systemName: "link")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Link (⌘K)")
+            .keyboardShortcut("k", modifiers: .command)
+
+            Spacer()
+        }
     }
 
     /// Pure string transformation: insert or wrap markdown markers around
