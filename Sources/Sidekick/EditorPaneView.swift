@@ -15,6 +15,11 @@ struct EditorPaneView: View {
     @State private var isPreviewMode: Bool = false
     @State private var cursorOffset: Int = 0
 
+    // Phase 7 — formatting toolbar: cache TV ref + range so button clicks
+    // (which steal first responder before the action fires) still work.
+    @State private var cachedTextView: NSTextView? = nil
+    @State private var cachedSelection: NSRange = NSRange(location: 0, length: 0)
+
     // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
     // Banner state is derived from store.externallyChangedIDs (WR-06): a single
     // long-lived @Published Set on NoteStore means we don't miss events across
@@ -74,6 +79,16 @@ struct EditorPaneView: View {
                     .allowsHitTesting(false)
             }
             .background(Color(.textBackgroundColor))
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSTextView.didChangeSelectionNotification
+            )) { note in
+                // Cache TV ref + selection before any button click can steal
+                // first responder. The notification fires on the TV's own thread
+                // but @State writes are safe from any thread in SwiftUI.
+                guard let tv = note.object as? NSTextView else { return }
+                cachedTextView = tv
+                cachedSelection = tv.selectedRange()
+            }
 
             // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
             // Hidden in preview mode because NSTextView is not in the
@@ -200,8 +215,10 @@ struct EditorPaneView: View {
         // hidden entirely in preview (see body below), but a stale keyboard
         // shortcut could still fire.
         guard !isPreviewMode else { return }
-        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        let range = tv.selectedRange()
+        // Use the cached TV + selection (captured via didChangeSelectionNotification)
+        // because clicking a toolbar button steals first responder before this fires.
+        guard let tv = cachedTextView else { return }
+        let range = cachedSelection
         let (newBody, cursorLoc) = FormattingToolbarView.applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
