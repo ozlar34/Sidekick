@@ -49,8 +49,6 @@ struct EditorPaneView: View {
                     TextEditor(text: $localBody)
                         .focused($editorFocused)
                         .font(.body)
-                        .padding(.horizontal, 8)
-                        .padding(.top, 8)
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
                         }
