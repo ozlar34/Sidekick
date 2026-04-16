@@ -125,9 +125,16 @@ struct EditorPaneView: View {
                         diskWriteError = true
                         editedSetter(false)
                     }
-                    // Auto-dismiss after 5s
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    await MainActor.run { diskWriteError = false }
+                    // IN-03: Fire-and-forget auto-dismiss outside the
+                    // debouncer's cancellable chain. If the user types again
+                    // or hits Retry within 5s, the debouncer cancels the
+                    // active schedule — we do NOT want that cancellation to
+                    // throw out of Task.sleep and clear the flag prematurely.
+                    // A detached @MainActor task is immune to debouncer reset.
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        diskWriteError = false
+                    }
                 }
             }
         }
