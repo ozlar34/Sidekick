@@ -128,9 +128,15 @@ final class NoteStore: ObservableObject {
     func reloadNote(id: UUID) async {
         guard let index = await io.loadIndex(),
               let entry = index.notes.first(where: { $0.id == id }) else { return }
-        let body = (try? await io.readNote(filename: entry.filename)) ?? ""
-        if let idx = notes.firstIndex(where: { $0.id == id }) {
-            notes[idx].body = body
+        do {
+            let body = try await io.readNote(filename: entry.filename)
+            if let idx = notes.firstIndex(where: { $0.id == id }) {
+                notes[idx].body = body
+            }
+        } catch {
+            // Preserve in-memory body on read failure so the next auto-save
+            // does not overwrite on-disk content with an empty string.
+            NSLog("[Sidekick] reloadNote failed for \(entry.filename): \(error.localizedDescription)")
         }
     }
 
