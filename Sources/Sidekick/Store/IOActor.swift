@@ -50,7 +50,7 @@ actor IOActor {
         // Read old body, write new atomically, then delete old.
         // On write failure, old file is intact (CONTEXT.md rule).
         let body = try String(contentsOf: oldURL, encoding: .utf8)
-        try body.data(using: .utf8)!.write(to: newURL, options: [.atomic])
+        try Data(body.utf8).write(to: newURL, options: [.atomic])
         try FileManager.default.removeItem(at: oldURL)
     }
 
