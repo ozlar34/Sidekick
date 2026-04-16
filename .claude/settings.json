@@ -1,0 +1,16 @@
+{
+  "disabledMcpjsonServers": [
+    "notebooklm-mcp",
+    "notion",
+    "gmail",
+    "google-calendar",
+    "n8n-nodes",
+    "raindrop",
+    "manus-mcp"
+  ],
+  "deniedMcpServers": [
+    "claude_ai_Gmail",
+    "claude_ai_Google_Calendar",
+    "claude_ai_Notion"
+  ]
+}
