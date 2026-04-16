@@ -20,7 +20,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.show()
     }
 
+    /// G-05: Builds NSApp.mainMenu with an App submenu (Quit) and an Edit
+    /// submenu (Undo / Redo / Cut / Copy / Paste / Select All). Without this,
+    /// NSApp.mainMenu is nil — accessory-type apps ship no nib and Cocoa's
+    /// key-equivalent dispatcher has no place to find undo:/redo:/terminate:.
+    /// SAME FIX resolves Test 6 Cmd+Q observation (same root cause as G-05).
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App submenu — Quit Sidekick (Cmd+Q)
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu(title: "Sidekick")
+        appMenu.addItem(NSMenuItem(
+            title: "Quit Sidekick",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        // Edit submenu — standard Cocoa editing actions dispatch to the
+        // current first responder (NSTextView inside SwiftUI TextEditor).
+        // Cocoa auto-enables/disables each item against the responder, so
+        // TextEditor's NSUndoManager becomes reachable with no other code.
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+
+        editMenu.addItem(NSMenuItem(
+            title: "Undo",
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        ))
+        // Cmd+Shift+Z — capital "Z" + default .command modifier is sufficient;
+        // AppKit interprets uppercase key equivalents as requiring Shift.
+        editMenu.addItem(NSMenuItem(
+            title: "Redo",
+            action: Selector(("redo:")),
+            keyEquivalent: "Z"
+        ))
+        // Historical Cmd+Y redo (emacs-style yank). Some users expect it.
+        let legacyRedo = NSMenuItem(
+            title: "Redo (Alt)",
+            action: Selector(("redo:")),
+            keyEquivalent: "y"
+        )
+        legacyRedo.isHidden = true  // Cmd+Y fires the binding even when hidden
+        editMenu.addItem(legacyRedo)
+
+        editMenu.addItem(NSMenuItem.separator())
+
+        editMenu.addItem(NSMenuItem(
+            title: "Cut",
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        ))
+
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
+        NSApp.mainMenu = mainMenu
+        NSLog("[Sidekick] mainMenu installed")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installMainMenu()                          // G-05: must run before any UI is shown
         NSApp.setActivationPolicy(.accessory)
         NSLog("[Sidekick] launched")
 
