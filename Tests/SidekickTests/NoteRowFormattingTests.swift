@@ -41,4 +41,36 @@ final class NoteRowFormattingTests: XCTestCase {
     func testPreviewNilForEmpty() {
         XCTAssertNil(NoteRowFormatting.preview(for: ""))
     }
+
+    // MARK: - Title derivation chain (G-04)
+
+    func test_title_plainFirstLine_returnsThatLine() {
+        XCTAssertEqual(NoteRowFormatting.title(for: "Hello world\nmore text"), "Hello world")
+    }
+
+    func test_title_leadingH1_returnsHeading() {
+        XCTAssertEqual(NoteRowFormatting.title(for: "# My Note\nbody"), "My Note")
+    }
+
+    func test_title_leadingH2_returnsHeading() {
+        XCTAssertEqual(NoteRowFormatting.title(for: "## Subsection\nbody"), "Subsection")
+    }
+
+    func test_title_bodyStartsWithBullet_stripsBulletPrefix() {
+        XCTAssertEqual(NoteRowFormatting.title(for: "- Item one\n- Item two"), "Item one")
+    }
+
+    func test_title_emptyBody_returnsUntitled() {
+        XCTAssertEqual(NoteRowFormatting.title(for: ""), "Untitled")
+    }
+
+    func test_title_allWhitespaceBody_returnsUntitled() {
+        XCTAssertEqual(NoteRowFormatting.title(for: "   \n\n\t\n   "), "Untitled")
+    }
+
+    func test_title_and_preview_shareFirstMeaningfulLine() {
+        let body = "- Shared line\nsecond line"
+        XCTAssertEqual(NoteRowFormatting.title(for: body), "Shared line")
+        XCTAssertEqual(NoteRowFormatting.preview(for: body), "Shared line")
+    }
 }
