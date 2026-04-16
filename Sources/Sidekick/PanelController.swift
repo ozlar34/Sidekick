@@ -73,8 +73,11 @@ final class PanelController {
         let initialFrame = anchoredFrame()
         let panel = SidekickPanel(contentRect: initialFrame)
 
+        // IN-01: AppDelegate only registers the hotkey when the NoteStore is
+        // non-nil, so this precondition is enforced at app startup. The
+        // fatalError message is sufficient for crash-log diagnosis; the prior
+        // NSLog was dead text that never appeared outside of the crash trace.
         guard let store = self.store else {
-            NSLog("[Sidekick] PanelController.makePanel: store is nil — cannot build SidebarView")
             fatalError("PanelController.store must be set before toggle() is invoked")
         }
 

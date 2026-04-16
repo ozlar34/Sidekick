@@ -30,16 +30,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panelController.store = s              // inject BEFORE first toggle()
             Task.detached { await s.reload() }     // CONTEXT.md: detached Task (NoteStore.reload is @MainActor)
             NSLog("[Sidekick] NoteStore initialised at \(folder.path)")
-        } catch {
-            NSLog("[Sidekick] NoteStore init failed: \(error.localizedDescription)")
-        }
 
-        hotkeyManager.onPress = { [weak self] in
-            self?.panelController.toggle()
-        }
-        let ok = hotkeyManager.register()
-        if !ok {
-            NSLog("[Sidekick] failed to register ⌃⌥⌘N — is another app claiming it?")
+            // Only register the hotkey if the store is available — toggle()
+            // requires a non-nil store (IN-01). Without this guard, a hotkey
+            // press after NoteStore init failure would reach a nil store and
+            // trigger the fatalError in PanelController.makePanel.
+            hotkeyManager.onPress = { [weak self] in
+                self?.panelController.toggle()
+            }
+            let ok = hotkeyManager.register()
+            if !ok {
+                NSLog("[Sidekick] failed to register ⌃⌥⌘N — is another app claiming it?")
+            }
+        } catch {
+            NSLog("[Sidekick] NoteStore init failed: \(error.localizedDescription) — hotkey not registered")
         }
     }
 
