@@ -204,39 +204,74 @@ struct EditorPaneView: View {
 
     // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)
 
-    /// Bridge from FormattingToolbarView button taps to NSTextView.
-    /// Delegates all string math to `FormattingToolbarView.applyMarkdownWrap`
-    /// (unit-tested pure function), then calls NSTextView's `insertText`
-    /// which preserves the undo stack and fires textDidChange — the SwiftUI
-    /// binding to `localBody` picks up the change automatically.
+    /// Walk the key window's view hierarchy to find the TextEditor's NSTextView.
+    /// This works even after a toolbar button has stolen first responder, because
+    /// NSTextView keeps its selection range when it's no longer first responder
+    /// (the selection just renders greyed out).
+    private func findTextView(in view: NSView?) -> NSTextView? {
+        guard let view = view else { return nil }
+        if let tv = view as? NSTextView { return tv }
+        for subview in view.subviews {
+            if let tv = findTextView(in: subview) { return tv }
+        }
+        return nil
+    }
+
+    /// Bridge from FormattingToolbarView button taps to the editor text.
+    ///
+    /// Mutates `@State localBody` directly — SwiftUI's TextEditor binding
+    /// propagates the change to NSTextView. Known limitation: toolbar edits
+    /// are NOT recorded in NSTextView's undo stack, because SwiftUI's binding
+    /// push is a bulk `string` assignment that bypasses the undo manager.
+    /// User-typed text is still undoable; toolbar wraps are not.
+    ///
+    /// Also attempts to register a manual undo that restores the old body so
+    /// ⌘Z works at least for the most-recent toolbar action.
     private func wrapSelection(prefix: String, suffix: String) {
-        // Pitfall 2: NSTextView is not in the responder chain during preview mode.
-        // Gate on !isPreviewMode as belt-and-suspenders — the toolbar is also
-        // hidden entirely in preview (see body below), but a stale keyboard
-        // shortcut could still fire.
         guard !isPreviewMode else { return }
-        // Use the cached TV + selection (captured via didChangeSelectionNotification)
-        // because clicking a toolbar button steals first responder before this fires.
-        guard let tv = cachedTextView else { return }
-        let range = cachedSelection
+
+        let tv = findTextView(in: NSApp.keyWindow?.contentView)
+        let range = tv?.selectedRange() ?? NSRange(location: (localBody as NSString).length, length: 0)
+        let oldBody = localBody
+
         let (newBody, cursorLoc) = FormattingToolbarView.applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
             body: localBody,
             range: range
         )
-        // Compute the insertion string (the delta that NSTextView's replacementRange
-        // will apply). Re-derive it the same way applyMarkdownWrap does to stay
-        // consistent — we cannot just call insertText(newBody) because that would
-        // replace the entire document and blow up the undo stack.
-        let nsBody = localBody as NSString
-        let safeLocation = max(0, min(range.location, nsBody.length))
-        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
-        let safeRange = NSRange(location: safeLocation, length: safeLength)
-        let selected = safeLength > 0 ? nsBody.substring(with: safeRange) : ""
-        let insert = selected.isEmpty ? (prefix + suffix) : (prefix + selected + suffix)
-        tv.insertText(insert, replacementRange: safeRange)
-        tv.setSelectedRange(NSRange(location: cursorLoc, length: 0))
+        localBody = newBody
+
+        // Best-effort undo registration on the NSTextView's undo manager.
+        // SwiftUI's binding will push `oldBody` back into the TV when we
+        // reassign localBody on the next tick.
+        if let tv = tv, let um = tv.undoManager {
+            let oldRangeCaptured = range
+            um.registerUndo(withTarget: tv) { target in
+                // Re-enter wrapSelection's inverse: overwrite TV text.
+                // NSTextView.string is settable; this path bypasses the
+                // SwiftUI binding so we also need to update localBody
+                // (done via the same-tick binding push on next render).
+                let currentLength = (target.string as NSString).length
+                if target.shouldChangeText(in: NSRange(location: 0, length: currentLength), replacementString: oldBody) {
+                    target.replaceCharacters(in: NSRange(location: 0, length: currentLength), with: oldBody)
+                    target.didChangeText()
+                    target.setSelectedRange(oldRangeCaptured)
+                }
+            }
+            um.setActionName("Format")
+        }
+
+        // Restore cursor position after SwiftUI's binding pushes the new text
+        // into NSTextView (next run loop tick).
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            if let tv = findTextView(in: NSApp.keyWindow?.contentView) {
+                let clamped = min(cursorLoc, (localBody as NSString).length)
+                tv.setSelectedRange(NSRange(location: clamped, length: 0))
+                tv.window?.makeFirstResponder(tv)
+            }
+        }
     }
 
     private func restoreCursorOffset() {
