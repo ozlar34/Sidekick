@@ -31,6 +31,9 @@ mkdir -p "$RESOURCES_DIR"
 # Copy binary
 cp "$BINARY" "$MACOS_DIR/Sidekick"
 
+# Copy app icon
+cp "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+
 # Write Info.plist (LSUIElement hides from Dock)
 cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +58,8 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <string>NSApplication</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
 </dict>
@@ -63,6 +68,16 @@ PLIST
 
 # Ad-hoc code sign
 codesign --deep --force --sign - "$APP_DIR" 2>/dev/null && echo "Code signed (ad-hoc)." || echo "Code signing skipped."
+
+# Mirror into ~/Applications if that copy exists — keeps the user-level
+# install (auto-launched at login via SMAppService) in sync with the dev build.
+USER_APP_DIR="$HOME/Applications/Sidekick.app"
+if [ -d "$USER_APP_DIR" ]; then
+    rm -rf "$USER_APP_DIR"
+    cp -R "$APP_DIR" "$USER_APP_DIR"
+    touch "$USER_APP_DIR"
+    echo "Synced to $USER_APP_DIR"
+fi
 
 # Kill any running instance so `open` actually launches the freshly built
 # binary — `open` on its own just foregrounds an existing process, which
