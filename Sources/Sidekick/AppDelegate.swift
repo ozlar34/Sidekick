@@ -256,3 +256,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.orderFrontStandardAboutPanel(nil)
     }
 }
+
+// MARK: - Menu item validation (Phase 8 D-V-01..06)
+
+/// AppKit re-polls `validateUserInterfaceItem(_:)` on every menu open AND
+/// before dispatching a keyboard shortcut — one method handles both menu UI
+/// gating and ⌘-key gating (RESEARCH Pattern 2). Rules per CONTEXT D-V-01..06:
+///
+///   - File > New Note / Reload Notes:           enable iff panel visible              (D-V-05, D-U-01)
+///   - View > Toggle Preview:                     enable iff panel visible + selection (D-V-03)
+///   - Format > Bold / Italic / Code / Link:      enable iff editor is first responder (D-V-02)
+///   - Note > Pin/Unpin + Delete:                 enable iff note selected             (D-V-04)
+///   - Pin/Unpin also mutates item.title (D-U-02): "Pin" or "Unpin" based on pinned state
+///   - Default (Edit submenu nil-target items):   return true — NSText/NSTextView handles its own validation
+extension AppDelegate: NSUserInterfaceValidations {
+    func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        guard let action = item.action else { return false }
+        let panel = panelController.panel
+        let panelVisible = panel?.isVisible == true
+        let editorFocused = (NSApp.keyWindow === panel)
+            && (panel?.firstResponder is NSTextView)
+        let hasSelection = panelController.panelState.selectedNoteID != nil
+
+        switch action {
+        case #selector(newNote(_:)),
+             #selector(reloadNotes(_:)):
+            return panelVisible                                   // D-V-05 + D-U-01
+
+        case #selector(togglePreview(_:)):
+            return panelVisible && hasSelection                   // D-V-03
+
+        case #selector(formatBold(_:)),
+             #selector(formatItalic(_:)),
+             #selector(formatInlineCode(_:)),
+             #selector(formatLink(_:)):
+            return editorFocused                                  // D-V-02
+
+        case #selector(pinToggle(_:)):
+            // D-U-02 dynamic title flip inside validation — Apple-documented
+            // use of validateMenuItem ("good place to toggle titles or set
+            // state on menu items" — Enabling Menu Items archive doc).
+            if let menuItem = item as? NSMenuItem,
+               let id = panelController.panelState.selectedNoteID,
+               let note = self.store?.notes.first(where: { $0.id == id }) {
+                menuItem.title = note.pinned ? "Unpin" : "Pin"
+            }
+            return hasSelection                                   // D-V-04
+
+        case #selector(deleteNote(_:)):
+            return hasSelection                                   // D-V-04
+
+        default:
+            // Edit submenu (Undo/Redo/Cut/Copy/Paste/Select All) uses
+            // nil-target + responder-chain dispatch; their validation lives
+            // on NSText/NSTextView. Returning true here keeps them enabled
+            // by default; Cocoa's own validation disables them when the
+            // responder chain doesn't support the action.
+            return true
+        }
+    }
+}
