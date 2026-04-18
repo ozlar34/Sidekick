@@ -56,10 +56,17 @@ cp "$BINARY" "$MACOS_DIR/Sidekick"
 
 # Icon asset (ICON-05: wired via CFBundleIconFile → Contents/Resources/AppIcon.icns)
 if [ ! -f "Resources/AppIcon.icns" ]; then
-    echo "Resources/AppIcon.icns missing — run 'swift Scripts/generate-icon.swift' first"
+    echo "Resources/AppIcon.icns missing — run 'python3 Scripts/generate_icon.py' first"
     exit 1
 fi
 cp "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+
+# Status bar template (loaded via Bundle.main.url in AppDelegate.installStatusItem)
+if [ -f "Resources/StatusBarIconTemplate.png" ]; then
+    cp "Resources/StatusBarIconTemplate.png" "$RESOURCES_DIR/StatusBarIconTemplate.png"
+    [ -f "Resources/StatusBarIconTemplate@2x.png" ] && \
+        cp "Resources/StatusBarIconTemplate@2x.png" "$RESOURCES_DIR/StatusBarIconTemplate@2x.png"
+fi
 
 # Write Info.plist (LSUIElement hides from Dock; CFBundleIconFile points at AppIcon.icns)
 cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'

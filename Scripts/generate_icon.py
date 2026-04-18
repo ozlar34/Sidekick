@@ -1,283 +1,329 @@
 #!/usr/bin/env python3
-"""Sidekick app icon — cream paper note on an indigo squircle tray.
+"""Sidekick app icon — cream paper card sliding in from the right.
 
 Treated as a miniature product photograph (per the mac-app-icon skill):
-- Backdrop: deep indigo superellipse tray, diagonally lit from upper-left
-- Hero: cream paper card, tilted slightly, ~60% of squircle
+- Backdrop: warm-cream superellipse tray, diagonally lit from upper-left
+- Hero: cream paper card peeking in from the right edge of the tray, with
+  a muted-purple "slide-in" strip along its left edge — mirrors the app's
+  actual slide-in-from-right panel mechanic
 - Material: paper with gradient + top highlight + bottom form shadow
-- Content: abstract heading + body bars (not text glyphs) — reads as
-  'formatted note' at large sizes, dissolves gracefully at 16px
-- Soft contact shadow grounds the paper on the tray
+- Content: subtle graphite ruled lines — read as 'paper' at any size,
+  dissolve gracefully at 16px into a clean silhouette
+
+Output:
+  - Resources/AppIcon.iconset/  (10 PNG sizes, Apple filename convention)
+  - Resources/AppIcon.icns      (compiled via iconutil)
+  - Resources/StatusBarIconTemplate.png      (18x18 template, monochrome)
+  - Resources/StatusBarIconTemplate@2x.png   (36x36 template, monochrome)
 """
 
 from __future__ import annotations
 
-import math
+import subprocess
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
 CANVAS = 1024
-SQUIRCLE_SIZE = 824
-SQUIRCLE_MARGIN = (CANVAS - SQUIRCLE_SIZE) // 2  # 100px
-SQUIRCLE_N = 5.0  # superellipse exponent — canonical macOS squircle
+MARGIN = 100
+INNER = CANVAS - 2 * MARGIN  # 824
+SQUIRCLE_N = 5.0
 
-# Palette
-TRAY_TL = (48, 62, 92)          # indigo, upper-left
-TRAY_BR = (18, 24, 41)          # deeper indigo, lower-right
-PAPER_TOP = (250, 245, 232)     # warm cream
-PAPER_BOTTOM = (238, 229, 209)  # slightly darker cream
-HEADING_INK = (56, 62, 82)      # dark indigo-gray for heading bars
-BODY_INK = (130, 136, 156)      # mid gray-blue for body text bars
+# Palette — warm cream + graphite + muted purple
+CREAM_LIGHT = (246, 232, 206)
+CREAM_DEEP = (212, 190, 160)
+PAPER_TOP = (254, 246, 227)
+PAPER_BOT = (236, 222, 192)
+PURPLE = (120, 92, 156)
+PURPLE_DARK = (92, 70, 128)
+GRAPHITE = (58, 48, 80)
+SHADOW = (56, 40, 72)
 
-PAPER_TILT_DEG = -4.0            # slight leftward tilt (note sliding in)
+ICONSET_SIZES = [
+    (16, 1, "icon_16x16.png"),
+    (16, 2, "icon_16x16@2x.png"),
+    (32, 1, "icon_32x32.png"),
+    (32, 2, "icon_32x32@2x.png"),
+    (128, 1, "icon_128x128.png"),
+    (128, 2, "icon_128x128@2x.png"),
+    (256, 1, "icon_256x256.png"),
+    (256, 2, "icon_256x256@2x.png"),
+    (512, 1, "icon_512x512.png"),
+    (512, 2, "icon_512x512@2x.png"),
+]
 
 
 def squircle_mask(size: int, n: float = SQUIRCLE_N, supersample: int = 4) -> Image.Image:
-    """Antialiased superellipse mask (|x/a|^n + |y/b|^n = 1, n≈5 for macOS)."""
+    """Superellipse alpha mask (|x/a|^n + |y/b|^n = 1, n≈5). White inside, black outside."""
     s = size * supersample
     mask = Image.new("L", (s, s), 0)
     px = mask.load()
     half = s / 2.0
     for y in range(s):
         ny = (y - half + 0.5) / half
-        ny_n = abs(ny) ** n
-        if ny_n >= 1.0:
+        ny_abs_n = abs(ny) ** n
+        if ny_abs_n >= 1.0:
             continue
-        x_frac = (1.0 - ny_n) ** (1.0 / n)
-        x_extent = x_frac * half
-        x0 = max(0, int(round(half - x_extent)))
-        x1 = min(s, int(round(half + x_extent)))
-        for x in range(x0, x1):
+        x_frac = (1.0 - ny_abs_n) ** (1.0 / n)
+        x_pixels = x_frac * half
+        x0 = int(round(half - x_pixels))
+        x1 = int(round(half + x_pixels))
+        if x1 <= x0:
+            continue
+        for x in range(max(0, x0), min(s, x1)):
             px[x, y] = 255
     return mask.resize((size, size), Image.LANCZOS)
 
 
-def diagonal_gradient(size: tuple[int, int], top_left, bottom_right) -> Image.Image:
-    """RGB gradient along the image diagonal (top-left → bottom-right)."""
-    w, h = size
-    img = Image.new("RGB", size)
-    px = img.load()
-    norm = math.sqrt(w * w + h * h)
-    for y in range(h):
-        for x in range(w):
-            t = math.sqrt(x * x + y * y) / norm
-            r = int(top_left[0] + (bottom_right[0] - top_left[0]) * t)
-            g = int(top_left[1] + (bottom_right[1] - top_left[1]) * t)
-            b = int(top_left[2] + (bottom_right[2] - top_left[2]) * t)
-            px[x, y] = (r, g, b)
-    return img
-
-
-def vertical_gradient(size: tuple[int, int], top, bottom) -> Image.Image:
-    w, h = size
-    img = Image.new("RGB", size)
-    px = img.load()
-    for y in range(h):
-        t = y / max(1, h - 1)
-        r = int(top[0] + (bottom[0] - top[0]) * t)
-        g = int(top[1] + (bottom[1] - top[1]) * t)
-        b = int(top[2] + (bottom[2] - top[2]) * t)
-        for x in range(w):
-            px[x, y] = (r, g, b)
-    return img
-
-
-def radial_falloff(size: int, center, radius: float, color_rgba) -> Image.Image:
-    """Soft radial falloff layer. Used for highlights + inner shadows."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    px = img.load()
-    cx, cy = center
-    r_max, g_max, b_max, a_max = color_rgba
+def make_diagonal_gradient(size: int, c0: tuple[int, int, int], c1: tuple[int, int, int]) -> Image.Image:
+    """Top-left c0 → bottom-right c1."""
+    grad = Image.new("RGB", (size, size))
+    px = grad.load()
+    max_d = (size - 1) * 2
     for y in range(size):
         for x in range(size):
-            dx = x - cx
-            dy = y - cy
-            d = math.sqrt(dx * dx + dy * dy)
-            if d >= radius:
-                continue
-            t = 1.0 - d / radius
-            t *= t  # ease-in
-            a = int(a_max * t)
-            if a > 0:
-                px[x, y] = (r_max, g_max, b_max, a)
-    return img
+            t = (x + y) / max_d
+            r = int(c0[0] + (c1[0] - c0[0]) * t)
+            g = int(c0[1] + (c1[1] - c0[1]) * t)
+            b = int(c0[2] + (c1[2] - c0[2]) * t)
+            px[x, y] = (r, g, b)
+    return grad
 
 
-def build_tray() -> Image.Image:
-    """Deep indigo squircle with diagonal gradient + overhead-light treatment."""
-    size = SQUIRCLE_SIZE
-    base = diagonal_gradient((size, size), TRAY_TL, TRAY_BR).convert("RGBA")
-
-    # Specular arc along top inside edge (tray surface catching light).
-    top_arc = radial_falloff(size, (size / 2, -size * 0.20),
-                             size * 0.90, (255, 255, 255, 80))
-    base = Image.alpha_composite(base, top_arc)
-
-    # Upper-left soft accent — reinforces the 10-o'clock light direction.
-    accent = radial_falloff(size, (size * 0.26, size * 0.14),
-                            size * 0.48, (255, 255, 255, 48))
-    base = Image.alpha_composite(base, accent)
-
-    # Inner bottom darkening — subtle containment / ambient occlusion.
-    bottom = radial_falloff(size, (size / 2, size * 1.18),
-                            size * 0.85, (0, 0, 0, 95))
-    base = Image.alpha_composite(base, bottom)
-
-    mask = squircle_mask(size)
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    out.paste(base, (0, 0), mask)
-    return out
+def make_vertical_gradient(w: int, h: int, c_top: tuple[int, int, int], c_bot: tuple[int, int, int]) -> Image.Image:
+    grad = Image.new("RGB", (w, h))
+    px = grad.load()
+    for y in range(h):
+        t = y / (h - 1)
+        r = int(c_top[0] + (c_bot[0] - c_top[0]) * t)
+        g = int(c_top[1] + (c_bot[1] - c_top[1]) * t)
+        b = int(c_top[2] + (c_bot[2] - c_top[2]) * t)
+        for x in range(w):
+            px[x, y] = (r, g, b)
+    return grad
 
 
-def draw_paper_flat(pw: int, ph: int) -> Image.Image:
-    """Unrotated cream paper card with baked material + markdown content."""
-    corner = int(pw * 0.045)
-    paper = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-
-    # Rounded-rect shape mask
-    shape_mask = Image.new("L", (pw, ph), 0)
-    ImageDraw.Draw(shape_mask).rounded_rectangle((0, 0, pw, ph), radius=corner, fill=255)
-
-    # Body: cream vertical gradient clipped to the rounded-rect
-    body = vertical_gradient((pw, ph), PAPER_TOP, PAPER_BOTTOM).convert("RGBA")
-    paper.paste(body, (0, 0), shape_mask)
-
-    # Top highlight — soft white gradient fading out after ~25% of height
-    hl = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    hld = ImageDraw.Draw(hl)
-    hld.rounded_rectangle((0, 0, pw, int(ph * 0.22)), radius=corner,
-                          fill=(255, 255, 255, 70))
-    hl = hl.filter(ImageFilter.GaussianBlur(radius=14))
-    hl_clip = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    hl_clip.paste(hl, (0, 0), shape_mask)
-    paper = Image.alpha_composite(paper, hl_clip)
-
-    # Bottom form shadow — paper's underside slightly darker under overhead light
-    fs = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    ImageDraw.Draw(fs).rounded_rectangle(
-        (0, int(ph * 0.78), pw, ph), radius=corner, fill=(0, 0, 0, 55))
-    fs = fs.filter(ImageFilter.GaussianBlur(radius=22))
-    fs_clip = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    fs_clip.paste(fs, (0, 0), shape_mask)
-    paper = Image.alpha_composite(paper, fs_clip)
-
-    # Markdown-abstract content: one heading bar, one subheading, then body lines.
-    ink = ImageDraw.Draw(paper)
-    pad_x = int(pw * 0.13)
-
-    # Heading (bold, wide, dark)
-    h_y = int(ph * 0.22)
-    h_h = max(8, int(ph * 0.042))
-    ink.rounded_rectangle(
-        (pad_x, h_y, pw - pad_x - int(pw * 0.10), h_y + h_h),
-        radius=h_h // 2, fill=HEADING_INK)
-
-    # Sub-heading (shorter, thinner)
-    sh_y = h_y + h_h + int(ph * 0.04)
-    sh_h = max(5, int(ph * 0.028))
-    ink.rounded_rectangle(
-        (pad_x, sh_y, pw - pad_x - int(pw * 0.33), sh_y + sh_h),
-        radius=sh_h // 2, fill=HEADING_INK)
-
-    # Body lines — thinner, lighter, varied widths
-    body_h = max(4, int(ph * 0.020))
-    body_r = body_h // 2
-    body_gap = int(ph * 0.072)
-    body_y = int(ph * 0.48)
-    widths = [0.80, 0.90, 0.72, 0.84, 0.58]
-    usable = pw - 2 * pad_x
-    for i, frac in enumerate(widths):
-        y = body_y + i * body_gap
-        ink.rounded_rectangle(
-            (pad_x, y, pad_x + int(usable * frac), y + body_h),
-            radius=body_r, fill=BODY_INK)
-
-    return paper
+def rounded_rect_mask(w: int, h: int, radius: int, supersample: int = 3) -> Image.Image:
+    s = supersample
+    m = Image.new("L", (w * s, h * s), 0)
+    ImageDraw.Draw(m).rounded_rectangle(
+        [(0, 0), (w * s - 1, h * s - 1)], radius=radius * s, fill=255
+    )
+    return m.resize((w, h), Image.LANCZOS)
 
 
-def build_paper_and_shadow() -> tuple[Image.Image, Image.Image]:
-    """
-    Build the tilted paper layer + a soft blurred contact shadow beneath it.
-    Both returned canvases are SQUIRCLE_SIZE × SQUIRCLE_SIZE (unclipped).
-    """
-    size = SQUIRCLE_SIZE
-    pw = int(size * 0.60)           # ~494
-    ph = int(size * 0.78)           # ~643
+def compose_card() -> Image.Image:
+    """Build the paper-card hero as a standalone RGBA image."""
+    card_w, card_h = 680, 660
+    radius = 48
+    strip_w = 58
 
-    paper_flat = draw_paper_flat(pw, ph)
+    # Opaque base with subtle top→bottom paper gradient.
+    card_rgb = make_vertical_gradient(card_w, card_h, PAPER_TOP, PAPER_BOT)
 
-    # Rotate (expand to avoid clipping the corners)
-    paper_rot = paper_flat.rotate(PAPER_TILT_DEG, resample=Image.BICUBIC, expand=True)
+    # Purple "slide-in" strip with a darker seam on its right edge.
+    d = ImageDraw.Draw(card_rgb)
+    d.rectangle([(0, 0), (strip_w, card_h)], fill=PURPLE)
+    d.rectangle([(strip_w - 3, 0), (strip_w, card_h)], fill=PURPLE_DARK)
 
-    # Contact shadow — paper silhouette, blurred, offset down-right
-    corner = int(pw * 0.045)
-    sil = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    ImageDraw.Draw(sil).rounded_rectangle(
-        (0, 0, pw, ph), radius=corner, fill=(0, 0, 0, 205))
-    sil_rot = sil.rotate(PAPER_TILT_DEG, resample=Image.BICUBIC, expand=True)
-    shadow = sil_rot.filter(ImageFilter.GaussianBlur(radius=46))
+    card = card_rgb.convert("RGBA")
 
-    # Place on squircle-sized canvas, centered, slightly above optical center
-    optical_up = int(size * 0.015)  # 3% of canvas ≈ optical center shift
-    rw, rh = paper_rot.size
-    px = (size - rw) // 2
-    py = (size - rh) // 2 - optical_up
+    # Graphite ruled lines — thin, low alpha, dissolve gracefully at small sizes.
+    rules = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(rules)
+    line_x0 = strip_w + 70
+    line_x1 = card_w - 70
+    for ly in (200, 280, 360, 440, 520):
+        rd.rectangle([(line_x0, ly), (line_x1, ly + 3)], fill=GRAPHITE + (70,))
+    card.alpha_composite(rules)
 
-    paper_canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    shadow_canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    # Top highlight (overhead-front light falling on paper).
+    hi = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    ImageDraw.Draw(hi).rectangle([(0, 0), (card_w, 120)], fill=(255, 255, 255, 55))
+    hi = hi.filter(ImageFilter.GaussianBlur(radius=36))
+    card.alpha_composite(hi)
 
-    # Shadow nudged slightly down + right (overhead-front-left light)
-    shadow_canvas.paste(shadow, (px + 14, py + 26), shadow)
-    paper_canvas.paste(paper_rot, (px, py), paper_rot)
+    # Lower-right self-shadow on paper.
+    dk = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    ImageDraw.Draw(dk).ellipse(
+        [(card_w - 280, card_h - 240), (card_w + 80, card_h + 80)],
+        fill=(60, 40, 30, 60),
+    )
+    dk = dk.filter(ImageFilter.GaussianBlur(radius=40))
+    card.alpha_composite(dk)
 
-    return paper_canvas, shadow_canvas
+    # Rounded-rectangle alpha mask at the very end.
+    card.putalpha(rounded_rect_mask(card_w, card_h, radius))
+    return card
 
 
-def compose_icon() -> Image.Image:
-    """Full 1024×1024 compose: tray → contact shadow → paper, clipped to squircle."""
+def render_master() -> Image.Image:
+    """Full 1024×1024 RGBA master."""
+    # Tray
+    tray_grad = make_diagonal_gradient(INNER, CREAM_LIGHT, CREAM_DEEP).convert("RGBA")
+    sq_mask = squircle_mask(INNER)
+
     canvas = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    canvas.paste(tray_grad, (MARGIN, MARGIN), sq_mask)
 
-    tray = build_tray()
-    paper, shadow = build_paper_and_shadow()
+    sq_full = Image.new("L", (CANVAS, CANVAS), 0)
+    sq_full.paste(sq_mask, (MARGIN, MARGIN))
 
-    composite = Image.alpha_composite(tray, shadow)
-    composite = Image.alpha_composite(composite, paper)
+    # Top-edge specular on the tray.
+    spec = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    ImageDraw.Draw(spec).ellipse(
+        [(MARGIN - 60, MARGIN + 40), (CANVAS - MARGIN + 60, MARGIN + 190)],
+        fill=(255, 255, 255, 90),
+    )
+    spec = spec.filter(ImageFilter.GaussianBlur(radius=36))
+    spec_clipped = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    spec_clipped.paste(spec, (0, 0), sq_full)
+    canvas.alpha_composite(spec_clipped)
 
-    # Re-clip to squircle in case rotation pushed anything out
-    mask = squircle_mask(SQUIRCLE_SIZE)
-    clipped = Image.new("RGBA", (SQUIRCLE_SIZE, SQUIRCLE_SIZE), (0, 0, 0, 0))
-    clipped.paste(composite, (0, 0), mask)
+    # Card
+    card = compose_card()
+    card_w, card_h = card.size
+    card_x = CANVAS - card_w - 30
+    card_y = (CANVAS - card_h) // 2 + 10
 
-    canvas.paste(clipped, (SQUIRCLE_MARGIN, SQUIRCLE_MARGIN), clipped)
+    # Contact shadow (blurred, clipped to squircle).
+    shadow = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    s_block = Image.new("RGBA", (card_w, card_h), SHADOW + (180,))
+    s_block.putalpha(rounded_rect_mask(card_w, card_h, 48))
+    shadow.alpha_composite(s_block, (card_x - 12, card_y + 30))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=32))
+    shadow_clipped = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    shadow_clipped.paste(shadow, (0, 0), sq_full)
+    canvas.alpha_composite(shadow_clipped)
+
+    # Card itself, clipped to squircle (right overhang ends at tray curve).
+    card_layer = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    card_layer.alpha_composite(card, (card_x, card_y))
+    card_clipped = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    card_clipped.paste(card_layer, (0, 0), sq_full)
+    canvas.alpha_composite(card_clipped)
     return canvas
 
 
-def main() -> None:
-    repo_root = Path(__file__).resolve().parent.parent
-    iconset = repo_root / "Resources" / "AppIcon.iconset"
+def render_status_bar_template(size: int) -> Image.Image:
+    """Monochrome template for the menu bar. System auto-tints via isTemplate.
 
-    master = compose_icon()
-    master.save(iconset / "icon_512x512@2x.png", format="PNG")
-    print(f"wrote {iconset / 'icon_512x512@2x.png'} (1024×1024 master)")
+    Composition: an outlined rounded rectangle (the card silhouette) with a
+    filled vertical strip along its left edge — the "slide-in" indicator.
+    At 18pt the outline + strip reads as "card with emphasized leading edge,"
+    directly mirroring the app icon's hero without detail that would smear.
+    """
+    # Render at 8x then downsample for crisp edges.
+    s = size * 8
+    img = Image.new("L", (s, s), 0)  # L mode: grayscale, we composite to RGBA at end
+    draw = ImageDraw.Draw(img)
 
-    # All other iconset sizes come from the master.
-    sizes = [
-        (16, "icon_16x16.png"),
-        (32, "icon_16x16@2x.png"),
-        (32, "icon_32x32.png"),
-        (64, "icon_32x32@2x.png"),
-        (128, "icon_128x128.png"),
-        (256, "icon_128x128@2x.png"),
-        (256, "icon_256x256.png"),
-        (512, "icon_256x256@2x.png"),
-        (512, "icon_512x512.png"),
-    ]
-    for px, name in sizes:
-        resized = master.resize((px, px), Image.LANCZOS)
-        resized.save(iconset / name, format="PNG")
-        print(f"wrote {name} ({px}×{px})")
+    card_left = int(s * 0.18)
+    card_right = int(s * 0.92)
+    card_top = int(s * 0.14)
+    card_bot = int(s * 0.86)
+    radius = int(s * 0.14)
+
+    # Card outline — stroked rounded rectangle.
+    stroke_w = max(2, int(s * 0.035))
+    draw.rounded_rectangle(
+        [(card_left, card_top), (card_right, card_bot)],
+        radius=radius,
+        outline=255,
+        width=stroke_w,
+    )
+
+    # Filled "slide-in" strip on the leading edge — fully opaque, clearly distinct
+    # from the outlined body.
+    strip_w = int(s * 0.16)
+    # Clip strip to rounded-rect body so it follows the card's left radius.
+    body_mask = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(body_mask).rounded_rectangle(
+        [(card_left, card_top), (card_right, card_bot)], radius=radius, fill=255
+    )
+    strip = Image.new("L", (s, s), 0)
+    ImageDraw.Draw(strip).rectangle(
+        [(card_left, card_top), (card_left + strip_w, card_bot)], fill=255
+    )
+    clipped_strip = Image.new("L", (s, s), 0)
+    strip_arr = strip.load()
+    mask_arr = body_mask.load()
+    cs_arr = clipped_strip.load()
+    for y in range(s):
+        for x in range(s):
+            if strip_arr[x, y] and mask_arr[x, y]:
+                cs_arr[x, y] = 255
+    # Merge strip into the outline image.
+    img_arr = img.load()
+    for y in range(s):
+        for x in range(s):
+            if cs_arr[x, y] > 0:
+                img_arr[x, y] = 255
+
+    # Downsample first (smoother edges), then convert to RGBA template.
+    small = img.resize((size, size), Image.LANCZOS)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out_arr = out.load()
+    small_arr = small.load()
+    for y in range(size):
+        for x in range(size):
+            v = small_arr[x, y]
+            if v > 0:
+                out_arr[x, y] = (0, 0, 0, v)
+    return out
+
+
+def build_iconset(master: Image.Image, iconset_dir: Path) -> None:
+    iconset_dir.mkdir(parents=True, exist_ok=True)
+    for base, scale, name in ICONSET_SIZES:
+        px = base * scale
+        if px == master.size[0]:
+            master.save(iconset_dir / name, format="PNG")
+        else:
+            master.resize((px, px), Image.LANCZOS).save(iconset_dir / name, format="PNG")
+
+
+def compile_icns(iconset_dir: Path, output: Path) -> None:
+    res = subprocess.run(
+        ["iconutil", "-c", "icns", str(iconset_dir), "-o", str(output)],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"iconutil failed: {res.stderr or res.stdout}")
+
+
+def main() -> int:
+    project_root = Path(__file__).resolve().parents[1]
+    resources = project_root / "Resources"
+    resources.mkdir(parents=True, exist_ok=True)
+
+    master = render_master()
+    master_path = resources / "AppIcon_master.png"
+    master.save(master_path, format="PNG")
+    print(f"wrote master: {master_path}")
+
+    iconset_dir = resources / "AppIcon.iconset"
+    # Clean old iconset to avoid stale PNGs sticking around.
+    if iconset_dir.exists():
+        for p in iconset_dir.glob("*.png"):
+            p.unlink()
+    build_iconset(master, iconset_dir)
+    print(f"wrote iconset: {iconset_dir}")
+
+    icns = resources / "AppIcon.icns"
+    compile_icns(iconset_dir, icns)
+    print(f"wrote icns:    {icns}")
+
+    sb1 = render_status_bar_template(18)
+    sb2 = render_status_bar_template(36)
+    (resources / "StatusBarIconTemplate.png").write_bytes(b"")  # reset to avoid stale meta
+    sb1.save(resources / "StatusBarIconTemplate.png", format="PNG")
+    sb2.save(resources / "StatusBarIconTemplate@2x.png", format="PNG")
+    print(f"wrote status-bar template: {resources / 'StatusBarIconTemplate.png'}")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

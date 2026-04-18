@@ -235,13 +235,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     internal func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            // SF Symbol. "pencil.and.scribble" is a compact, writing-themed glyph.
-            // Fallback to "note.text" if the symbol isn't available on the build target.
-            button.image = NSImage(systemSymbolName: "pencil.and.scribble",
-                                   accessibilityDescription: "Sidekick")
-                       ?? NSImage(systemSymbolName: "note.text",
-                                  accessibilityDescription: "Sidekick")
-            button.image?.isTemplate = true    // renders correctly in light/dark menu bar
+            // Prefer the bundled template (card + slide-in strip silhouette — matches
+            // the app icon). Fall back to an SF Symbol if the resource is missing
+            // (dev-build without the install-script copy).
+            let bundled = Bundle.main.url(forResource: "StatusBarIconTemplate", withExtension: "png")
+                .flatMap { NSImage(contentsOf: $0) }
+            if let image = bundled {
+                image.isTemplate = true
+                image.accessibilityDescription = "Sidekick"
+                button.image = image
+            } else {
+                button.image = NSImage(systemSymbolName: "sidebar.right",
+                                       accessibilityDescription: "Sidekick")
+                           ?? NSImage(systemSymbolName: "note.text",
+                                      accessibilityDescription: "Sidekick")
+                button.image?.isTemplate = true
+            }
         }
 
         let menu = NSMenu()
