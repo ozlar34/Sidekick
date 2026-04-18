@@ -168,15 +168,13 @@ final class PanelController {
                                 height: finalFrame.height)
         panel.alphaValue = 0
         panel.setFrame(startFrame, display: false)
+        // macOS 14+: .accessory + NSApp.activate alone does NOT reliably make
+        // the app frontmost for menu-bar display. Switch to .regular while the
+        // panel is up, then back to .accessory in slideOut's completion.
+        NSApp.setActivationPolicy(.regular)
         panel.orderFrontRegardless()
-        // makeKey() is required so the local Escape monitor fires
-        // (RESEARCH.md Pitfall #1).
         panel.makeKey()
-        // Activate after the panel is key so the menu bar shows without
-        // consuming the panel's first interactive click.
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        NSApp.activate(ignoringOtherApps: true)
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = slideDuration
@@ -202,6 +200,9 @@ final class PanelController {
             panel.orderOut(nil)
             panel.alphaValue = 1.0  // reset for next appearance
             self?.removeDismissHandlers()
+            // Revert to .accessory so the Dock icon hides until the panel
+            // is summoned again. Paired with the .regular flip in slideIn.
+            NSApp.setActivationPolicy(.accessory)
         })
     }
 
