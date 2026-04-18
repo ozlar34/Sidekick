@@ -47,6 +47,19 @@ struct EditorPaneView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
+            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
+            // Hidden in preview mode because NSTextView is not in the
+            // responder chain (RESEARCH Pitfall 2).
+            if !panelState.isPreviewMode {
+                FormattingToolbarView(wrapSelection: wrapSelection)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(Color(.controlBackgroundColor))
+                Rectangle()
+                    .fill(Color(NSColor(white: 0.55, alpha: 1.0)))
+                    .frame(height: 1)
+            }
+
             // Editor / preview content
             ZStack(alignment: .topLeading) {
                 if panelState.isPreviewMode {
@@ -55,7 +68,7 @@ struct EditorPaneView: View {
                     TextEditor(text: $localBody)
                         .focused($editorFocused)
                         .font(.body)
-                        .padding(.top, 24)   // P7-PAD-01: breathing room at note top
+                        .padding(.top, 12)   // P7-PAD-01: breathing room between toolbar and note body
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
                         }
@@ -65,7 +78,7 @@ struct EditorPaneView: View {
                             .foregroundStyle(.secondary)
                             .font(.body)
                             .padding(.leading, 13)   // TextEditor internal inset (~5pt) + 8pt outer pad
-                            .padding(.top, 40)        // TextEditor internal inset (~8pt) + 32pt outer pad (24 TE pad + 8 placeholder breathing)
+                            .padding(.top, 28)        // TextEditor internal inset (~8pt) + 20pt outer pad (12 TE pad + 8 placeholder breathing)
                             .allowsHitTesting(false)
                     }
                 }
@@ -81,16 +94,6 @@ struct EditorPaneView: View {
                 guard let tv = note.object as? NSTextView else { return }
                 cachedTextView = tv
                 cachedSelection = tv.selectedRange()
-            }
-
-            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
-            // Hidden in preview mode because NSTextView is not in the
-            // responder chain (RESEARCH Pitfall 2).
-            if !panelState.isPreviewMode {
-                FormattingToolbarView(wrapSelection: wrapSelection)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color(.controlBackgroundColor))
             }
 
             // Disk-write failure toast (REL-01) — bottom of editor
