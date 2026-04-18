@@ -218,61 +218,18 @@ struct EditorPaneView: View {
         return nil
     }
 
-    /// Bridge from FormattingToolbarView button taps to the editor text.
+    /// Bridge from FormattingToolbarView button taps to the editor's NSTextView.
     ///
-    /// Mutates `@State localBody` directly — SwiftUI's TextEditor binding
-    /// propagates the change to NSTextView. Known limitation: toolbar edits
-    /// are NOT recorded in NSTextView's undo stack, because SwiftUI's binding
-    /// push is a bulk `string` assignment that bypasses the undo manager.
-    /// User-typed text is still undoable; toolbar wraps are not.
+    /// Delegates to the shared static helper `FormattingToolbarView.performWrap`
+    /// (D-R-03) so that the toolbar-button path and the menu-action path (Plan 04
+    /// AppDelegate handlers) use the same NSTextView edit-sandwich code.
     ///
-    /// Also attempts to register a manual undo that restores the old body so
-    /// ⌘Z works at least for the most-recent toolbar action.
+    /// Undo is registered automatically on `textView.undoManager` via the
+    /// sandwich — no manual `UndoManager.registerUndo` needed (RESEARCH Pitfall 2).
     private func wrapSelection(prefix: String, suffix: String) {
         guard !panelState.isPreviewMode else { return }
-
-        let tv = findTextView(in: NSApp.keyWindow?.contentView)
-        let range = tv?.selectedRange() ?? NSRange(location: (localBody as NSString).length, length: 0)
-        let oldBody = localBody
-
-        let (newBody, cursorLoc) = FormattingToolbarView.applyMarkdownWrap(
-            prefix: prefix,
-            suffix: suffix,
-            body: localBody,
-            range: range
-        )
-        localBody = newBody
-
-        // Best-effort undo registration on the NSTextView's undo manager.
-        // SwiftUI's binding will push `oldBody` back into the TV when we
-        // reassign localBody on the next tick.
-        if let tv = tv, let um = tv.undoManager {
-            let oldRangeCaptured = range
-            um.registerUndo(withTarget: tv) { target in
-                // Re-enter wrapSelection's inverse: overwrite TV text.
-                // NSTextView.string is settable; this path bypasses the
-                // SwiftUI binding so we also need to update localBody
-                // (done via the same-tick binding push on next render).
-                let currentLength = (target.string as NSString).length
-                if target.shouldChangeText(in: NSRange(location: 0, length: currentLength), replacementString: oldBody) {
-                    target.replaceCharacters(in: NSRange(location: 0, length: currentLength), with: oldBody)
-                    target.didChangeText()
-                    target.setSelectedRange(oldRangeCaptured)
-                }
-            }
-            um.setActionName("Format")
-        }
-
-        // Restore cursor position after SwiftUI's binding pushes the new text
-        // into NSTextView (next run loop tick).
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 20_000_000)
-            if let tv = findTextView(in: NSApp.keyWindow?.contentView) {
-                let clamped = min(cursorLoc, (localBody as NSString).length)
-                tv.setSelectedRange(NSRange(location: clamped, length: 0))
-                tv.window?.makeFirstResponder(tv)
-            }
-        }
+        guard let tv = findTextView(in: NSApp.keyWindow?.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
     }
 
     private func restoreCursorOffset() {
