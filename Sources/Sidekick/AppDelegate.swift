@@ -39,9 +39,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     internal func installMainMenu() {
         let mainMenu = NSMenu()
 
-        // App submenu — Quit Sidekick (Cmd+Q)
+        // App submenu — About + Quit Sidekick
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Sidekick")
+
+        // About Sidekick (D-M-02) — uses stock AppKit about panel (reads
+        // CFBundleShortVersionString + CFBundleVersion from Info.plist).
+        let aboutItem = NSMenuItem(
+            title: "About Sidekick",
+            action: #selector(showAbout(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(NSMenuItem.separator())
+
         appMenu.addItem(NSMenuItem(
             title: "Quit Sidekick",
             action: #selector(NSApplication.terminate(_:)),
@@ -49,6 +61,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
+
+        // File submenu (D-M-03) — MENU-01 + KBD-02
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+
+        let newNoteItem = NSMenuItem(
+            title: "New Note",
+            action: #selector(newNote(_:)),
+            keyEquivalent: "n"
+        )
+        newNoteItem.target = self
+        fileMenu.addItem(newNoteItem)
+
+        let reloadItem = NSMenuItem(
+            title: "Reload Notes",
+            action: #selector(reloadNotes(_:)),
+            keyEquivalent: "r"
+        )
+        reloadItem.target = self
+        fileMenu.addItem(reloadItem)
+
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
 
         // Edit submenu — standard Cocoa editing actions dispatch to the
         // current first responder (NSTextView inside SwiftUI TextEditor).
@@ -103,6 +138,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
+
+        // Format submenu (D-M-04) — MENU-02
+        let formatItem = NSMenuItem()
+        let formatMenu = NSMenu(title: "Format")
+
+        let boldItem = NSMenuItem(
+            title: "Bold",
+            action: #selector(formatBold(_:)),
+            keyEquivalent: "b"
+        )
+        boldItem.target = self
+        formatMenu.addItem(boldItem)
+
+        let italicItem = NSMenuItem(
+            title: "Italic",
+            action: #selector(formatItalic(_:)),
+            keyEquivalent: "i"
+        )
+        italicItem.target = self
+        formatMenu.addItem(italicItem)
+
+        let inlineCodeItem = NSMenuItem(
+            title: "Inline Code",
+            action: #selector(formatInlineCode(_:)),
+            keyEquivalent: "c"
+        )
+        inlineCodeItem.keyEquivalentModifierMask = [.command, .option]   // ⌘⌥C explicit union (D-S-02)
+        inlineCodeItem.target = self
+        formatMenu.addItem(inlineCodeItem)
+
+        let linkItem = NSMenuItem(
+            title: "Link",
+            action: #selector(formatLink(_:)),
+            keyEquivalent: "k"
+        )
+        linkItem.target = self
+        formatMenu.addItem(linkItem)
+
+        formatItem.submenu = formatMenu
+        mainMenu.addItem(formatItem)
+
+        // View submenu (D-M-05) — MENU-03 + KBD-01
+        let viewItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+
+        let togglePreviewItem = NSMenuItem(
+            title: "Toggle Preview",
+            action: #selector(togglePreview(_:)),
+            keyEquivalent: "P"       // uppercase → AppKit auto-implies Shift (D-S-02)
+        )
+        // keyEquivalentModifierMask defaults to .command; do NOT add .shift
+        // (uppercase covers it; adding .shift draws the shift glyph twice).
+        togglePreviewItem.target = self
+        viewMenu.addItem(togglePreviewItem)
+
+        viewItem.submenu = viewMenu
+        mainMenu.addItem(viewItem)
+
+        // Note submenu (D-M-06) — MENU-04
+        let noteItem = NSMenuItem()
+        let noteMenu = NSMenu(title: "Note")
+
+        // Single dynamic Pin/Unpin item — title flipped by validateUserInterfaceItem (D-U-02).
+        // Initial title "Pin" is a best-guess default; validation rewrites on every menu open.
+        let pinToggleItem = NSMenuItem(
+            title: "Pin",
+            action: #selector(pinToggle(_:)),
+            keyEquivalent: ""
+        )
+        pinToggleItem.target = self
+        noteMenu.addItem(pinToggleItem)
+
+        // Delete — NO keyboard shortcut (D-M-06 prevents keyboard accidents).
+        let deleteItem = NSMenuItem(
+            title: "Delete",
+            action: #selector(deleteNote(_:)),
+            keyEquivalent: ""
+        )
+        deleteItem.keyEquivalentModifierMask = []
+        deleteItem.target = self
+        noteMenu.addItem(deleteItem)
+
+        noteItem.submenu = noteMenu
+        mainMenu.addItem(noteItem)
 
         NSApp.mainMenu = mainMenu
         NSLog("[Sidekick] mainMenu installed")
