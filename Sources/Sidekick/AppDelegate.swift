@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let panelController = PanelController()
     internal var store: NoteStore?
     private var settingsWindowController: SettingsWindowController?
+    private var statusItem: NSStatusItem?
 
     /// Test-seam initializer. Skips the hotkey registration and NoteStore
     /// construction that happen in `applicationDidFinishLaunching(_:)` so
@@ -227,8 +228,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[Sidekick] mainMenu installed")
     }
 
+    /// Installs a persistent NSStatusItem in the right-side system menu bar with a
+    /// three-item dropdown: Toggle Sidekick Panel, Toggle Preview Mode, Quit Sidekick.
+    /// The status item survives activation-policy flips (.accessory ↔ .regular) that
+    /// PanelController performs in slideIn/slideOut.
+    internal func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            // SF Symbol. "pencil.and.scribble" is a compact, writing-themed glyph.
+            // Fallback to "note.text" if the symbol isn't available on the build target.
+            button.image = NSImage(systemSymbolName: "pencil.and.scribble",
+                                   accessibilityDescription: "Sidekick")
+                       ?? NSImage(systemSymbolName: "note.text",
+                                  accessibilityDescription: "Sidekick")
+            button.image?.isTemplate = true    // renders correctly in light/dark menu bar
+        }
+
+        let menu = NSMenu()
+
+        let toggleItem = NSMenuItem(
+            title: "Toggle Sidekick Panel",
+            action: #selector(toggleSidekickPanel(_:)),
+            keyEquivalent: ""
+        )
+        toggleItem.target = self
+        menu.addItem(toggleItem)
+
+        // Reuse the EXISTING togglePreview(_:) selector from the main menu
+        // (line 310). It flips panelState.isPreviewMode; EditorPaneView's
+        // .onChange observer runs the cursor capture/restore dance (D-K-02).
+        let previewItem = NSMenuItem(
+            title: "Toggle Preview Mode",
+            action: #selector(togglePreview(_:)),
+            keyEquivalent: ""
+        )
+        previewItem.target = self
+        menu.addItem(previewItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        menu.addItem(NSMenuItem(
+            title: "Quit Sidekick",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: ""
+        ))
+
+        item.menu = menu
+        self.statusItem = item
+        NSLog("[Sidekick] statusItem installed")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()                          // G-05: must run before any UI is shown
+        installStatusItem()                        // NEW — install menu bar icon
         NSApp.setActivationPolicy(.accessory)
         NSLog("[Sidekick] launched")
 
@@ -309,6 +361,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// cursor capture/restore dance (D-K-02).
     @objc func togglePreview(_ sender: Any?) {
         panelController.panelState.isPreviewMode.toggle()
+    }
+
+    /// Status-bar > Toggle Sidekick Panel. Invokes the SAME code path as the
+    /// ⌃⌥⌘N hotkey (HotkeyManager.onPress -> panelController.toggle).
+    /// Do NOT add any NSApp activation-policy manipulation here —
+    /// panelController.toggle() already handles the .accessory ↔ .regular flip
+    /// in slideIn (line 174) and slideOut's completion (line 205).
+    @objc func toggleSidekickPanel(_ sender: Any?) {
+        panelController.toggle()
     }
 
     /// Note > Pin/Unpin (no shortcut). MENU-04. Single dynamic item — the
@@ -404,6 +465,9 @@ extension AppDelegate: NSUserInterfaceValidations {
 
         case #selector(togglePreview(_:)):
             return panelVisible && hasSelection                   // D-V-03
+
+        case #selector(toggleSidekickPanel(_:)):
+            return true                    // always enabled — status bar must work whether panel is open or closed
 
         case #selector(formatBold(_:)),
              #selector(formatItalic(_:)),
