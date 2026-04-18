@@ -51,7 +51,11 @@ struct EditorPaneView: View {
             // Hidden in preview mode because NSTextView is not in the
             // responder chain (RESEARCH Pitfall 2).
             if !panelState.isPreviewMode {
-                FormattingToolbarView(wrapSelection: wrapSelection)
+                FormattingToolbarView(
+                    wrapSelection: wrapSelection,
+                    togglePreview: { panelState.isPreviewMode.toggle() },
+                    isPreviewMode: panelState.isPreviewMode
+                )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .background(Color(.controlBackgroundColor))

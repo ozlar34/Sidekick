@@ -7,6 +7,8 @@ import SwiftUI
 /// extracted into `applyMarkdownWrap` (pure, unit-testable — no AppKit).
 struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
+    let togglePreview: () -> Void
+    let isPreviewMode: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -45,6 +47,15 @@ struct FormattingToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Link (⌘K)")
+
+            Button {
+                togglePreview()
+            } label: {
+                Image(systemName: isPreviewMode ? "eye.slash" : "eye")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Toggle preview (⌘⇧P)")
 
             Spacer()
         }
