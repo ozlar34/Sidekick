@@ -144,4 +144,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyManager.unregister()
     }
+
+    // MARK: - Menu action helpers (Phase 8 D-R-03)
+
+    /// Walk the view hierarchy rooted at `view` to find the first NSTextView.
+    /// Lifted verbatim from EditorPaneView (see Sources/Sidekick/EditorPaneView.swift:211-218).
+    /// Duplication is intentional (D-R-03): two call sites, 8 lines, cheaper
+    /// than a cross-cutting helper that would force a new file.
+    private func findTextView(in view: NSView?) -> NSTextView? {
+        guard let view = view else { return nil }
+        if let tv = view as? NSTextView { return tv }
+        for subview in view.subviews {
+            if let tv = findTextView(in: subview) { return tv }
+        }
+        return nil
+    }
+
+    // MARK: - Menu actions (Phase 8 D-R-01)
+
+    /// File > New Note (⌘N). MENU-01. Creates a note via the same path as
+    /// the sidebar "+" button (SidebarView.swift:43-52) and selects it.
+    @objc func newNote(_ sender: Any?) {
+        guard let store = self.store else { return }
+        Task { @MainActor in
+            do {
+                let note = try await store.create()
+                panelController.panelState.selectedNoteID = note.id
+            } catch {
+                NSLog("[Sidekick] menu newNote failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// File > Reload Notes (⌘R). KBD-02. Mirrors the existing sidebar-footer
+    /// refresh button (SidebarView.swift:62-64).
+    @objc func reloadNotes(_ sender: Any?) {
+        guard let store = self.store else { return }
+        Task { @MainActor in
+            await store.reload()
+        }
+    }
+
+    /// View > Toggle Preview (⌘⇧P). KBD-01 + MENU-03. Flips the shared
+    /// PanelState flag; EditorPaneView observes via .onChange and runs the
+    /// cursor capture/restore dance (D-K-02).
+    @objc func togglePreview(_ sender: Any?) {
+        panelController.panelState.isPreviewMode.toggle()
+    }
+
+    /// Note > Pin/Unpin (no shortcut). MENU-04. Single dynamic item — the
+    /// title is flipped between "Pin" and "Unpin" inside
+    /// validateUserInterfaceItem based on the selected note's pinned state
+    /// (D-U-02). Action body toggles the pinned flag via store.setPinned.
+    @objc func pinToggle(_ sender: Any?) {
+        guard let store = self.store,
+              let id = panelController.panelState.selectedNoteID,
+              let note = store.notes.first(where: { $0.id == id }) else { return }
+        Task { @MainActor in
+            try? await store.setPinned(id, !note.pinned)
+        }
+    }
+
+    /// Note > Delete (no shortcut — D-M-06 prevents keyboard accidents).
+    /// MENU-04 + D-U-03. Routes through store.delete → macOS Trash
+    /// (recoverable). Mirrors NoteRowView.contextMenu Delete (Sources/Sidekick/NoteRowView.swift:97-106).
+    @objc func deleteNote(_ sender: Any?) {
+        guard let store = self.store,
+              let id = panelController.panelState.selectedNoteID else { return }
+        let successor = NoteRowFormatting.successorID(afterDeleting: id, in: store.notes)
+        Task { @MainActor in
+            try? await store.delete(id)
+            panelController.panelState.selectedNoteID = successor
+        }
+    }
+
+    /// Format > Bold (⌘B). MENU-02. Edits the focused NSTextView via the
+    /// shared performWrap helper (D-R-03). Prefix/suffix mirror the toolbar
+    /// button at FormattingToolbarView.swift:13-21.
+    @objc func formatBold(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+    }
+
+    /// Format > Italic (⌘I). MENU-02.
+    @objc func formatItalic(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: tv)
+    }
+
+    /// Format > Inline Code (⌘⌥C). MENU-02.
+    @objc func formatInlineCode(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "`", suffix: "`", in: tv)
+    }
+
+    /// Format > Link (⌘K). MENU-02. Mirrors the toolbar button's `[` / `]()`
+    /// prefix/suffix at FormattingToolbarView.swift:43-51.
+    @objc func formatLink(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: tv)
+    }
+
+    /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
+    /// which reads CFBundleShortVersionString + CFBundleVersion from
+    /// Info.plist (build-and-run.sh:38-67 already writes both keys).
+    @objc func showAbout(_ sender: Any?) {
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
 }
