@@ -95,4 +95,49 @@ struct FormattingToolbarView: View {
         let newBody = nsBody.replacingCharacters(in: safeRange, with: insert)
         return (newBody, cursor)
     }
+
+    /// Applies markdown wrap directly on an NSTextView using AppKit's edit
+    /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
+    /// This registers the change on the text view's own `undoManager`
+    /// automatically — no manual `UndoManager.registerUndo` is needed.
+    ///
+    /// Called from two paths (D-R-03):
+    ///   1. `EditorPaneView.wrapSelection(prefix:suffix:)` — toolbar button taps.
+    ///   2. `AppDelegate.formatBold(_:)` / `formatItalic(_:)` / `formatInlineCode(_:)`
+    ///      / `formatLink(_:)` — menu actions (Plan 04 wires these).
+    ///
+    /// The edit is applied to the SELECTION range only (not the full body —
+    /// RESEARCH Code Examples refinement). The cursor location returned by
+    /// `applyMarkdownWrap` is computed against the full body and is used
+    /// verbatim for `setSelectedRange`.
+    ///
+    /// Pattern source: NSTextView documentation (shouldChangeText /
+    /// replaceCharacters / didChangeText) + christiantietze.de/posts/2022/09/
+    /// undoable-text-changes (the sandwich is the canonical Apple pattern for
+    /// programmatic edits that participate in the NSTextView undo stack).
+    static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (_, cursor) = applyMarkdownWrap(
+            prefix: prefix,
+            suffix: suffix,
+            body: body,
+            range: range
+        )
+
+        // Build the replacement for the SELECTION range only.
+        let inserted: String
+        if range.length == 0 {
+            inserted = prefix + suffix
+        } else {
+            let selected = (body as NSString).substring(with: range)
+            inserted = prefix + selected + suffix
+        }
+
+        // Edit sandwich — registers undo on textView.undoManager automatically.
+        guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
+        textView.replaceCharacters(in: range, with: inserted)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: cursor, length: 0))
+    }
 }
