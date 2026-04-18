@@ -20,6 +20,7 @@ final class PanelController {
 
     private(set) var panel: SidekickPanel?
     var store: NoteStore?
+    let panelState = PanelState()
     private var escMonitor: Any?
     private var outsideClickMonitor: Any?
 
