@@ -230,11 +230,31 @@ struct EditorPaneView: View {
     /// sandwich — no manual `UndoManager.registerUndo` needed (RESEARCH Pitfall 2).
     private func wrapSelection(prefix: String, suffix: String) {
         guard !panelState.isPreviewMode else { return }
+        // Toolbar-button path: SwiftUI Button fires this synchronously inside
+        // SwiftUI's state-update cycle. Calling NSTextView.replaceCharacters
+        // from here is silently reverted by SwiftUI because the TextEditor is
+        // bound to $localBody — SwiftUI re-pushes localBody into the NSTextView
+        // after we mutate it. The menu-bar path works because it fires from an
+        // AppKit target/action *outside* SwiftUI's update cycle.
+        //
+        // Fix: update localBody (SwiftUI's source of truth) directly. SwiftUI
+        // propagates the change into the NSTextView. Restore the cursor on the
+        // next run loop, once SwiftUI has re-rendered.
         let tv = cachedTextView
             ?? findTextView(in: NSApp.keyWindow?.contentView)
             ?? NSApp.windows.lazy.compactMap { findTextView(in: $0.contentView) }.first
-        guard let tv else { return }
-        FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
+        let range = tv?.selectedRange() ?? cachedSelection
+        let (newBody, cursor) = FormattingToolbarView.applyMarkdownWrap(
+            prefix: prefix,
+            suffix: suffix,
+            body: localBody,
+            range: range
+        )
+        localBody = newBody
+        DispatchQueue.main.async {
+            let target = tv ?? (NSApp.keyWindow?.firstResponder as? NSTextView)
+            target?.setSelectedRange(NSRange(location: cursor, length: 0))
+        }
     }
 
     private func restoreCursorOffset() {
