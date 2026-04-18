@@ -12,50 +12,56 @@ struct FormattingToolbarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button {
-                wrapSelection("**", "**")
-            } label: {
-                Image(systemName: "bold")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .help("Bold (⌘B)")
+            // Format buttons only work when the TextEditor is in the responder
+            // chain — hide them in preview mode to avoid dead clicks.
+            if !isPreviewMode {
+                Button {
+                    wrapSelection("**", "**")
+                } label: {
+                    Image(systemName: "bold")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Bold (⌘B)")
 
-            Button {
-                wrapSelection("*", "*")
-            } label: {
-                Image(systemName: "italic")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .help("Italic (⌘I)")
+                Button {
+                    wrapSelection("*", "*")
+                } label: {
+                    Image(systemName: "italic")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Italic (⌘I)")
 
-            Button {
-                wrapSelection("`", "`")
-            } label: {
-                Image(systemName: "curlybraces")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .help("Inline code (⌘⌥C)")
+                Button {
+                    wrapSelection("`", "`")
+                } label: {
+                    Image(systemName: "curlybraces")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Inline code (⌘⌥C)")
 
-            Button {
-                wrapSelection("[", "]()")
-            } label: {
-                Image(systemName: "link")
-                    .font(.system(size: 13, weight: .medium))
+                Button {
+                    wrapSelection("[", "]()")
+                } label: {
+                    Image(systemName: "link")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Link (⌘K)")
             }
-            .buttonStyle(.plain)
-            .help("Link (⌘K)")
 
+            // Preview toggle is always visible so users can return from preview
+            // to edit mode without reaching for ⌘⇧P or the menu bar.
             Button {
                 togglePreview()
             } label: {
-                Image(systemName: isPreviewMode ? "eye.slash" : "eye")
+                Image(systemName: isPreviewMode ? "square.and.pencil" : "eye")
                     .font(.system(size: 13, weight: .medium))
             }
             .buttonStyle(.plain)
-            .help("Toggle preview (⌘⇧P)")
+            .help(isPreviewMode ? "Back to edit mode (⌘⇧P)" : "Preview (⌘⇧P)")
 
             Spacer()
         }

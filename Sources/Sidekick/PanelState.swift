@@ -19,5 +19,5 @@ import Combine
 @MainActor
 final class PanelState: ObservableObject {
     @Published var selectedNoteID: UUID? = nil
-    @Published var isPreviewMode: Bool = false
+    @Published var isPreviewMode: Bool = true
 }

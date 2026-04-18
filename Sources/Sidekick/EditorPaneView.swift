@@ -47,22 +47,21 @@ struct EditorPaneView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
-            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
-            // Hidden in preview mode because NSTextView is not in the
-            // responder chain (RESEARCH Pitfall 2).
-            if !panelState.isPreviewMode {
-                FormattingToolbarView(
-                    wrapSelection: wrapSelection,
-                    togglePreview: { panelState.isPreviewMode.toggle() },
-                    isPreviewMode: panelState.isPreviewMode
-                )
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(Color(.controlBackgroundColor))
-                Rectangle()
-                    .fill(Color(NSColor(white: 0.55, alpha: 1.0)))
-                    .frame(height: 1)
-            }
+            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
+            // The preview-toggle button is always visible; format buttons hide
+            // in preview mode (NSTextView is not in the responder chain —
+            // RESEARCH Pitfall 2).
+            FormattingToolbarView(
+                wrapSelection: wrapSelection,
+                togglePreview: { panelState.isPreviewMode.toggle() },
+                isPreviewMode: panelState.isPreviewMode
+            )
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color(.controlBackgroundColor))
+            Rectangle()
+                .fill(Color(NSColor(white: 0.55, alpha: 1.0)))
+                .frame(height: 1)
 
             // Editor / preview content
             ZStack(alignment: .topLeading) {
@@ -81,8 +80,8 @@ struct EditorPaneView: View {
                         Text("Start writing...")
                             .foregroundStyle(.secondary)
                             .font(.body)
-                            .padding(.leading, 13)   // TextEditor internal inset (~5pt) + 8pt outer pad
-                            .padding(.top, 28)        // TextEditor internal inset (~8pt) + 20pt outer pad (12 TE pad + 8 placeholder breathing)
+                            .padding(.leading, 10)    // Align with NSTextView cursor x-position
+                            .padding(.top, 12)        // Align with NSTextView cursor y-position
                             .allowsHitTesting(false)
                     }
                 }
@@ -123,7 +122,7 @@ struct EditorPaneView: View {
         .onChange(of: note.id) { _, _ in
             localBody = note.body
             cursorOffset = 0          // reset stale offset on note switch
-            panelState.isPreviewMode = false     // return to edit mode on note switch
+            panelState.isPreviewMode = true      // reader-first — preview on note switch
             diskWriteError = false
             focusEditorAfterDelay()
         }
