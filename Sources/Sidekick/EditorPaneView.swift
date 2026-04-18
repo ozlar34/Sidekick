@@ -70,14 +70,6 @@ struct EditorPaneView: View {
                     }
                 }
 
-                // Hidden ⌘R carrier — must remain in hierarchy in both modes
-                // (RESEARCH Pitfall 4: ScrollView holds focus in preview; ZStack-embedded
-                // Button still receives the shortcut). D-03: no visible mode indicator.
-                Button("") { togglePreviewMode() }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .frame(width: 0, height: 0)
-                    .opacity(0)
-                    .allowsHitTesting(false)
             }
             .background(Color(.textBackgroundColor))
             .onReceive(NotificationCenter.default.publisher(
@@ -127,6 +119,16 @@ struct EditorPaneView: View {
             panelState.isPreviewMode = false     // return to edit mode on note switch
             diskWriteError = false
             focusEditorAfterDelay()
+        }
+        .onChange(of: panelState.isPreviewMode) { _, newValue in
+            // D-K-02: run the cursor capture/restore dance around preview
+            // toggles triggered by AppDelegate.togglePreview (menu path) OR
+            // the deleted togglePreviewMode() function (removed in Plan 04).
+            if newValue {
+                captureCursorOffset()
+            } else {
+                restoreCursorOffset()
+            }
         }
     }
 
@@ -244,13 +246,4 @@ struct EditorPaneView: View {
         }
     }
 
-    private func togglePreviewMode() {
-        if panelState.isPreviewMode {
-            panelState.isPreviewMode = false
-            restoreCursorOffset()
-        } else {
-            captureCursorOffset()
-            panelState.isPreviewMode = true
-        }
-    }
 }

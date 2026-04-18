@@ -18,7 +18,6 @@ struct FormattingToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Bold (⌘B)")
-            .keyboardShortcut("b", modifiers: .command)
 
             Button {
                 wrapSelection("*", "*")
@@ -28,7 +27,6 @@ struct FormattingToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Italic (⌘I)")
-            .keyboardShortcut("i", modifiers: .command)
 
             Button {
                 wrapSelection("`", "`")
@@ -38,7 +36,6 @@ struct FormattingToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Inline code (⌘⌥C)")
-            .keyboardShortcut("c", modifiers: [.command, .option])
 
             Button {
                 wrapSelection("[", "]()")
@@ -48,7 +45,6 @@ struct FormattingToolbarView: View {
             }
             .buttonStyle(.plain)
             .help("Link (⌘K)")
-            .keyboardShortcut("k", modifiers: .command)
 
             Spacer()
         }
