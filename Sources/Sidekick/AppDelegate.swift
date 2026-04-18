@@ -10,8 +10,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotkeyManager = HotkeyManager()
     let panelController = PanelController()
-    private var store: NoteStore?
+    internal var store: NoteStore?
     private var settingsWindowController: SettingsWindowController?
+
+    /// Test-seam initializer. Skips the hotkey registration and NoteStore
+    /// construction that happen in `applicationDidFinishLaunching(_:)` so
+    /// tests can drive menu wiring and validation against a caller-supplied
+    /// store. Production code continues to use `AppDelegate()` (designated
+    /// NSObject init) + the `NSApplicationDelegate` lifecycle.
+    internal convenience init(store: NoteStore) {
+        self.init()
+        self.store = store
+        self.panelController.store = store
+    }
 
     func openSettings() {
         if settingsWindowController == nil {
@@ -25,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// NSApp.mainMenu is nil — accessory-type apps ship no nib and Cocoa's
     /// key-equivalent dispatcher has no place to find undo:/redo:/terminate:.
     /// SAME FIX resolves Test 6 Cmd+Q observation (same root cause as G-05).
-    private func installMainMenu() {
+    internal func installMainMenu() {
         let mainMenu = NSMenu()
 
         // App submenu — Quit Sidekick (Cmd+Q)
