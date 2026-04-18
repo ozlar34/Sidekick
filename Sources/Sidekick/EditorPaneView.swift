@@ -230,7 +230,10 @@ struct EditorPaneView: View {
     /// sandwich — no manual `UndoManager.registerUndo` needed (RESEARCH Pitfall 2).
     private func wrapSelection(prefix: String, suffix: String) {
         guard !panelState.isPreviewMode else { return }
-        guard let tv = findTextView(in: NSApp.keyWindow?.contentView) else { return }
+        let tv = cachedTextView
+            ?? findTextView(in: NSApp.keyWindow?.contentView)
+            ?? NSApp.windows.lazy.compactMap { findTextView(in: $0.contentView) }.first
+        guard let tv else { return }
         FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
     }
 

@@ -172,6 +172,11 @@ final class PanelController {
         // makeKey() is required so the local Escape monitor fires
         // (RESEARCH.md Pitfall #1).
         panel.makeKey()
+        // Activate after the panel is key so the menu bar shows without
+        // consuming the panel's first interactive click.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = slideDuration

@@ -9,8 +9,8 @@
     "manus-mcp"
   ],
   "deniedMcpServers": [
-    "claude_ai_Gmail",
-    "claude_ai_Google_Calendar",
-    "claude_ai_Notion"
+    { "serverName": "claude_ai_Gmail" },
+    { "serverName": "claude_ai_Google_Calendar" },
+    { "serverName": "claude_ai_Notion" }
   ]
 }
