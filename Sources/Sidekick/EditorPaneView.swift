@@ -3,6 +3,7 @@ import SwiftUI
 
 struct EditorPaneView: View {
     @ObservedObject var store: NoteStore
+    @ObservedObject var panelState: PanelState
     let note: Note
     @Binding var selectedID: UUID?
 
@@ -12,7 +13,7 @@ struct EditorPaneView: View {
     @Environment(\.setDocumentEdited) private var setDocumentEdited
 
     // Phase 4 — markdown preview toggle (EDIT-02, D-04)
-    @State private var isPreviewMode: Bool = false
+    // @State isPreviewMode migrated to panelState.isPreviewMode (Phase 8 D-R-02)
     @State private var cursorOffset: Int = 0
 
     // Phase 7 — formatting toolbar: cache TV ref + range so button clicks
@@ -48,7 +49,7 @@ struct EditorPaneView: View {
 
             // Editor / preview content
             ZStack(alignment: .topLeading) {
-                if isPreviewMode {
+                if panelState.isPreviewMode {
                     MarkdownPreviewView(content: localBody)
                 } else {
                     TextEditor(text: $localBody)
@@ -93,7 +94,7 @@ struct EditorPaneView: View {
             // Formatting toolbar (P7-TOOL-01, P7-TOOL-02) — edit mode only.
             // Hidden in preview mode because NSTextView is not in the
             // responder chain (RESEARCH Pitfall 2).
-            if !isPreviewMode {
+            if !panelState.isPreviewMode {
                 FormattingToolbarView(wrapSelection: wrapSelection)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -123,7 +124,7 @@ struct EditorPaneView: View {
         .onChange(of: note.id) { _, _ in
             localBody = note.body
             cursorOffset = 0          // reset stale offset on note switch
-            isPreviewMode = false     // return to edit mode on note switch
+            panelState.isPreviewMode = false     // return to edit mode on note switch
             diskWriteError = false
             focusEditorAfterDelay()
         }
@@ -228,7 +229,7 @@ struct EditorPaneView: View {
     /// Also attempts to register a manual undo that restores the old body so
     /// ⌘Z works at least for the most-recent toolbar action.
     private func wrapSelection(prefix: String, suffix: String) {
-        guard !isPreviewMode else { return }
+        guard !panelState.isPreviewMode else { return }
 
         let tv = findTextView(in: NSApp.keyWindow?.contentView)
         let range = tv?.selectedRange() ?? NSRange(location: (localBody as NSString).length, length: 0)
@@ -287,12 +288,12 @@ struct EditorPaneView: View {
     }
 
     private func togglePreviewMode() {
-        if isPreviewMode {
-            isPreviewMode = false
+        if panelState.isPreviewMode {
+            panelState.isPreviewMode = false
             restoreCursorOffset()
         } else {
             captureCursorOffset()
-            isPreviewMode = true
+            panelState.isPreviewMode = true
         }
     }
 }

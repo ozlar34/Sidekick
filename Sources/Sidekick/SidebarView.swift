@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var store: NoteStore
-    @State private var selectedID: UUID?
+    @ObservedObject var panelState: PanelState
     @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
@@ -13,7 +13,7 @@ struct SidebarView: View {
     }
 
     private var selectedNote: Note? {
-        guard let id = selectedID else { return nil }
+        guard let id = panelState.selectedNoteID else { return nil }
         return store.notes.first(where: { $0.id == id })
     }
 
@@ -35,7 +35,7 @@ struct SidebarView: View {
 
                     Divider()
 
-                    NoteListView(store: store, selectedID: $selectedID)
+                    NoteListView(store: store, selectedID: $panelState.selectedNoteID)
 
                     Divider()
 
@@ -44,7 +44,7 @@ struct SidebarView: View {
                             Task { @MainActor in
                                 do {
                                     let note = try await store.create()
-                                    selectedID = note.id
+                                    panelState.selectedNoteID = note.id
                                 } catch {
                                     NSLog("[Sidekick] create failed: \(error.localizedDescription)")
                                     createError = true
@@ -103,7 +103,7 @@ struct SidebarView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.textBackgroundColor))
                 } else if let note = selectedNote {
-                    EditorPaneView(store: store, note: note, selectedID: $selectedID)
+                    EditorPaneView(store: store, panelState: panelState, note: note, selectedID: $panelState.selectedNoteID)
                 } else {
                     // Notes exist but none selected (stale UUID mid-reassignment, or
                     // transient between delete → onChange reassign).
@@ -129,9 +129,9 @@ struct SidebarView: View {
         .onAppear {
             if let uuid = UUID(uuidString: lastSelectedNoteID),
                store.notes.contains(where: { $0.id == uuid }) {
-                selectedID = uuid
-            } else if selectedID == nil {
-                selectedID = store.notes.first?.id
+                panelState.selectedNoteID = uuid
+            } else if panelState.selectedNoteID == nil {
+                panelState.selectedNoteID = store.notes.first?.id
             }
             // Check whether the configured notes folder exists (STORE-04 / MF-01)
             let configured = UserDefaults.standard.string(forKey: Defaults.notesFolder) ?? ""
@@ -144,7 +144,7 @@ struct SidebarView: View {
                 showMissingFolderSheet = true
             }
         }
-        .onChange(of: selectedID) { _, new in
+        .onChange(of: panelState.selectedNoteID) { _, new in
             lastSelectedNoteID = new?.uuidString ?? ""
         }
         .onChange(of: store.folderMissing) { _, missing in
@@ -160,17 +160,17 @@ struct SidebarView: View {
         // reconcile). Belt-and-suspenders on top of the NoteRowView delete
         // action's successor write — covers external deletions via watcher.
         .onChange(of: store.notes) { _, newNotes in
-            let isStale = selectedID != nil && !newNotes.contains(where: { $0.id == selectedID })
-            guard selectedID == nil || isStale else { return }
+            let isStale = panelState.selectedNoteID != nil && !newNotes.contains(where: { $0.id == panelState.selectedNoteID })
+            guard panelState.selectedNoteID == nil || isStale else { return }
             if !newNotes.isEmpty {
                 if let uuid = UUID(uuidString: lastSelectedNoteID),
                    newNotes.contains(where: { $0.id == uuid }) {
-                    selectedID = uuid
+                    panelState.selectedNoteID = uuid
                 } else {
-                    selectedID = newNotes.first?.id
+                    panelState.selectedNoteID = newNotes.first?.id
                 }
             } else {
-                selectedID = nil
+                panelState.selectedNoteID = nil
             }
         }
         .alert("Could not create note", isPresented: $createError) {

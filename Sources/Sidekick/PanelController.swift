@@ -116,7 +116,7 @@ final class PanelController {
             fatalError("PanelController.store must be set before toggle() is invoked")
         }
 
-        let rootView = SidebarView(store: store)
+        let rootView = SidebarView(store: store, panelState: panelState)
             .environment(\.setDocumentEdited) { [weak panel] edited in
                 panel?.isDocumentEdited = edited
             }
