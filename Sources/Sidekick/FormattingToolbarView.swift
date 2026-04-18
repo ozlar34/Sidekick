@@ -12,6 +12,24 @@ struct FormattingToolbarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            // Preview toggle first so its x-position is stable across modes —
+            // in preview mode the format buttons collapse away, and the
+            // eye/pencil stays fixed at the leading edge (feels like an
+            // in-place toggle rather than a jumping icon).
+            Button {
+                togglePreview()
+            } label: {
+                // Eye glyph is visually wider than square.and.pencil at the
+                // same font size — drop it by 2pt so both render at a
+                // matching optical size, and pin a fixed frame so the
+                // clickable bounds + x-position stay identical across modes.
+                Image(systemName: isPreviewMode ? "square.and.pencil" : "eye")
+                    .font(.system(size: isPreviewMode ? 13 : 11, weight: .medium))
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.plain)
+            .help(isPreviewMode ? "Back to edit mode (⌘⇧P)" : "Preview (⌘⇧P)")
+
             // Format buttons only work when the TextEditor is in the responder
             // chain — hide them in preview mode to avoid dead clicks.
             if !isPreviewMode {
@@ -51,17 +69,6 @@ struct FormattingToolbarView: View {
                 .buttonStyle(.plain)
                 .help("Link (⌘K)")
             }
-
-            // Preview toggle is always visible so users can return from preview
-            // to edit mode without reaching for ⌘⇧P or the menu bar.
-            Button {
-                togglePreview()
-            } label: {
-                Image(systemName: isPreviewMode ? "square.and.pencil" : "eye")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .help(isPreviewMode ? "Back to edit mode (⌘⇧P)" : "Preview (⌘⇧P)")
 
             Spacer()
         }

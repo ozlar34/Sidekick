@@ -29,17 +29,6 @@ struct SidebarView: View {
                             .font(.headline)
                             .foregroundStyle(.primary)
                         Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-
-                    Divider()
-
-                    NoteListView(store: store, selectedID: $panelState.selectedNoteID)
-
-                    Divider()
-
-                    HStack {
                         Button {
                             Task { @MainActor in
                                 do {
@@ -56,9 +45,17 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("New Note")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
 
-                        Spacer()
+                    Divider()
 
+                    NoteListView(store: store, selectedID: $panelState.selectedNoteID)
+
+                    Divider()
+
+                    HStack {
                         Button {
                             Task { await store.reload() }
                         } label: {
@@ -67,6 +64,8 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Refresh notes from disk")
+
+                        Spacer()
 
                         Button(action: {
                             (NSApp.delegate as? AppDelegate)?.openSettings()

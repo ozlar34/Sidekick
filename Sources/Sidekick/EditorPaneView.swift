@@ -70,7 +70,7 @@ struct EditorPaneView: View {
                 } else {
                     TextEditor(text: $localBody)
                         .focused($editorFocused)
-                        .font(.body)
+                        .font(.system(size: 16))
                         .padding(.top, 12)   // P7-PAD-01: breathing room between toolbar and note body
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
@@ -79,7 +79,7 @@ struct EditorPaneView: View {
                     if localBody.isEmpty {
                         Text("Start writing...")
                             .foregroundStyle(.secondary)
-                            .font(.body)
+                            .font(.system(size: 16))
                             .padding(.leading, 10)    // Align with NSTextView cursor x-position
                             .padding(.top, 12)        // Align with NSTextView cursor y-position
                             .allowsHitTesting(false)
@@ -122,7 +122,10 @@ struct EditorPaneView: View {
         .onChange(of: note.id) { _, _ in
             localBody = note.body
             cursorOffset = 0          // reset stale offset on note switch
-            panelState.isPreviewMode = true      // reader-first — preview on note switch
+            // New notes (empty body) open in edit mode; existing notes in
+            // preview. Users expect to start typing in a fresh note, and
+            // reading in an existing one.
+            panelState.isPreviewMode = !note.body.isEmpty
             diskWriteError = false
             focusEditorAfterDelay()
         }
