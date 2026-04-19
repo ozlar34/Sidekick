@@ -59,12 +59,16 @@ class MarkdownTextStorage: NSTextStorage {
     // MARK: - Edit callback — reparse the edited paragraph
 
     override func processEditing() {
-        // Call super first — this notifies layout managers and finalizes
-        // the editedRange / editedMask / changeInLength properties.
+        // Apply attributes BEFORE super.processEditing() per NSTextStorage
+        // contract: layout managers are notified of the edit by super, and
+        // that notification must reflect all attribute mutations from this
+        // edit pass. Calling super first means layout managers see a stale
+        // view and attribute-only addAttribute calls inside applyAttributes
+        // land outside the edit's atomic notification window.
+        if backing.length > 0 {
+            applyAttributes(forEditedRange: editedRange)
+        }
         super.processEditing()
-        // Defensive: if the buffer is empty, nothing to parse.
-        guard backing.length > 0 else { return }
-        applyAttributes(forEditedRange: editedRange)
     }
 
     // MARK: - Parser → attribute application

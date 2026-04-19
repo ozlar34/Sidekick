@@ -42,7 +42,11 @@ final class MarkdownLayoutManager: NSLayoutManager {
         defer { mutableProperties.deallocate() }
         let mutableGlyphs = UnsafeMutablePointer<CGGlyph>.allocate(capacity: count)
         defer { mutableGlyphs.deallocate() }
+        // Seed both buffers with the source values so any slot we don't
+        // explicitly overwrite (e.g. charIndex >= storage.length) carries
+        // the original bytes through instead of undefined memory.
         mutableGlyphs.update(from: glyphs, count: count)
+        mutableProperties.update(from: properties, count: count)
 
         // Precompute the U+2022 BULLET glyph in the current font for bullet-
         // marker substitution. Looked up once per setGlyphs call.

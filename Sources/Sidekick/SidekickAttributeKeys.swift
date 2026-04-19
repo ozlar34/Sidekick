@@ -22,7 +22,7 @@ extension NSAttributedString.Key {
     /// glyph substitution. `MarkdownLayoutManager.setGlyphs(...)` replaces
     /// the dash/star glyph with U+2022 BULLET (`•`) from the same font so
     /// the user sees a visible bullet without mutating the underlying bytes.
-    /// The trailing space after the marker uses `.sidekickHiddenMarker`
-    /// (zero-width) separately.
+    /// The trailing space after the marker stays visible (not tagged) so
+    /// the rendered result is `• item` instead of the tight `•item`.
     static let sidekickBulletMarker = NSAttributedString.Key("sidekickBulletMarker")
 }
