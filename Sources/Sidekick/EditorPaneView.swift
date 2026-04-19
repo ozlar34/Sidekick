@@ -71,7 +71,7 @@ struct EditorPaneView: View {
                 } else {
                     TextEditor(text: $localBody)
                         .focused($editorFocused)
-                        .font(.system(size: 16))
+                        .font(.system(size: 14, design: .monospaced))
                         .padding(.top, 12)   // P7-PAD-01: breathing room between toolbar and note body
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
@@ -80,7 +80,7 @@ struct EditorPaneView: View {
                     if localBody.isEmpty {
                         Text("Start writing...")
                             .foregroundStyle(.secondary)
-                            .font(.system(size: 16))
+                            .font(.system(size: 14, design: .monospaced))
                             .padding(.leading, 10)    // Align with NSTextView cursor x-position
                             .padding(.top, 12)        // Align with NSTextView cursor y-position
                             .allowsHitTesting(false)
