@@ -17,4 +17,12 @@ extension NSAttributedString.Key {
     /// underlying text storage. Round-trip to disk is preserved because the
     /// characters remain in the buffer.
     static let sidekickHiddenMarker = NSAttributedString.Key("sidekickHiddenMarker")
+
+    /// Marks a bullet-list marker character (`-` or `*` at line start) for
+    /// glyph substitution. `MarkdownLayoutManager.setGlyphs(...)` replaces
+    /// the dash/star glyph with U+2022 BULLET (`•`) from the same font so
+    /// the user sees a visible bullet without mutating the underlying bytes.
+    /// The trailing space after the marker uses `.sidekickHiddenMarker`
+    /// (zero-width) separately.
+    static let sidekickBulletMarker = NSAttributedString.Key("sidekickBulletMarker")
 }

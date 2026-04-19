@@ -152,6 +152,7 @@ class MarkdownTextStorage: NSTextStorage {
     /// so the storage never leaks bold/italic styling into plain text.
     private func clearManagedAttributes(in range: NSRange) {
         backing.removeAttribute(.sidekickHiddenMarker, range: range)
+        backing.removeAttribute(.sidekickBulletMarker, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         // Reset font to the base monospaced 14pt editor font, matching
@@ -159,6 +160,12 @@ class MarkdownTextStorage: NSTextStorage {
         // Do NOT use 16pt — that's the preview reader font (PATTERNS.md line 477).
         let baseFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         backing.addAttribute(.font, value: baseFont, range: range)
+        // Pin foreground to NSColor.textColor so it stays dynamic across
+        // light/dark appearance and persists across note-switch full-text
+        // replaces. Without this, text inserted by updateNSView has no
+        // foregroundColor attribute and can render with a stale cached
+        // value baked in at the previous appearance.
+        backing.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
     }
 
     // MARK: - Per-construct attribute writers
@@ -236,16 +243,18 @@ class MarkdownTextStorage: NSTextStorage {
     private func applyBullets(in substring: String, offset: Int) throws {
         let prefixes = MarkdownInlineParser.findBulletPrefixes(in: substring)
         for prefixRange in prefixes {
-            tagHiddenMarker(shifting: prefixRange, by: offset)
-            // Extend the paragraph-style application to cover the whole bullet line
-            // so NSLayoutManager renders the disc bullet glyph aligned with the text.
             let shifted = shift(prefixRange, by: offset)
-            let ns = backing.string as NSString
-            let lineRange = ns.lineRange(for: shifted)
-            let paragraph = NSMutableParagraphStyle()
-            let list = NSTextList(markerFormat: .disc, options: 0)
-            paragraph.textLists = [list]
-            backing.addAttribute(.paragraphStyle, value: paragraph, range: lineRange)
+            // prefixRange covers `- ` or `* ` (two chars). Tag ONLY the
+            // dash/star char with .sidekickBulletMarker so the layout
+            // manager substitutes its glyph with U+2022 BULLET. Leave the
+            // trailing space visible so the rendered output is `• item`
+            // (bullet + space + text) instead of the too-tight `•item`.
+            // Round-trip stays byte-identical because we never mutate bytes.
+            guard shifted.length >= 1,
+                  shifted.location >= 0,
+                  shifted.location + 1 <= backing.length else { continue }
+            let markerRange = NSRange(location: shifted.location, length: 1)
+            backing.addAttribute(.sidekickBulletMarker, value: true, range: markerRange)
         }
     }
 

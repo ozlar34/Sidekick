@@ -12,6 +12,7 @@
 /// Pattern source: Apple "Text System Architecture" — setGlyphs override pattern.
 /// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-MH-01, D-MH-02, D-MH-03.
 import AppKit
+import CoreText
 
 final class MarkdownLayoutManager: NSLayoutManager {
 
@@ -34,21 +35,33 @@ final class MarkdownLayoutManager: NSLayoutManager {
             return
         }
 
-        // Allocate a mutable copy of the properties buffer. The parameter is
-        // UnsafePointer (immutable) — we cannot mutate it in place. Per the
-        // canonical Apple override pattern, allocate a parallel buffer,
-        // copy, mutate, then pass to super.
+        // Allocate mutable copies of both buffers — we may need to substitute
+        // the glyph (bullet marker → •) in addition to hiding glyphs.
         let count = glyphRange.length
         let mutableProperties = UnsafeMutablePointer<NSLayoutManager.GlyphProperty>.allocate(capacity: count)
         defer { mutableProperties.deallocate() }
+        let mutableGlyphs = UnsafeMutablePointer<CGGlyph>.allocate(capacity: count)
+        defer { mutableGlyphs.deallocate() }
+        mutableGlyphs.update(from: glyphs, count: count)
+
+        // Precompute the U+2022 BULLET glyph in the current font for bullet-
+        // marker substitution. Looked up once per setGlyphs call.
+        var bulletGlyph: CGGlyph = 0
+        var bulletScalar: UniChar = 0x2022
+        CTFontGetGlyphsForCharacters(font as CTFont, &bulletScalar, &bulletGlyph, 1)
 
         for i in 0..<count {
             var prop = properties[i]
             let charIndex = characterIndexes[i]
-            // Guard against OOB: charIndex must be < storage.length.
             if charIndex < storage.length {
                 let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
-                if attrs[.sidekickHiddenMarker] != nil {
+                if attrs[.sidekickBulletMarker] != nil {
+                    // Substitute the dash/star glyph with a bullet glyph.
+                    // Keep visible — do NOT set .null.
+                    if bulletGlyph != 0 {
+                        mutableGlyphs[i] = bulletGlyph
+                    }
+                } else if attrs[.sidekickHiddenMarker] != nil {
                     // OR in .null — preserves any existing property bits.
                     prop.insert(.null)
                 }
@@ -56,6 +69,6 @@ final class MarkdownLayoutManager: NSLayoutManager {
             mutableProperties[i] = prop
         }
 
-        super.setGlyphs(glyphs, properties: UnsafePointer(mutableProperties), characterIndexes: characterIndexes, font: font, forGlyphRange: glyphRange)
+        super.setGlyphs(UnsafePointer(mutableGlyphs), properties: UnsafePointer(mutableProperties), characterIndexes: characterIndexes, font: font, forGlyphRange: glyphRange)
     }
 }

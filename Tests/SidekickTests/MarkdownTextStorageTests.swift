@@ -90,13 +90,19 @@ final class MarkdownTextStorageTests: XCTestCase {
                      "First content char 'T' at location 2 must NOT carry .sidekickHiddenMarker")
     }
 
-    func test_bulletPrefix_tagged_sidekickHiddenMarker() {
+    func test_bulletPrefix_tagged_sidekickBulletMarker() {
         let storage = makeStorage("- item")
-        // Prefix range {0,2} covers "- " (dash + space)
-        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 0, effectiveRange: nil),
-                        "- at location 0 must carry .sidekickHiddenMarker")
-        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 1, effectiveRange: nil),
-                        "Space after - at location 1 must carry .sidekickHiddenMarker")
+        // Dash at 0 gets .sidekickBulletMarker so the layout manager
+        // substitutes its glyph to U+2022 BULLET. The trailing space at 1
+        // stays visible so rendered output is `• item` (not `•item`).
+        XCTAssertNotNil(storage.attribute(.sidekickBulletMarker, at: 0, effectiveRange: nil),
+                        "- at location 0 must carry .sidekickBulletMarker (glyph substituted to •)")
+        XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 0, effectiveRange: nil),
+                     "- at location 0 must NOT carry .sidekickHiddenMarker (it's visible as •)")
+        XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 1, effectiveRange: nil),
+                     "Space after - at location 1 must stay visible for `• item` rendering")
+        XCTAssertNil(storage.attribute(.sidekickBulletMarker, at: 2, effectiveRange: nil),
+                     "Content 'i' at location 2 must NOT carry .sidekickBulletMarker")
         XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 2, effectiveRange: nil),
                      "Content 'i' at location 2 must NOT carry .sidekickHiddenMarker")
     }
