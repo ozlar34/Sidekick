@@ -116,6 +116,90 @@ struct FormattingToolbarView: View {
         return (newBody, cursor)
     }
 
+    /// Pure string transformation: toggles a `"- "` prefix on every line in
+    /// the block containing `range`. Mirrors the Apple Notes / Bear
+    /// convention: if every non-empty line in the expanded block already
+    /// starts with `"- "`, the prefix is stripped from each line
+    /// (toggle off). Otherwise — mixed or no prefixes — `"- "` is prepended
+    /// to EVERY line in the block, including empty lines (an empty bullet
+    /// `"- "` is a real thing in Notes).
+    ///
+    /// - Returns `newBody` and `newSelection` (NSRange) covering the
+    ///   transformed line block. Callers re-select the block so the user
+    ///   can hit ⌘⇧8 again to toggle off.
+    ///
+    /// UTF-16 discipline (same as `applyMarkdownWrap`): `body` is treated as
+    /// NSString; lineRange(for:) returns UTF-16 spans that include the
+    /// trailing `\n` (or end-of-string when the final line has no newline).
+    ///
+    /// Empty selection (`range.length == 0`) still works — `lineRange(for:)`
+    /// returns the enclosing line's span, so the caret's x-position doesn't
+    /// affect where the prefix lands (it's always line-start).
+    internal static func applyBulletedList(
+        body: String,
+        range: NSRange
+    ) -> (newBody: String, newSelection: NSRange) {
+        let nsBody = body as NSString
+
+        // Clamp defensively — mirrors applyMarkdownWrap's safe-range pattern.
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+
+        // Expand to line-block bounds. lineRange(for:) returns the NSRange
+        // covering full lines, including any trailing "\n".
+        let blockRange = nsBody.lineRange(for: safeRange)
+        let blockSubstring = nsBody.substring(with: blockRange)
+
+        // Preserve trailing newline on rejoin if the block ends with one.
+        let endsWithNewline = blockSubstring.hasSuffix("\n")
+        // Split lines. components(separatedBy:) yields a trailing "" when
+        // the string ends with "\n" — we handle that explicitly on rejoin.
+        var lines = blockSubstring.components(separatedBy: "\n")
+        let trailingEmpty: Bool
+        if endsWithNewline, let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty = true
+        } else {
+            trailingEmpty = false
+        }
+
+        // Determine mode: all non-empty lines prefixed → strip; otherwise add.
+        let nonEmptyLines = lines.filter { !$0.isEmpty }
+        let allPrefixed = !nonEmptyLines.isEmpty
+            && nonEmptyLines.allSatisfy { ($0 as NSString).hasPrefix("- ") }
+
+        let transformed: [String]
+        if allPrefixed {
+            // Strip mode: drop leading "- " (2 UTF-16 units) from each
+            // non-empty line. Empty lines stay untouched.
+            transformed = lines.map { line -> String in
+                let ns = line as NSString
+                if ns.hasPrefix("- ") {
+                    return ns.substring(from: 2)
+                }
+                return line
+            }
+        } else {
+            // Add mode: prepend "- " to EVERY line (including empties —
+            // consistent with Apple Notes behavior).
+            transformed = lines.map { "- " + $0 }
+        }
+
+        // Rejoin, preserving the trailing newline if the original had one.
+        var newBlock = transformed.joined(separator: "\n")
+        if trailingEmpty {
+            newBlock += "\n"
+        }
+
+        let newBody = nsBody.replacingCharacters(in: blockRange, with: newBlock)
+        let newSelection = NSRange(
+            location: blockRange.location,
+            length: (newBlock as NSString).length
+        )
+        return (newBody, newSelection)
+    }
+
     /// Applies markdown wrap directly on an NSTextView using AppKit's edit
     /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
     /// This registers the change on the text view's own `undoManager`

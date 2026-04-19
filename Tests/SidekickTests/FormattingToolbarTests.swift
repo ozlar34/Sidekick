@@ -145,7 +145,9 @@ final class FormattingToolbarTests: XCTestCase {
         )
         XCTAssertEqual(newBody, "intro\n- foo\n- bar\noutro",
                        "Only the foo/bar block is transformed; intro/outro lines untouched")
-        // The transformed block "- foo\n- bar" is 11 units, starting at index 6.
-        XCTAssertEqual(newSelection, NSRange(location: 6, length: 11))
+        // lineRange(for:) expands the block to include the trailing "\n" after
+        // "bar" (standard NSString line-range contract). The transformed block
+        // is "- foo\n- bar\n" = 12 UTF-16 units starting at index 6.
+        XCTAssertEqual(newSelection, NSRange(location: 6, length: 12))
     }
 }
