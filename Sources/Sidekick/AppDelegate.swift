@@ -177,6 +177,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         linkItem.target = self
         formatMenu.addItem(linkItem)
 
+        let bulletedListItem = NSMenuItem(
+            title: "Bulleted List",
+            action: #selector(formatBulletedList(_:)),
+            keyEquivalent: "8"
+        )
+        // ⌘⇧8 — "8" is a non-letter key, so uppercase doesn't auto-imply Shift.
+        // Set an explicit modifier union (mirror inlineCodeItem, line 168).
+        bulletedListItem.keyEquivalentModifierMask = [.command, .shift]
+        bulletedListItem.target = self
+        formatMenu.addItem(bulletedListItem)
+
         formatItem.submenu = formatMenu
         mainMenu.addItem(formatItem)
 
@@ -438,6 +449,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: tv)
     }
 
+    /// Format > Bulleted List (⌘⇧8). Apple Notes / Bear convention:
+    /// toggles "- " prefix on every line in the selection (or the current
+    /// line if selection is empty). Uses the shared line-prefix edit
+    /// sandwich (FormattingToolbarView.performLinePrefix) — same responder
+    /// discovery as formatBold/Italic/Code/Link.
+    @objc func formatBulletedList(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performLinePrefix(in: tv)
+    }
+
     /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
     /// which reads CFBundleShortVersionString + CFBundleVersion from
     /// Info.plist (build-and-run.sh:38-67 already writes both keys).
@@ -481,7 +503,8 @@ extension AppDelegate: NSUserInterfaceValidations {
         case #selector(formatBold(_:)),
              #selector(formatItalic(_:)),
              #selector(formatInlineCode(_:)),
-             #selector(formatLink(_:)):
+             #selector(formatLink(_:)),
+             #selector(formatBulletedList(_:)):
             return editorFocused                                  // D-V-02
 
         case #selector(pinToggle(_:)):

@@ -73,12 +73,12 @@ final class MenuStructureTests: XCTestCase {
 
     // MARK: - D-M-04 — Format submenu (MENU-02)
 
-    func test_formatSubmenu_hasBoldItalicInlineCodeLink_withCorrectShortcuts() {
+    func test_formatSubmenu_hasBoldItalicInlineCodeLinkBullet_withCorrectShortcuts() {
         _ = install()
         let formatSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "Format" })?.submenu
         XCTAssertNotNil(formatSubmenu, "Format submenu must exist (MENU-02)")
-        XCTAssertEqual(formatSubmenu?.items.count, 4,
-                       "Format has exactly 4 items: Bold, Italic, Inline Code, Link")
+        XCTAssertEqual(formatSubmenu?.items.count, 5,
+                       "Format has exactly 5 items: Bold, Italic, Inline Code, Link, Bulleted List")
 
         let byTitle: (String) -> NSMenuItem? = { title in
             formatSubmenu?.items.first { $0.title == title }
@@ -100,6 +100,15 @@ final class MenuStructureTests: XCTestCase {
         let link = byTitle("Link")
         XCTAssertEqual(link?.keyEquivalent, "k", "⌘K")
         XCTAssertEqual(link?.keyEquivalentModifierMask, .command)
+
+        // Bulleted List (quick/260419-hca) — ⌘⇧8 with explicit
+        // [.command, .shift] modifier mask (non-letter key — uppercase
+        // "8" does NOT auto-imply Shift; mirror Inline Code's explicit union).
+        let bulleted = byTitle("Bulleted List")
+        XCTAssertNotNil(bulleted, "Bulleted List menu item must exist")
+        XCTAssertEqual(bulleted?.keyEquivalent, "8", "⌘⇧8")
+        XCTAssertEqual(bulleted?.keyEquivalentModifierMask, [.command, .shift],
+                       "Bulleted List modifier mask is explicit [.command, .shift] (non-letter key needs explicit Shift)")
     }
 
     // MARK: - D-M-05 — View submenu (MENU-03 + KBD-01)
