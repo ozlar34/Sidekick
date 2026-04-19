@@ -71,4 +71,83 @@ final class FormattingToolbarTests: XCTestCase {
         XCTAssertEqual(newBody, "hello **world** foo")
         XCTAssertEqual(cursor, 15, "6 + prefix=2 + selection=5 + suffix=2 = 15")
     }
+
+    // MARK: - applyBulletedList (bulleted-list toggle)
+    //
+    // Apple Notes / Bear convention: ⌘⇧8 prepends "- " to every line in the
+    // selection; if every non-empty line in the selection ALREADY starts with
+    // "- ", it strips the prefix (toggle off). Mixed lines → all get a prefix
+    // (spec case 5 — NOT toggle off).
+
+    func test_applyBulletedList_emptySelection_cursorMidWord_insertsPrefixAtLineStart() {
+        // Caret sits at index 6 (between "hello " and "world"). The prefix
+        // must land at the START of the enclosing line, NOT at the caret.
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "hello world",
+            range: NSRange(location: 6, length: 0)
+        )
+        XCTAssertEqual(newBody, "- hello world",
+                       "Prefix lands at line start — caret position does NOT affect insertion point")
+        XCTAssertEqual(newSelection.location, 0, "newSelection starts at line-block start")
+        XCTAssertEqual(newSelection.length, 13, "newSelection covers the transformed line")
+    }
+
+    func test_applyBulletedList_singleLineSelection_addsPrefix() {
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "hello",
+            range: NSRange(location: 0, length: 5)
+        )
+        XCTAssertEqual(newBody, "- hello")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 7))
+    }
+
+    func test_applyBulletedList_multiLineSelection_prefixesEveryLine() {
+        // Body is 13 UTF-16 units: "one\ntwo\nthree" → (3 + 1 + 3 + 1 + 5) = 13
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "one\ntwo\nthree",
+            range: NSRange(location: 0, length: 13)
+        )
+        XCTAssertEqual(newBody, "- one\n- two\n- three")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 19),
+                       "3 lines × 2 extra chars per line = +6 over 13 = 19")
+    }
+
+    func test_applyBulletedList_allLinesPrefixed_stripsPrefix() {
+        // All lines prefixed → toggle off.
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "- one\n- two\n- three",
+            range: NSRange(location: 0, length: 19)
+        )
+        XCTAssertEqual(newBody, "one\ntwo\nthree")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 13))
+    }
+
+    func test_applyBulletedList_mixedLines_addsPrefixToAll_doesNotToggleOff() {
+        // Spec case 5: mixed → ALL get another "- " prefix (NOT toggle off).
+        // Body: "- one\ntwo\n- three" → 6 + 1 + 3 + 1 + 7 = 18 UTF-16 units.
+        // Wait: "- one" = 5 units, + "\n" = 6, + "two" = 9, + "\n" = 10, + "- three" = 17.
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "- one\ntwo\n- three",
+            range: NSRange(location: 0, length: 17)
+        )
+        XCTAssertEqual(newBody, "- - one\n- two\n- - three",
+                       "Mixed → every line (including already-prefixed ones) gets an extra '- ' prepended")
+        // Original 17 units + 3 lines × 2 chars = 17 + 6 = 23 units.
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 23))
+    }
+
+    func test_applyBulletedList_midBodySelection_preservesSurroundingText() {
+        // Body: "intro\nfoo\nbar\noutro" → 5 + 1 + 3 + 1 + 3 + 1 + 5 = 19 units.
+        // Selection covers "foo\nbar" at loc=6 len=7.
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: "intro\nfoo\nbar\noutro",
+            range: NSRange(location: 6, length: 7)
+        )
+        XCTAssertEqual(newBody, "intro\n- foo\n- bar\noutro",
+                       "Only the foo/bar block is transformed; intro/outro lines untouched")
+        // lineRange(for:) expands the block to include the trailing "\n" after
+        // "bar" (standard NSString line-range contract). The transformed block
+        // is "- foo\n- bar\n" = 12 UTF-16 units starting at index 6.
+        XCTAssertEqual(newSelection, NSRange(location: 6, length: 12))
+    }
 }
