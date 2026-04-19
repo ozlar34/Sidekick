@@ -40,19 +40,11 @@ final class MarkdownInlineParserTests: XCTestCase {
     }
 
     func test_bold_emptyPair_handled() {
-        // "** **" is a degenerate empty pair. Per D-T-01, the parser either skips it
-        // (empty contentRange) or returns a match with zero-length content.
-        // This test pins whatever Task 1 chose — it must not crash and
-        // must be deterministic.
+        // "** **" is a degenerate whitespace-only pair. The implementation skips it
+        // (whitespace-only content guard in findBoldRanges). Pinning the chosen
+        // behavior: skip = 0 matches. No crash, deterministic.
         let matches = MarkdownInlineParser.findBoldRanges(in: "** **")
-        // Accept either 0 or 1 match; the important invariant is no crash and no
-        // hidden text that shouldn't be. If the parser skips degenerate pairs, count is 0.
-        // If it returns empty-content, we verify the content range is zero-length.
-        if matches.count == 1 {
-            XCTAssertEqual(matches[0].contentRange.length, 0, "Degenerate pair: content range must be empty")
-        } else {
-            XCTAssertEqual(matches.count, 0, "Degenerate pair: either skipped (0) or empty-content (1)")
-        }
+        XCTAssertEqual(matches.count, 0, "Degenerate whitespace-only pair must be skipped (D-T-01)")
     }
 
     // MARK: - Italic happy paths
