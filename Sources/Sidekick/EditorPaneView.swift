@@ -69,10 +69,7 @@ struct EditorPaneView: View {
                 if panelState.isPreviewMode {
                     MarkdownPreviewView(content: localBody)
                 } else {
-                    TextEditor(text: $localBody)
-                        .focused($editorFocused)
-                        .font(.system(size: 14, design: .monospaced))
-                        .padding(.top, 12)   // P7-PAD-01: breathing room between toolbar and note body
+                    HybridEditorView(text: $localBody)
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
                         }
