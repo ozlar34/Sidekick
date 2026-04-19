@@ -7,6 +7,7 @@ import SwiftUI
 /// extracted into `applyMarkdownWrap` (pure, unit-testable — no AppKit).
 struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
+    let applyLinePrefix: () -> Void
     let togglePreview: () -> Void
     let isPreviewMode: Bool
 
@@ -68,6 +69,15 @@ struct FormattingToolbarView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Link (⌘K)")
+
+                Button {
+                    applyLinePrefix()
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .help("Bulleted list (⌘⇧8)")
             }
 
             Spacer()
@@ -243,5 +253,64 @@ struct FormattingToolbarView: View {
         textView.replaceCharacters(in: range, with: inserted)
         textView.didChangeText()
         textView.setSelectedRange(NSRange(location: cursor, length: 0))
+    }
+
+    /// Applies a line-prefix toggle (bulleted list) directly on an NSTextView,
+    /// using the same edit-sandwich pattern as `performWrap`:
+    /// `shouldChangeText` → `replaceCharacters` → `didChangeText`. Undo
+    /// registers on `textView.undoManager` automatically (no manual
+    /// `registerUndo` call).
+    ///
+    /// Called from two paths (mirrors `performWrap` — D-R-03):
+    ///   1. `EditorPaneView.applyLinePrefix()` — toolbar button taps.
+    ///      (Note: the toolbar path uses the $localBody mutation instead,
+    ///      for the same SwiftUI-source-of-truth reason as wrapSelection.
+    ///      Only the MENU path calls `performLinePrefix` directly.)
+    ///   2. `AppDelegate.formatBulletedList(_:)` — ⌘⇧8 menu action.
+    ///
+    /// Edits only the line-block range (lineRange(for: selection)), not the
+    /// full body. The caret/selection restore mirrors `performWrap`: for an
+    /// empty selection on a single transformed line, the caret lands
+    /// immediately after the inserted `"- "` so the user can start typing
+    /// the bullet content. For multi-line or non-empty selection, the whole
+    /// transformed block is re-selected so the next ⌘⇧8 can toggle it off.
+    static func performLinePrefix(in textView: NSTextView) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (fullNewBody, _) = applyBulletedList(body: body, range: range)
+
+        let nsBody = body as NSString
+        let blockRange = nsBody.lineRange(for: range)
+
+        // Extract the replacement block from fullNewBody at the same start
+        // offset. blockRange.location is unchanged by the transform (the
+        // edit is local to the block); the new block's length is the old
+        // block's length plus the delta in total body length.
+        let deltaLength = (fullNewBody as NSString).length - nsBody.length
+        let newBlockLength = blockRange.length + deltaLength
+        let newBlock = (fullNewBody as NSString).substring(
+            with: NSRange(location: blockRange.location, length: newBlockLength)
+        )
+
+        // Edit sandwich — registers undo on textView.undoManager automatically.
+        guard textView.shouldChangeText(in: blockRange, replacementString: newBlock) else { return }
+        textView.replaceCharacters(in: blockRange, with: newBlock)
+        textView.didChangeText()
+
+        // Caret / selection restore:
+        //   - Empty selection AND single-line result → caret AFTER the "- "
+        //     (add mode) or at line start (strip mode). Detect by length
+        //     delta: positive → we added "- " → caret at location + 2.
+        //   - Otherwise → re-select the full transformed block.
+        if range.length == 0, !newBlock.contains("\n") {
+            let caretOffset = deltaLength > 0 ? 2 : 0
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location + max(0, caretOffset), length: 0)
+            )
+        } else {
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location, length: (newBlock as NSString).length)
+            )
+        }
     }
 }

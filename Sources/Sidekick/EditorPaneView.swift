@@ -53,6 +53,7 @@ struct EditorPaneView: View {
             // RESEARCH Pitfall 2).
             FormattingToolbarView(
                 wrapSelection: wrapSelection,
+                applyLinePrefix: applyLinePrefix,
                 togglePreview: { panelState.isPreviewMode.toggle() },
                 isPreviewMode: panelState.isPreviewMode
             )
@@ -263,6 +264,34 @@ struct EditorPaneView: View {
         DispatchQueue.main.async {
             let target = tv ?? (NSApp.keyWindow?.firstResponder as? NSTextView)
             target?.setSelectedRange(NSRange(location: cursor, length: 0))
+        }
+    }
+
+    /// Toolbar-button bridge for the bulleted-list toggle (⌘⇧8 equivalent).
+    ///
+    /// Parallel to `wrapSelection` — mutates `$localBody` (SwiftUI source of
+    /// truth) instead of calling `NSTextView.replaceCharacters` directly,
+    /// for the same reason documented on `wrapSelection`: SwiftUI would
+    /// re-push localBody into the TextEditor and silently revert a direct
+    /// NSTextView edit from a SwiftUI button handler.
+    ///
+    /// The menu path (`AppDelegate.formatBulletedList`) fires outside
+    /// SwiftUI's update cycle and calls `FormattingToolbarView.performLinePrefix`
+    /// directly — same split as bold/italic/link.
+    private func applyLinePrefix() {
+        guard !panelState.isPreviewMode else { return }
+        let tv = cachedTextView
+            ?? findTextView(in: NSApp.keyWindow?.contentView)
+            ?? NSApp.windows.lazy.compactMap { findTextView(in: $0.contentView) }.first
+        let range = tv?.selectedRange() ?? cachedSelection
+        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
+            body: localBody,
+            range: range
+        )
+        localBody = newBody
+        DispatchQueue.main.async {
+            let target = tv ?? (NSApp.keyWindow?.firstResponder as? NSTextView)
+            target?.setSelectedRange(newSelection)
         }
     }
 
