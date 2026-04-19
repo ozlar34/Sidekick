@@ -39,14 +39,39 @@ struct HybridEditorView: NSViewRepresentable {
         storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(container)
 
-        let textView = NSTextView(frame: .zero, textContainer: container)
+        // Scroll view wrapper created first so we can size the text view to match.
+        let scrollView = NSScrollView(frame: .zero)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = NSColor.textBackgroundColor
+
+        // NSTextView hosted in NSScrollView needs Apple's full sizing contract:
+        // initial non-zero frame + min/max size + isVerticallyResizable. Without
+        // these, the text view stays 0×0, clicks never land on it, and typing
+        // never reaches the storage. (This is distinct from the .zero frame
+        // that works for standalone NSTextView instances.)
+        let textView = NSTextView(
+            frame: NSRect(x: 0, y: 0, width: 100, height: 0),
+            textContainer: container
+        )
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                  height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = NSView.AutoresizingMask.width
         textView.isRichText = false
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
-        textView.autoresizingMask = NSView.AutoresizingMask.width
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
         textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)  // matches EditorPaneView.swift:74
+        // Explicit dynamic text color — NSColor.textColor adapts to light/dark
+        // appearance, matching the old TextEditor + SwiftUI .primary behavior.
+        textView.textColor = NSColor.textColor
+        textView.insertionPointColor = NSColor.textColor
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.drawsBackground = true
         textView.delegate = context.coordinator
@@ -58,15 +83,7 @@ struct HybridEditorView: NSViewRepresentable {
             storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
         }
 
-        // 2. Scroll view wrapper.
-        let scrollView = NSScrollView(frame: .zero)
         scrollView.documentView = textView
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = NSColor.textBackgroundColor
-
         return scrollView
     }
 
