@@ -132,5 +132,33 @@ struct HybridEditorView: NSViewRepresentable {
                 parent.text = tv.string
             }
         }
+
+        /// PRIMARY PATH — NSTextViewDelegate method invoked when the user clicks on a
+        /// character that carries the `.link` attribute. Returning true = we handled
+        /// it; returning false = fall through to NSTextView's default behavior
+        /// (cursor placement on plain click, per Apple AppKit docs when the delegate
+        /// method IS implemented). Per 10-CONTEXT.md D-LC-01.
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            // D-LC-01: ⌘-click opens; plain click falls through to default cursor positioning
+            guard NSEvent.modifierFlags.contains(.command) else {
+                return false   // Let NSTextView do default cursor positioning on plain click
+            }
+            // AppKit's clickedOnLink delivers `link` as Any — usually URL, sometimes String
+            let url: URL?
+            if let u = link as? URL {
+                url = u
+            } else if let s = link as? String {
+                url = URL(string: s)
+            } else {
+                url = nil
+            }
+            if let url {
+                // D-LC-02: mirror MarkdownPreviewView.swift:22-25 URL-dispatch behavior.
+                // All schemes pass through (http/https/mailto/file/custom);
+                // no whitelist, no confirm sheet — matches preview-path policy.
+                NSWorkspace.shared.open(url)
+            }
+            return true   // ⌘-click handled (or no-op'd on nil URL)
+        }
     }
 }

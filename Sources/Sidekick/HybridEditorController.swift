@@ -12,7 +12,12 @@ import SwiftUI
 /// mounts; the view-lifetime NSTextView reference is re-published on mount.
 ///
 /// Pattern: matches `PanelState` shape (`@MainActor final class`,
-/// `@Published` property; see Sources/Sidekick/PanelState.swift).
+/// `ObservableObject`; see Sources/Sidekick/PanelState.swift).
+///
+/// Note: Swift does not allow `@Published weak var` — `@Published` property
+/// wrapper and `weak` are mutually exclusive. Instead, the `textView` setter
+/// fires `objectWillChange` manually, achieving the same observable behaviour
+/// without retaining the NSTextView (D-TB-02, D-TB-03, D-TB-04).
 ///
 /// Reference: 10-CONTEXT.md D-TB-02, D-TB-03, D-TB-04.
 @MainActor
@@ -22,5 +27,7 @@ final class HybridEditorController: ObservableObject {
     /// `weak` because the NSTextView lifecycle is owned by the
     /// NSScrollView returned from `makeNSView`; the controller must
     /// not retain it.
-    @Published weak var textView: NSTextView?
+    weak var textView: NSTextView? {
+        willSet { objectWillChange.send() }
+    }
 }

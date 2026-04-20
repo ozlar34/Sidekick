@@ -97,6 +97,71 @@ final class MenuActionRoutingTests: XCTestCase {
         _ = tmp  // retain TempFolder
     }
 
+    // MARK: - performWrap determinism sentinel (D-T-05 structural invariant, TOOLBAR-01..03)
+
+    /// Structural-invariant sentinel test for the toolbar / Format-menu / ⌘B-shortcut
+    /// parity guarantee from D-TB-01.
+    ///
+    /// RATIONALE — why this is a sentinel, not an end-to-end parity test:
+    /// Post-Phase-10 all three surfaces (toolbar button closure, AppDelegate.formatBold,
+    /// keyboard shortcut → AppDelegate.formatBold) converge on
+    /// `FormattingToolbarView.performWrap`. Exercising each real entry point in XCTest
+    /// would require:
+    ///   1. SwiftUI view-callback invocation (toolbar path) — flaky without a host window
+    ///   2. Seeded NSApp panel state + AppDelegate lifecycle (menu path) — brittle in XCTest
+    ///   3. Keyboard-event synthesis against NSApp.sendEvent (shortcut path) — requires runloop
+    ///
+    /// Given Phase 10's budget profile and the structural guarantee that all three paths
+    /// share one function (performWrap), the XCTest-level invariant reduces to:
+    /// **performWrap is deterministic across invocations with identical input.** If that
+    /// holds, and all three dispatch paths terminate at performWrap, then the three paths
+    /// produce identical NSTextView state by construction.
+    ///
+    /// END-TO-END THREE-PATH COVERAGE lives in the Plan 04 human-verify checkpoint
+    /// (Task 3 steps 4, 6, 7): step 4 exercises the toolbar button, step 6 exercises ⌘B,
+    /// step 7 exercises Format menu → Bold. The human-verify checkpoint is the real
+    /// parity test; this XCTest is the machine-checkable invariant that backstops it.
+    func test_performWrap_isDeterministic_sharedPathSentinel() {
+        // Helper — minimal NSTextView fixture (copy shape from PerformWrapTests.makeTextView if not already in scope)
+        func makeTV(_ body: String, selection: NSRange) -> NSTextView {
+            let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            tv.string = body
+            tv.setSelectedRange(selection)
+            return tv
+        }
+
+        let body = "hello world"
+        let sel = NSRange(location: 0, length: 5)
+
+        // Three independent fixtures seeded identically — each represents one dispatch path
+        // terminating at performWrap. Because the three dispatch paths share this one
+        // function (D-TB-01), determinism under identical input is the structural
+        // invariant we enforce. Actual three-path wiring is covered by human-verify
+        // Task 3 steps 4, 6, 7.
+        let tvToolbar = makeTV(body, selection: sel)
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tvToolbar)
+
+        let tvMenu = makeTV(body, selection: sel)
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tvMenu)
+
+        let tvShortcut = makeTV(body, selection: sel)
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tvShortcut)
+
+        // Determinism: identical input → identical output across all three calls
+        XCTAssertEqual(tvToolbar.string, tvMenu.string,
+                       "performWrap must be deterministic — identical input must produce identical string (structural sentinel for D-TB-01)")
+        XCTAssertEqual(tvMenu.string, tvShortcut.string,
+                       "performWrap must be deterministic — third invocation must match (structural sentinel for D-TB-01)")
+        XCTAssertEqual(tvToolbar.selectedRange(), tvMenu.selectedRange(),
+                       "performWrap selection must be deterministic (structural sentinel)")
+        XCTAssertEqual(tvMenu.selectedRange(), tvShortcut.selectedRange(),
+                       "performWrap selection must be deterministic (structural sentinel)")
+
+        // Expected semantic outcome — performWrap wrapped the selected range with "**"
+        XCTAssertEqual(tvToolbar.string, "**hello** world",
+                       "performWrap must wrap the selected range with the given prefix/suffix")
+    }
+
     // MARK: - MENU-04: deleteNote
 
     func test_deleteNote_routesToStoreAndReassignsSelection() async throws {
