@@ -107,3 +107,32 @@ struct NoteRowView: View {
         }
     }
 }
+
+// MARK: - Previews
+
+#Preview("Regular") {
+    let note = Note(
+        id: UUID(),
+        filename: "example.md",
+        body: "Sample note body for the regular state preview.",
+        pinned: false,
+        order: 0
+    )
+    let store = PreviewFixtures.makeStore(notes: [note])
+    return NoteRowView(note: note, store: store, selectedID: .constant(nil))
+        .frame(width: 220)
+}
+
+#Preview("Pinned") {
+    let note = PreviewFixtures.pinnedNote()
+    let store = PreviewFixtures.makeStore(notes: [note])
+    return NoteRowView(note: note, store: store, selectedID: .constant(note.id))
+        .frame(width: 220)
+}
+
+#Preview("Long title (truncated)") {
+    let note = PreviewFixtures.longTitleNote()
+    let store = PreviewFixtures.makeStore(notes: [note])
+    return NoteRowView(note: note, store: store, selectedID: .constant(nil))
+        .frame(width: 220)
+}
