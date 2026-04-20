@@ -17,8 +17,9 @@ struct FormattingToolbarView: View {
                 Image(systemName: "bold")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Bold (⌘B)")
+            .accessibilityLabel("Bold")
 
             Button {
                 wrapSelection("*", "*")
@@ -26,8 +27,9 @@ struct FormattingToolbarView: View {
                 Image(systemName: "italic")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Italic (⌘I)")
+            .accessibilityLabel("Italic")
 
             Button {
                 wrapSelection("`", "`")
@@ -35,8 +37,9 @@ struct FormattingToolbarView: View {
                 Image(systemName: "curlybraces")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Inline code (⌘⌥C)")
+            .accessibilityLabel("Inline code")
 
             Button {
                 wrapSelection("[", "]()")
@@ -44,8 +47,9 @@ struct FormattingToolbarView: View {
                 Image(systemName: "link")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Link (⌘K)")
+            .accessibilityLabel("Link")
 
             Button {
                 applyLinePrefix()
@@ -53,8 +57,9 @@ struct FormattingToolbarView: View {
                 Image(systemName: "list.bullet")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help("Bulleted list (⌘⇧8)")
+            .accessibilityLabel("Bulleted list")
 
             Spacer()
         }

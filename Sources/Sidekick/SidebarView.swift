@@ -43,8 +43,9 @@ struct SidebarView: View {
                             Image(systemName: "plus")
                                 .font(.system(size: 14, weight: .medium))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
                         .help("New Note")
+                        .accessibilityLabel("New Note")
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -62,8 +63,9 @@ struct SidebarView: View {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 14, weight: .medium))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
                         .help("Refresh notes from disk")
+                        .accessibilityLabel("Refresh notes from disk")
 
                         Spacer()
 
@@ -73,8 +75,9 @@ struct SidebarView: View {
                             Image(systemName: "gearshape")
                                 .font(.system(size: 14, weight: .medium))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
                         .help("Settings")
+                        .accessibilityLabel("Settings")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
