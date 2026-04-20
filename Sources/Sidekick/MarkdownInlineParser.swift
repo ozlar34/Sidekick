@@ -58,6 +58,42 @@ struct LinkMatch {
 /// All returned NSRanges are UTF-16 offsets (NSRange-compatible).
 enum MarkdownInlineParser {
 
+    // MARK: - Cached regexes (D-RF-01 — addresses 09-REVIEW MD-01)
+    // Compiled once per process. `try!` is safe: these are compile-time-constant
+    // patterns; a compile failure indicates a code defect, not a runtime condition.
+    private static let boldRegex = try! NSRegularExpression(
+        pattern: "\\*\\*([^*]|\\*(?!\\*))+?\\*\\*",
+        options: []
+    )
+    private static let italicAsteriskRegex = try! NSRegularExpression(
+        pattern: "(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)",
+        options: []
+    )
+    private static let italicUnderscoreRegex = try! NSRegularExpression(
+        pattern: "(?<![A-Za-z0-9_])_([^_\\n]+?)_(?![A-Za-z0-9_])",
+        options: []
+    )
+    private static let inlineCodeRegex = try! NSRegularExpression(
+        pattern: "`([^`\\n]+?)`",
+        options: []
+    )
+    private static let headingRegex = try! NSRegularExpression(
+        pattern: "^(#{1,6}) (.*)$",
+        options: []
+    )
+    private static let bulletRegex = try! NSRegularExpression(
+        pattern: "^(- |\\* )",
+        options: []
+    )
+    private static let fenceRegex = try! NSRegularExpression(
+        pattern: "^```[a-zA-Z0-9]*$",
+        options: []
+    )
+    private static let linkRegex = try! NSRegularExpression(
+        pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)",
+        options: []
+    )
+
     // MARK: Bold
 
     /// Returns ranges for all paired `**…**` bold markers in `string`.
@@ -68,13 +104,9 @@ enum MarkdownInlineParser {
     /// - Degenerate empty pairs (e.g. `** **`) are skipped (zero-length content).
     static func findBoldRanges(in string: String) -> [BoldMatch] {
         let ns = string as NSString
-        guard let regex = try? NSRegularExpression(
-            pattern: "\\*\\*([^*]|\\*(?!\\*))+?\\*\\*",
-            options: []
-        ) else { return [] }
 
         let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = regex.matches(in: string, range: fullRange)
+        let rawMatches = Self.boldRegex.matches(in: string, range: fullRange)
 
         return rawMatches.compactMap { match -> BoldMatch? in
             let r = match.range
@@ -109,37 +141,27 @@ enum MarkdownInlineParser {
         var results: [ItalicMatch] = []
 
         // Pass 1: *…* — look-arounds prevent matching inside **bold**
-        if let asteriskRegex = try? NSRegularExpression(
-            pattern: "(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)",
-            options: []
-        ) {
-            let asteriskMatches = asteriskRegex.matches(in: string, range: fullRange)
-            for match in asteriskMatches {
-                let r = match.range
-                let contentLength = r.length - 2
-                guard contentLength > 0 else { continue }
-                let markerOpen = NSRange(location: r.location, length: 1)
-                let content = NSRange(location: r.location + 1, length: contentLength)
-                let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
-                results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
-            }
+        let asteriskMatches = Self.italicAsteriskRegex.matches(in: string, range: fullRange)
+        for match in asteriskMatches {
+            let r = match.range
+            let contentLength = r.length - 2
+            guard contentLength > 0 else { continue }
+            let markerOpen = NSRange(location: r.location, length: 1)
+            let content = NSRange(location: r.location + 1, length: contentLength)
+            let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
+            results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
         }
 
         // Pass 2: _…_ — word-boundary look-arounds per CommonMark
-        if let underscoreRegex = try? NSRegularExpression(
-            pattern: "(?<![A-Za-z0-9_])_([^_\\n]+?)_(?![A-Za-z0-9_])",
-            options: []
-        ) {
-            let underscoreMatches = underscoreRegex.matches(in: string, range: fullRange)
-            for match in underscoreMatches {
-                let r = match.range
-                let contentLength = r.length - 2
-                guard contentLength > 0 else { continue }
-                let markerOpen = NSRange(location: r.location, length: 1)
-                let content = NSRange(location: r.location + 1, length: contentLength)
-                let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
-                results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
-            }
+        let underscoreMatches = Self.italicUnderscoreRegex.matches(in: string, range: fullRange)
+        for match in underscoreMatches {
+            let r = match.range
+            let contentLength = r.length - 2
+            guard contentLength > 0 else { continue }
+            let markerOpen = NSRange(location: r.location, length: 1)
+            let content = NSRange(location: r.location + 1, length: contentLength)
+            let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
+            results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
         }
 
         return results
@@ -153,13 +175,9 @@ enum MarkdownInlineParser {
     /// - Unclosed backticks return nothing (D-MH-04 pair-only principle).
     static func findInlineCodeRanges(in string: String) -> [InlineCodeMatch] {
         let ns = string as NSString
-        guard let regex = try? NSRegularExpression(
-            pattern: "`([^`\\n]+?)`",
-            options: []
-        ) else { return [] }
 
         let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = regex.matches(in: string, range: fullRange)
+        let rawMatches = Self.inlineCodeRegex.matches(in: string, range: fullRange)
 
         return rawMatches.compactMap { match -> InlineCodeMatch? in
             let r = match.range
@@ -186,11 +204,6 @@ enum MarkdownInlineParser {
         let fullLength = ns.length
         guard fullLength > 0 else { return [] }
 
-        guard let headingRegex = try? NSRegularExpression(
-            pattern: "^(#{1,6}) (.*)$",
-            options: []
-        ) else { return [] }
-
         var results: [HeadingMatch] = []
         var lineStart = 0
 
@@ -216,7 +229,7 @@ enum MarkdownInlineParser {
             // Run the heading regex against this line
             let lineNS = lineText as NSString
             let lineFullRange = NSRange(location: 0, length: lineNS.length)
-            let headingMatches = headingRegex.matches(in: lineText, range: lineFullRange)
+            let headingMatches = Self.headingRegex.matches(in: lineText, range: lineFullRange)
 
             if let m = headingMatches.first {
                 // Group 1 is the hashes, group 2 is the content
@@ -259,11 +272,6 @@ enum MarkdownInlineParser {
         let fullLength = ns.length
         guard fullLength > 0 else { return [] }
 
-        guard let bulletRegex = try? NSRegularExpression(
-            pattern: "^(- |\\* )",
-            options: []
-        ) else { return [] }
-
         var results: [NSRange] = []
         var lineStart = 0
 
@@ -286,7 +294,7 @@ enum MarkdownInlineParser {
             let lineNS = lineText as NSString
             let lineFullRange = NSRange(location: 0, length: lineNS.length)
 
-            let bulletMatches = bulletRegex.matches(in: lineText, range: lineFullRange)
+            let bulletMatches = Self.bulletRegex.matches(in: lineText, range: lineFullRange)
             if bulletMatches.first != nil {
                 // Prefix is always 2 UTF-16 units at line start
                 let prefixRange = NSRange(location: lineRange.location, length: 2)
@@ -310,12 +318,8 @@ enum MarkdownInlineParser {
     /// UTF-16-safe — all NSRanges are in UTF-16 code units relative to `string`.
     static func findLinkRanges(in string: String) -> [LinkMatch] {
         let ns = string as NSString
-        guard let regex = try? NSRegularExpression(
-            pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)",
-            options: []
-        ) else { return [] }
         let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = regex.matches(in: string, range: fullRange)
+        let rawMatches = Self.linkRegex.matches(in: string, range: fullRange)
         return rawMatches.compactMap { match -> LinkMatch? in
             let labelRange = match.range(at: 1)
             let urlRange = match.range(at: 2)
@@ -358,11 +362,6 @@ enum MarkdownInlineParser {
         let fullLength = ns.length
         guard fullLength > 0 else { return [] }
 
-        guard let fenceRegex = try? NSRegularExpression(
-            pattern: "^```[a-zA-Z0-9]*$",
-            options: []
-        ) else { return [] }
-
         var results: [FencedCodeMatch] = []
         var inFence = false
         var fenceOpenRange = NSRange(location: 0, length: 0)
@@ -388,7 +387,7 @@ enum MarkdownInlineParser {
             let lineNS = lineText as NSString
             let lineFullRange = NSRange(location: 0, length: lineNS.length)
 
-            let isFenceLine = fenceRegex.firstMatch(in: lineText, range: lineFullRange) != nil
+            let isFenceLine = Self.fenceRegex.firstMatch(in: lineText, range: lineFullRange) != nil
 
             if isFenceLine {
                 if !inFence {
