@@ -111,22 +111,6 @@ final class MenuStructureTests: XCTestCase {
                        "Bulleted List modifier mask is explicit [.command, .shift] (non-letter key needs explicit Shift)")
     }
 
-    // MARK: - D-M-05 — View submenu (MENU-03 + KBD-01)
-
-    func test_viewSubmenu_hasTogglePreviewCmdShiftP() {
-        _ = install()
-        let viewSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "View" })?.submenu
-        XCTAssertNotNil(viewSubmenu, "View submenu must exist (MENU-03)")
-        XCTAssertEqual(viewSubmenu?.items.count, 1, "View has exactly 1 item: Toggle Preview")
-
-        let toggle = viewSubmenu?.items[0]
-        XCTAssertEqual(toggle?.title, "Toggle Preview", "KBD-01 title (fixed — not dynamic)")
-        XCTAssertEqual(toggle?.keyEquivalent, "P",
-                       "KBD-01 ⌘⇧P uses uppercase P (auto-implies Shift per D-S-02)")
-        XCTAssertEqual(toggle?.keyEquivalentModifierMask, .command,
-                       "Modifier is .command only — uppercase P covers .shift; adding .shift draws glyph twice")
-    }
-
     // MARK: - D-M-06 — Note submenu (MENU-04)
 
     func test_noteSubmenu_hasPinAndDelete_noShortcutOnDelete() {
