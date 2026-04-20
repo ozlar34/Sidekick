@@ -56,22 +56,11 @@ struct EditorPaneView: View {
                 .frame(height: 1)
 
             // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
-            ZStack(alignment: .topLeading) {
-                HybridEditorView(text: $localBody, controller: editorController)
-                    .onChange(of: localBody) { _, newValue in
-                        scheduleAutoSave(body: newValue)
-                    }
-
-                if localBody.isEmpty {
-                    Text("Start writing...")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 14))
-                        .padding(.leading, 10)    // Align with NSTextView cursor x-position
-                        .padding(.top, 12)        // Align with NSTextView cursor y-position
-                        .allowsHitTesting(false)
+            HybridEditorView(text: $localBody, controller: editorController)
+                .onChange(of: localBody) { _, newValue in
+                    scheduleAutoSave(body: newValue)
                 }
-            }
-            .background(Color(.textBackgroundColor))
+                .background(Color(.textBackgroundColor))
 
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {

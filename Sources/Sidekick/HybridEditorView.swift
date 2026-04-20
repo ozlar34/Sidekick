@@ -68,7 +68,7 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isEditable = true
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
-        textView.font = NSFont.systemFont(ofSize: 14, weight: .regular)  // SF Pro body — matches EditorPaneView placeholder
+        textView.font = NSFont.systemFont(ofSize: 14, weight: .regular)
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark
         // appearance, matching the old TextEditor + SwiftUI .primary behavior.
         textView.textColor = NSColor.textColor
@@ -84,6 +84,10 @@ struct HybridEditorView: NSViewRepresentable {
         if !text.isEmpty {
             storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
         }
+
+        // Seed caret typing attributes for the initial selection — programmatic
+        // seeding does not fire textViewDidChangeSelection, so call directly.
+        context.coordinator.updateCaretTypingAttributes(in: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -131,6 +135,33 @@ struct HybridEditorView: NSViewRepresentable {
             if parent.text != tv.string {
                 parent.text = tv.string
             }
+        }
+
+        /// Caret typing attributes are sticky after edits — when the user
+        /// presses Enter from line 1 (H1) into line 2, AppKit carries the
+        /// H1 typing attrs forward, so the caret on line 2 stays tall even
+        /// though the line 2 text will render at body 14pt. Refresh on every
+        /// selection change so the caret height matches what the next typed
+        /// character will be: H1 on the first line, body 14pt elsewhere.
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            updateCaretTypingAttributes(in: tv)
+        }
+
+        func updateCaretTypingAttributes(in tv: NSTextView) {
+            let ns = tv.string as NSString
+            let caretLoc = tv.selectedRange().location
+            let firstNewline = ns.range(of: "\n")
+            // Caret is on line 1 if there is no newline yet (single-line doc)
+            // or its position is at/before the first newline character.
+            let isOnFirstLine = firstNewline.location == NSNotFound
+                                || caretLoc <= firstNewline.location
+            let font: NSFont = isOnFirstLine
+                ? NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold)
+                : NSFont.systemFont(ofSize: 14, weight: .regular)
+            var attrs = tv.typingAttributes
+            attrs[.font] = font
+            tv.typingAttributes = attrs
         }
 
         /// PRIMARY PATH — NSTextViewDelegate method invoked when the user clicks on a
