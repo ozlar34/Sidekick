@@ -46,6 +46,20 @@ final class NoteStore: ObservableObject {
         startWatcher()
     }
 
+    /// DEBUG-only convenience initializer for preview fixtures.
+    /// Accepts pre-seeded notes and bypasses `startWatcher()` to avoid
+    /// disk I/O during Canvas preview rendering.
+    /// Production code continues to use `init(folder:)` exclusively.
+    #if DEBUG
+    internal convenience init(folder: URL, seededNotes: [Note]) throws {
+        try self.init(folder: folder)
+        self.notes = seededNotes
+        // startWatcher() is intentionally NOT called — previews do not
+        // need to observe disk changes, and watcher spin-up causes
+        // spurious FSEvent activity in Xcode Canvas.
+    }
+    #endif
+
     deinit {
         watcherTask?.cancel()
         watcher.stop()
