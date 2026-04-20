@@ -200,4 +200,58 @@ final class MarkdownTextStorageTests: XCTestCase {
         let bg = storage.attribute(.backgroundColor, at: 3, effectiveRange: nil) as? NSColor
         XCTAssertNotNil(bg, "Inline code content must have a backgroundColor attribute")
     }
+
+    // MARK: - Link attribute tests (D-T-02, HYBRID-07 storage layer)
+
+    func test_linkMarkers_tagged_sidekickHiddenMarker() {
+        // body "[foo](x)" — indices: [ 0, f 1, o 2, o 3, ] 4, ( 5, x 6, ) 7
+        let storage = makeStorage("[foo](x)")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 0, effectiveRange: nil),
+                        "'[' at index 0 must be hidden")
+        XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 1, effectiveRange: nil),
+                     "label 'f' at index 1 must NOT be hidden")
+        XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 3, effectiveRange: nil),
+                     "label 'o' at index 3 must NOT be hidden")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 4, effectiveRange: nil),
+                        "']' at index 4 must be hidden")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 5, effectiveRange: nil),
+                        "'(' at index 5 must be hidden")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 6, effectiveRange: nil),
+                        "URL 'x' at index 6 must be hidden")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 7, effectiveRange: nil),
+                        "')' at index 7 must be hidden")
+    }
+
+    func test_linkLabel_tagged_linkAttribute() {
+        // "[Google](https://google.com)" — label "Google" at index 1, length 6
+        let storage = makeStorage("[Google](https://google.com)")
+        let linkValue = storage.attribute(.link, at: 1, effectiveRange: nil) as? URL
+        XCTAssertNotNil(linkValue, "Label must carry AppKit .link attribute (D-LR-05)")
+        XCTAssertEqual(linkValue?.absoluteString, "https://google.com")
+        // And underline + foreground
+        let underline = storage.attribute(.underlineStyle, at: 1, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue, "Label must carry single underline")
+        let color = storage.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(color, NSColor.linkColor, "Label must carry link foreground color")
+    }
+
+    func test_invalidURL_hidesMarkersButOmitsLinkAttribute() {
+        // "[foo](http://bad\turl)" — URL(string:) returns nil for strings with embedded tabs
+        // (Foundation rejects control characters in URLs; spaces are percent-encoded on some
+        // platforms, so we use a tab character which is reliably rejected — D-LR-06 fallback)
+        // Per D-LR-06 fallback: markers still hidden, label styled, but .link is NIL
+        let storage = makeStorage("[foo](http://bad\turl)")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 0, effectiveRange: nil),
+                        "'[' hidden even when URL invalid (D-LR-06)")
+        XCTAssertNil(storage.attribute(.link, at: 1, effectiveRange: nil),
+                     "Label must NOT carry .link when URL(string:) returns nil (D-LR-06 fallback)")
+    }
+
+    func test_link_roundTrip_preservesBytes() {
+        // STORAGE-01 extended to links: storage.string == input body byte-for-byte
+        let input = "Before [label](https://example.com) middle [empty]() end"
+        let storage = makeStorage(input)
+        XCTAssertEqual(storage.string, input,
+                       "Round-trip must preserve raw markdown byte-for-byte (STORAGE-01 for links)")
+    }
 }

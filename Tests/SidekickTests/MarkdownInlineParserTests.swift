@@ -182,4 +182,69 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertEqual(matches[0].contentRange.length, 2, "Emoji 🎉 is 2 UTF-16 units (surrogate pair), NOT 1")
         XCTAssertEqual(matches[0].markerCloseRange.location, 8, "Close marker starts at UTF-16 index 8")
     }
+
+    // MARK: - Link tests (D-T-01, HYBRID-07 parser layer)
+
+    func test_link_basicPair() {
+        let body = "prefix [Google](https://google.com) suffix"
+        let matches = MarkdownInlineParser.findLinkRanges(in: body)
+        XCTAssertEqual(matches.count, 1, "Should find exactly one link pair")
+        let m = matches[0]
+        XCTAssertEqual(m.openBracketRange, NSRange(location: 7, length: 1))
+        XCTAssertEqual(m.labelRange, NSRange(location: 8, length: 6), "Label 'Google' at index 8, length 6")
+        XCTAssertEqual(m.closeBracketRange, NSRange(location: 14, length: 1))
+        XCTAssertEqual(m.openParenRange, NSRange(location: 15, length: 1))
+        XCTAssertEqual(m.urlRange, NSRange(location: 16, length: 18), "URL 'https://google.com' at 16, length 18")
+        XCTAssertEqual(m.closeParenRange, NSRange(location: 34, length: 1))
+    }
+
+    func test_link_unclosed_returnsEmpty() {
+        let matches = MarkdownInlineParser.findLinkRanges(in: "[foo](")
+        XCTAssertTrue(matches.isEmpty, "Unclosed link must return empty (D-LR-01 pair-only-hide)")
+    }
+
+    func test_link_missingURLParens_returnsEmpty() {
+        let matches = MarkdownInlineParser.findLinkRanges(in: "[foo]")
+        XCTAssertTrue(matches.isEmpty, "[foo] with no paren group must return empty")
+    }
+
+    func test_link_emptyURL_stillMatches() {
+        let body = "[foo]()"
+        let matches = MarkdownInlineParser.findLinkRanges(in: body)
+        XCTAssertEqual(matches.count, 1, "[foo]() is a valid closed pair with empty URL")
+        let m = matches[0]
+        XCTAssertEqual(m.urlRange.length, 0, "Empty URL has length 0")
+        XCTAssertEqual(m.closeParenRange, NSRange(location: 6, length: 1))
+    }
+
+    func test_link_newlineInURL_rejected() {
+        let body = "[foo](http://\nx)"
+        let matches = MarkdownInlineParser.findLinkRanges(in: body)
+        XCTAssertTrue(matches.isEmpty, "Newline in URL must reject per D-LR-06 pattern")
+    }
+
+    func test_link_unescapedCloseBracket_breaksLabel() {
+        // D-LR-01 pair-only-hide: label group [^\]\n]+ excludes ']', so the first ']'
+        // terminates the label capture. Input "[fo]o](x)" traces as follows:
+        //   pos 0: '[' matches; label consumes "fo" (stops at ']' at pos 3);
+        //   ']' at pos 3 matches; regex needs '(' at pos 4 but finds 'o' — fails.
+        //   Engine retries at later positions: no other '[' remains → 0 matches overall.
+        // This documents the behavior: an unescaped ']' inside what the user intended
+        // as the label truncates the pattern, keeping the whole string as plain text
+        // (matches D-LR-01 pair-only-hide intent).
+        let matches = MarkdownInlineParser.findLinkRanges(in: "[fo]o](x)")
+        XCTAssertTrue(matches.isEmpty,
+                      "Unescaped ']' inside intended label must break the pattern (D-LR-01 pair-only-hide)")
+    }
+
+    func test_link_emojiLabelUTF16Safe() {
+        // Emoji 🎉 is 2 UTF-16 code units
+        let body = "[🎉](x)"
+        let matches = MarkdownInlineParser.findLinkRanges(in: body)
+        XCTAssertEqual(matches.count, 1)
+        let m = matches[0]
+        XCTAssertEqual(m.openBracketRange, NSRange(location: 0, length: 1))
+        XCTAssertEqual(m.labelRange.length, 2, "Emoji label is 2 UTF-16 code units")
+        XCTAssertEqual(m.urlRange.location, 5, "URL starts after '[🎉](' = 5 UTF-16 code units in")
+    }
 }
