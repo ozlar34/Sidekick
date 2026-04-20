@@ -228,3 +228,20 @@ struct SidebarView: View {
         }
     }
 }
+
+// MARK: - Previews
+
+#if DEBUG
+#Preview("Empty") {
+    let store = PreviewFixtures.makeStore()
+    let panelState = PanelState()
+    return SidebarView(store: store, panelState: panelState)
+}
+
+#Preview("Populated") {
+    let store = PreviewFixtures.makeStore(notes: PreviewFixtures.sampleNotes())
+    let panelState = PanelState()
+    panelState.selectedNoteID = store.notes.first?.id
+    return SidebarView(store: store, panelState: panelState)
+}
+#endif
