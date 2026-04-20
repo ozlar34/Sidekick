@@ -26,7 +26,13 @@ final class NoteStore: ObservableObject {
     private var watcherTask: Task<Void, Never>?
     private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
 
-    init(folder: URL) throws {
+    /// Designated initializer.
+    /// - Parameters:
+    ///   - folder: URL of the notes directory (created if absent).
+    ///   - startWatcherImmediately: Pass `false` to skip FSEvent watcher
+    ///     spin-up. Production callers always use the default `true`.
+    ///     DEBUG preview fixtures pass `false` per D-PF-04.
+    init(folder: URL, startWatcherImmediately: Bool = true) throws {
         try FileManager.default.createDirectory(
             at: folder,
             withIntermediateDirectories: true,
@@ -43,20 +49,22 @@ final class NoteStore: ObservableObject {
         // No background reload on init — callers drive reconciliation via
         // explicit `await store.reload()`. Fire-and-forget Task would race
         // with create/update calls in tests and production alike.
-        startWatcher()
+        if startWatcherImmediately {
+            startWatcher()
+        }
     }
 
     /// DEBUG-only convenience initializer for preview fixtures.
     /// Accepts pre-seeded notes and bypasses `startWatcher()` to avoid
-    /// disk I/O during Canvas preview rendering.
+    /// disk I/O during Canvas preview rendering (D-PF-04).
     /// Production code continues to use `init(folder:)` exclusively.
     #if DEBUG
     internal convenience init(folder: URL, seededNotes: [Note]) throws {
-        try self.init(folder: folder)
+        // Pass startWatcherImmediately: false so no FSEvent watcher is
+        // created — previews do not need to observe disk changes, and
+        // watcher spin-up causes spurious FSEvent activity in Xcode Canvas.
+        try self.init(folder: folder, startWatcherImmediately: false)
         self.notes = seededNotes
-        // startWatcher() is intentionally NOT called — previews do not
-        // need to observe disk changes, and watcher spin-up causes
-        // spurious FSEvent activity in Xcode Canvas.
     }
     #endif
 
