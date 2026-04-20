@@ -15,9 +15,7 @@ import Combine
 ///
 /// Single source of truth replaces two prior local `@State` properties:
 ///   - `SidebarView.@State selectedID`   → `panelState.selectedNoteID`
-///   - `EditorPaneView.@State isPreviewMode` → `panelState.isPreviewMode`
 @MainActor
 final class PanelState: ObservableObject {
     @Published var selectedNoteID: UUID? = nil
-    @Published var isPreviewMode: Bool = true
 }

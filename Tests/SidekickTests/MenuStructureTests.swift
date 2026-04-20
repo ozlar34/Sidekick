@@ -23,16 +23,16 @@ final class MenuStructureTests: XCTestCase {
 
     // MARK: - D-M-01 — submenu order
 
-    func test_mainMenu_hasAppFileEditFormatViewNoteInOrder() {
+    func test_mainMenu_hasAppFileEditFormatNoteInOrder() {
         _ = install()
         let mainMenu = NSApp.mainMenu
         XCTAssertNotNil(mainMenu, "installMainMenu() must set NSApp.mainMenu")
-        XCTAssertEqual(mainMenu?.items.count, 6,
-                       "mainMenu has 6 top-level items after Phase 8: App, File, Edit, Format, View, Note")
+        XCTAssertEqual(mainMenu?.items.count, 5,
+                       "mainMenu has 5 top-level items after Phase 11: App, File, Edit, Format, Note")
 
         let submenuTitles = mainMenu?.items.compactMap { $0.submenu?.title } ?? []
-        XCTAssertEqual(submenuTitles, ["Sidekick", "File", "Edit", "Format", "View", "Note"],
-                       "Submenu order must be D-M-01: App → File → Edit → Format → View → Note")
+        XCTAssertEqual(submenuTitles, ["Sidekick", "File", "Edit", "Format", "Note"],
+                       "Submenu order must be D-M-01: App → File → Edit → Format → Note")
     }
 
     // MARK: - D-M-02 — App submenu
@@ -109,22 +109,6 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(bulleted?.keyEquivalent, "8", "⌘⇧8")
         XCTAssertEqual(bulleted?.keyEquivalentModifierMask, [.command, .shift],
                        "Bulleted List modifier mask is explicit [.command, .shift] (non-letter key needs explicit Shift)")
-    }
-
-    // MARK: - D-M-05 — View submenu (MENU-03 + KBD-01)
-
-    func test_viewSubmenu_hasTogglePreviewCmdShiftP() {
-        _ = install()
-        let viewSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "View" })?.submenu
-        XCTAssertNotNil(viewSubmenu, "View submenu must exist (MENU-03)")
-        XCTAssertEqual(viewSubmenu?.items.count, 1, "View has exactly 1 item: Toggle Preview")
-
-        let toggle = viewSubmenu?.items[0]
-        XCTAssertEqual(toggle?.title, "Toggle Preview", "KBD-01 title (fixed — not dynamic)")
-        XCTAssertEqual(toggle?.keyEquivalent, "P",
-                       "KBD-01 ⌘⇧P uses uppercase P (auto-implies Shift per D-S-02)")
-        XCTAssertEqual(toggle?.keyEquivalentModifierMask, .command,
-                       "Modifier is .command only — uppercase P covers .shift; adding .shift draws glyph twice")
     }
 
     // MARK: - D-M-06 — Note submenu (MENU-04)

@@ -178,7 +178,7 @@ final class MarkdownTextStorage: NSTextStorage {
     // MARK: - Per-construct attribute writers
 
     /// Apply bold styling: semibold font on content, .sidekickHiddenMarker on `**` markers.
-    /// Font weight: NSFont.systemFont(ofSize: 14, weight: .semibold) — matches Theme.sidekick.
+    /// Font weight: NSFont.systemFont(ofSize: 14, weight: .semibold).
     private func applyBold(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findBoldRanges(in: substring)
         for m in matches {

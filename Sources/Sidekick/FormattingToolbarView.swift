@@ -8,77 +8,53 @@ import SwiftUI
 struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
     let applyLinePrefix: () -> Void
-    let togglePreview: () -> Void
-    let isPreviewMode: Bool
 
     var body: some View {
         HStack(spacing: 12) {
-            // Preview toggle first so its x-position is stable across modes —
-            // in preview mode the format buttons collapse away, and the
-            // eye/pencil stays fixed at the leading edge (feels like an
-            // in-place toggle rather than a jumping icon).
             Button {
-                togglePreview()
+                wrapSelection("**", "**")
             } label: {
-                // Eye glyph is visually wider than square.and.pencil at the
-                // same font size — drop it by 2pt so both render at a
-                // matching optical size, and pin a fixed frame so the
-                // clickable bounds + x-position stay identical across modes.
-                Image(systemName: isPreviewMode ? "square.and.pencil" : "eye")
-                    .font(.system(size: isPreviewMode ? 13 : 11, weight: .medium))
-                    .frame(width: 16, height: 16)
+                Image(systemName: "bold")
+                    .font(.system(size: 13, weight: .medium))
             }
             .buttonStyle(.plain)
-            .help(isPreviewMode ? "Back to edit mode (⌘⇧P)" : "Preview (⌘⇧P)")
+            .help("Bold (⌘B)")
 
-            // Format buttons only work when the TextEditor is in the responder
-            // chain — hide them in preview mode to avoid dead clicks.
-            if !isPreviewMode {
-                Button {
-                    wrapSelection("**", "**")
-                } label: {
-                    Image(systemName: "bold")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Bold (⌘B)")
-
-                Button {
-                    wrapSelection("*", "*")
-                } label: {
-                    Image(systemName: "italic")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Italic (⌘I)")
-
-                Button {
-                    wrapSelection("`", "`")
-                } label: {
-                    Image(systemName: "curlybraces")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Inline code (⌘⌥C)")
-
-                Button {
-                    wrapSelection("[", "]()")
-                } label: {
-                    Image(systemName: "link")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Link (⌘K)")
-
-                Button {
-                    applyLinePrefix()
-                } label: {
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help("Bulleted list (⌘⇧8)")
+            Button {
+                wrapSelection("*", "*")
+            } label: {
+                Image(systemName: "italic")
+                    .font(.system(size: 13, weight: .medium))
             }
+            .buttonStyle(.plain)
+            .help("Italic (⌘I)")
+
+            Button {
+                wrapSelection("`", "`")
+            } label: {
+                Image(systemName: "curlybraces")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Inline code (⌘⌥C)")
+
+            Button {
+                wrapSelection("[", "]()")
+            } label: {
+                Image(systemName: "link")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Link (⌘K)")
+
+            Button {
+                applyLinePrefix()
+            } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .help("Bulleted list (⌘⇧8)")
 
             Spacer()
         }

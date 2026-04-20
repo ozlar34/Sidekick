@@ -162,9 +162,6 @@ final class PanelController {
 
     private func slideIn(to finalFrame: NSRect) {
         guard let panel else { return }
-        // Every hotkey summon starts in preview mode (reader-first paradigm).
-        // Users toggle to edit via the pencil icon or ⌘⇧P.
-        panelState.isPreviewMode = true
         let startFrame = NSRect(x: finalFrame.origin.x + slideOffset,
                                 y: finalFrame.origin.y,
                                 width: finalFrame.width,

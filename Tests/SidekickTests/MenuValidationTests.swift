@@ -56,22 +56,6 @@ final class MenuValidationTests: XCTestCase {
         }
     }
 
-    // MARK: - D-V-03: Toggle Preview disabled without panel or selection
-
-    func test_togglePreview_disabled_whenPanelHidden() throws {
-        let (delegate, _, _) = try makeDelegate()
-        XCTAssertFalse(delegate.validateUserInterfaceItem(menuItem(#selector(AppDelegate.togglePreview(_:)))),
-                       "D-V-03: togglePreview disabled when panel hidden")
-    }
-
-    func test_togglePreview_disabled_whenNoSelection() throws {
-        let (delegate, _, _) = try makeDelegate()
-        // panelState.selectedNoteID = nil by default
-        XCTAssertNil(delegate.panelController.panelState.selectedNoteID)
-        XCTAssertFalse(delegate.validateUserInterfaceItem(menuItem(#selector(AppDelegate.togglePreview(_:)))),
-                       "D-V-03: togglePreview disabled when no note selected")
-    }
-
     // MARK: - D-V-04: Note actions disabled without selection
 
     func test_noteActions_disabled_whenNoSelection() throws {

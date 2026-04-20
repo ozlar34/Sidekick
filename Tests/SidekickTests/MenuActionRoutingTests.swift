@@ -55,25 +55,6 @@ final class MenuActionRoutingTests: XCTestCase {
         _ = tmp  // retain TempFolder
     }
 
-    // MARK: - MENU-03: togglePreview
-
-    func test_togglePreview_flipsPanelStateIsPreviewMode() throws {
-        let tmp = TempFolder()
-        let store = try NoteStore(folder: tmp.url)
-        let delegate = AppDelegate(store: store)
-        XCTAssertFalse(delegate.panelController.panelState.isPreviewMode,
-                       "Precondition: isPreviewMode starts false")
-
-        delegate.togglePreview(nil)
-        XCTAssertTrue(delegate.panelController.panelState.isPreviewMode,
-                      "MENU-03: togglePreview flips isPreviewMode → true")
-
-        delegate.togglePreview(nil)
-        XCTAssertFalse(delegate.panelController.panelState.isPreviewMode,
-                       "MENU-03: togglePreview flips isPreviewMode back to false")
-        _ = tmp  // retain TempFolder
-    }
-
     // MARK: - MENU-04: pinToggle
 
     func test_pinToggle_inverts() async throws {

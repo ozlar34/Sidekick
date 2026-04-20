@@ -12,10 +12,6 @@ struct EditorPaneView: View {
     @FocusState private var editorFocused: Bool
     @Environment(\.setDocumentEdited) private var setDocumentEdited
 
-    // Phase 4 — markdown preview toggle (EDIT-02, D-04)
-    // @State isPreviewMode migrated to panelState.isPreviewMode (Phase 8 D-R-02)
-    @State private var cursorOffset: Int = 0
-
     // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
     // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
     // (D-TB-02, D-TB-03, D-TB-04).
@@ -48,14 +44,9 @@ struct EditorPaneView: View {
             }
 
             // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
-            // The preview-toggle button is always visible; format buttons hide
-            // in preview mode (NSTextView is not in the responder chain —
-            // RESEARCH Pitfall 2).
             FormattingToolbarView(
                 wrapSelection: wrapSelection,
-                applyLinePrefix: applyLinePrefix,
-                togglePreview: { panelState.isPreviewMode.toggle() },
-                isPreviewMode: panelState.isPreviewMode
+                applyLinePrefix: applyLinePrefix
             )
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -64,26 +55,21 @@ struct EditorPaneView: View {
                 .fill(Color(NSColor(white: 0.55, alpha: 1.0)))
                 .frame(height: 1)
 
-            // Editor / preview content
+            // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
             ZStack(alignment: .topLeading) {
-                if panelState.isPreviewMode {
-                    MarkdownPreviewView(content: localBody)
-                } else {
-                    HybridEditorView(text: $localBody, controller: editorController)
-                        .onChange(of: localBody) { _, newValue in
-                            scheduleAutoSave(body: newValue)
-                        }
-
-                    if localBody.isEmpty {
-                        Text("Start writing...")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 14, design: .monospaced))
-                            .padding(.leading, 10)    // Align with NSTextView cursor x-position
-                            .padding(.top, 12)        // Align with NSTextView cursor y-position
-                            .allowsHitTesting(false)
+                HybridEditorView(text: $localBody, controller: editorController)
+                    .onChange(of: localBody) { _, newValue in
+                        scheduleAutoSave(body: newValue)
                     }
-                }
 
+                if localBody.isEmpty {
+                    Text("Start writing...")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 14, design: .monospaced))
+                        .padding(.leading, 10)    // Align with NSTextView cursor x-position
+                        .padding(.top, 12)        // Align with NSTextView cursor y-position
+                        .allowsHitTesting(false)
+                }
             }
             .background(Color(.textBackgroundColor))
 
@@ -109,23 +95,8 @@ struct EditorPaneView: View {
         }
         .onChange(of: note.id) { _, _ in
             localBody = note.body
-            cursorOffset = 0          // reset stale offset on note switch
-            // New notes (empty body) open in edit mode; existing notes in
-            // preview. Users expect to start typing in a fresh note, and
-            // reading in an existing one.
-            panelState.isPreviewMode = !note.body.isEmpty
             diskWriteError = false
             focusEditorAfterDelay()
-        }
-        .onChange(of: panelState.isPreviewMode) { _, newValue in
-            // D-K-02: run the cursor capture/restore dance around preview
-            // toggles triggered by AppDelegate.togglePreview (menu path) OR
-            // the deleted togglePreviewMode() function (removed in Plan 04).
-            if newValue {
-                captureCursorOffset()
-            } else {
-                restoreCursorOffset()
-            }
         }
     }
 
@@ -183,25 +154,6 @@ struct EditorPaneView: View {
         store.acknowledgeExternalChange(id: note.id)
     }
 
-    // MARK: - Phase 4 markdown preview toggle (EDIT-02, D-04)
-
-    /// Clamp a UTF-16 cursor offset to the bounds of `body`. D-04 fallback:
-    /// when cursorOffset is out of range (e.g. note body shrank externally),
-    /// return `body.utf16.count` (end of document). NSRange.location is in
-    /// UTF-16 code units, so we MUST use `utf16.count` not `count`
-    /// (RESEARCH Pitfall 2 + Open Question 2).
-    internal static func clampOffset(_ offset: Int, in body: String) -> Int {
-        let upper = body.utf16.count
-        if offset < 0 { return 0 }
-        if offset > upper { return upper }
-        return offset
-    }
-
-    private func captureCursorOffset() {
-        guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        cursorOffset = tv.selectedRange().location
-    }
-
     // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)
 
     /// Bridge from FormattingToolbarView button taps to the editor's NSTextView.
@@ -211,7 +163,6 @@ struct EditorPaneView: View {
     /// converge on the same `performWrap` call — no $localBody mutation or
     /// DispatchQueue.main.async cursor-restore dance needed (Phase 10 unification).
     private func wrapSelection(prefix: String, suffix: String) {
-        guard !panelState.isPreviewMode else { return }
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
     }
@@ -222,21 +173,8 @@ struct EditorPaneView: View {
     /// (D-TB-01). Mirrors the wrapSelection simplification — no $localBody mutation
     /// or DispatchQueue dance needed (Phase 10 unification).
     private func applyLinePrefix() {
-        guard !panelState.isPreviewMode else { return }
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performLinePrefix(in: tv)
-    }
-
-    private func restoreCursorOffset() {
-        // 50ms delay — matches focusEditorAfterDelay; gives SwiftUI time to re-mount
-        // the TextEditor and AppKit responder chain to settle (RESEARCH Pitfall 3).
-        Task { @MainActor in
-            editorFocused = true
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard let tv = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-            let safeOffset = EditorPaneView.clampOffset(cursorOffset, in: localBody)
-            tv.setSelectedRange(NSRange(location: safeOffset, length: 0))
-        }
     }
 
 }
