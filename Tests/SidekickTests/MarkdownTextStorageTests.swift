@@ -254,4 +254,58 @@ final class MarkdownTextStorageTests: XCTestCase {
         XCTAssertEqual(storage.string, input,
                        "Round-trip must preserve raw markdown byte-for-byte (STORAGE-01 for links)")
     }
+
+    // MARK: - First-line auto-H1 (regression from commit e1d815e / Phase 11)
+
+    func test_firstLine_plainProse_getsH1Font() {
+        // Plain first line with no markdown block marker → auto-H1 (14×1.5 bold).
+        let storage = makeStorage("Shopping List\n\nmilk\neggs")
+        let font = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertNotNil(font, "First line must have a font attribute")
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01,
+                       "Plain first line renders at H1 size (14×1.5)")
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
+                      "Plain first line renders bold")
+    }
+
+    func test_firstLine_withHashPrefix_usesExplicitHeadingStyle_notAutoH1() {
+        // `#` / `##` etc. hand off to the heading parser — auto-H1 must not clobber.
+        let storage = makeStorage("## Subtitle\n\nbody")
+        // Content range of `## Subtitle` starts after `## ` → index 3.
+        let font = storage.attribute(.font, at: 3, effectiveRange: nil) as? NSFont
+        XCTAssertNotNil(font)
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 14 * 1.25, accuracy: 0.01,
+                       "Explicit ## heading keeps its H2 size — auto-H1 must not override")
+    }
+
+    func test_firstLine_bulletPrefix_stayPlain_noAutoH1() {
+        // Bullets never auto-H1 (content is list-content, not a title).
+        let storage = makeStorage("- first item\nmore")
+        let font = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        XCTAssertNotNil(font)
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 14, accuracy: 0.01,
+                       "Bullet first line stays at base 14pt")
+    }
+
+    func test_firstLine_whitespaceOnly_noAutoH1() {
+        // Whitespace-only first line → no styling applied.
+        let storage = makeStorage("   \nhello")
+        let font = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(Double(font?.pointSize ?? 14), 14, accuracy: 0.01,
+                       "Whitespace-only first line stays at base size")
+    }
+
+    func test_firstLine_survivesEditOnLaterLine() {
+        // Regression guard: editing paragraph 3 must not strip line 0's H1 style.
+        let storage = makeStorage("Title\n\npara 2\n\npara 3")
+        let fontBefore = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(Double(fontBefore?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01)
+
+        // Edit at end of "para 3".
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: "X")
+
+        let fontAfter = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(Double(fontAfter?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01,
+                       "Edits on later lines must not drop first-line H1 style")
+    }
 }

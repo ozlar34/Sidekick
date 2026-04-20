@@ -208,17 +208,63 @@ final class FormattingToolbarTests: XCTestCase {
         XCTAssertEqual(result.cursorLocation, 8)
     }
 
-    func test_toggleOff_caretOnly_noStripDeferred() {
-        // D-TG-05: caret-inside case deferred — caret at (4, 0) inside "**foo**" → falls through to additive
+    func test_toggleOff_caretOnly_insideBoldPair_strips() {
+        // Caret between the two o's of "**foo**" (position 4). ⌘B should strip
+        // the surrounding `**` pair; caret stays against the same character.
         let result = FormattingToolbarView.applyMarkdownWrap(
             prefix: "**", suffix: "**",
             body: "**foo**",
             range: NSRange(location: 4, length: 0)
         )
-        // Empty-selection additive: inserts "****" at position 4 → "**fo****o**"
-        XCTAssertEqual(result.newBody, "**fo****o**")
-        // Cursor = safeLocation + prefix.length = 4 + 2 = 6
-        XCTAssertEqual(result.cursorLocation, 6)
+        XCTAssertEqual(result.newBody, "foo")
+        // Caret was at body index 4 (between the two o's); after stripping the
+        // two-char open marker the same gap sits at index 2 in the new body.
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    func test_toggleOff_caretOnly_outsideBold_isAdditive() {
+        // Caret at body start (before any bold span) — no enclosing pair, so
+        // falls through to additive `****` insert.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "hello",
+            range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "****hello")
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    func test_toggleOff_selectionWrapsBoldMarkers_strips() {
+        // Triple-click / ⌘A case: selection covers "**foo**" including markers.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "**foo**",
+            range: NSRange(location: 0, length: 7)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_selectionWrapsItalicUnderscore_cmdI_strips() {
+        // Selection covers "_foo_" (with underscores); user hits ⌘I (prefix="*").
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "_foo_",
+            range: NSRange(location: 0, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_caretOnly_insideInlineCode_strips() {
+        // Caret inside `` `foo` ``.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "`", suffix: "`",
+            body: "`foo`",
+            range: NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 2)
     }
 
     // MARK: - Link cursor UX tests (D-T-04, D-UX-01)

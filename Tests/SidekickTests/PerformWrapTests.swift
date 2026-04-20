@@ -38,8 +38,91 @@ final class PerformWrapTests: XCTestCase {
         FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
         XCTAssertEqual(tv.string, "**hello** world",
                        "Non-empty selection must wrap with prefix + selection + suffix")
-        XCTAssertEqual(tv.selectedRange().location, 9,
-                       "Cursor lands after inserted '**hello**' (location 9)")
+        // Inner text ("hello") stays selected so the user can hit ⌘B again to
+        // toggle off — re-wrap → un-wrap → re-wrap cycles without re-selecting.
+        XCTAssertEqual(tv.selectedRange().location, 2,
+                       "Selection moves to start of inner content after wrap")
+        XCTAssertEqual(tv.selectedRange().length, 5,
+                       "Inner selection length = original selection length")
+    }
+
+    func test_performWrap_toggleCycle_wrapUnwrapRewrap() {
+        // Regression guard: ⌘B three times on the same word must end back at
+        // **hello**. Each step leaves the inner text selected so no manual
+        // re-select between presses is needed.
+        let tv = makeTextView("hello", selection: NSRange(location: 0, length: 5))
+
+        // 1) wrap → "**hello**", selection on "hello"
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "**hello**")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 2, length: 5))
+
+        // 2) unwrap → "hello", selection still on "hello"
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "hello")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 0, length: 5))
+
+        // 3) wrap again → back to "**hello**"
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "**hello**",
+                       "Third ⌘B must re-bold — selection persisted between presses")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 2, length: 5))
+    }
+
+    func test_performWrap_boldCycle_realEditorStack() {
+        // Same cycle as test_performWrap_toggleCycle_wrapUnwrapRewrap but using
+        // the same storage+layout-manager+container stack HybridEditorView.swift
+        // assembles at runtime. Guards against a failure mode the simple
+        // NSTextView test can't catch: a MarkdownTextStorage processEditing
+        // side effect (attribute reapply, layout invalidation) resetting the
+        // selection set by performWrap.
+        let storage = MarkdownTextStorage()
+        let layoutManager = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 200, height: 100))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+
+        final class TestableEditor: NSTextView {
+            private let _undo = UndoManager()
+            override var undoManager: UndoManager? { _undo }
+        }
+        let tv = TestableEditor(
+            frame: NSRect(x: 0, y: 0, width: 200, height: 100),
+            textContainer: container
+        )
+        tv.isRichText = false
+        tv.allowsUndo = true
+
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "hello")
+        tv.setSelectedRange(NSRange(location: 0, length: 5))
+
+        // 1) wrap
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "**hello**", "Step 1: wrap")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 2, length: 5),
+                       "Step 1: inner text re-selected through MarkdownTextStorage stack")
+
+        // 2) unwrap
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "hello", "Step 2: unwrap")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 0, length: 5),
+                       "Step 2: inner text stays selected after toggle-off")
+
+        // 3) re-wrap
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "**hello**", "Step 3: re-wrap — third press must re-bold")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: 2, length: 5))
+    }
+
+    func test_performWrap_linkWrap_cursorLandsInsideParens_notInnerSelection() {
+        // Link case is special — cursor must land inside `()` for URL entry.
+        let tv = makeTextView("hello", selection: NSRange(location: 0, length: 5))
+        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: tv)
+        XCTAssertEqual(tv.string, "[hello]()")
+        XCTAssertEqual(tv.selectedRange().location, 8,
+                       "Cursor inside `()` = location + 1 + selected.length + 2 (D-UX-01)")
+        XCTAssertEqual(tv.selectedRange().length, 0,
+                       "Link wrap collapses to caret, not a selection")
     }
 
     func test_performWrap_registersUndo() {
@@ -80,5 +163,33 @@ final class PerformWrapTests: XCTestCase {
         XCTAssertEqual(tv.string, "foo", "⌘I on _foo_ strips underscores (D-TG-04)")
         XCTAssertEqual(tv.selectedRange().length, 3, "Selection length preserved")
         XCTAssertEqual(tv.selectedRange().location, 0)
+    }
+
+    func test_performWrap_selectionWrapsMarkers_reselectsInner() {
+        // Selection covers full "**foo**" (e.g. triple-click). ⌘B strips markers
+        // and re-selects the inner "foo" so the user can hit ⌘B again to re-bold.
+        let tv = makeTextView("**foo**", selection: NSRange(location: 0, length: 7))
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "foo")
+        XCTAssertEqual(tv.selectedRange().location, 0)
+        XCTAssertEqual(tv.selectedRange().length, 3, "Inner text re-selected (original len − 2×marker len)")
+    }
+
+    func test_performWrap_caretOnly_insideBoldPair_strips() {
+        // ⌘B with caret inside the bold pair (no selection) → strip markers.
+        let tv = makeTextView("**foo**", selection: NSRange(location: 4, length: 0))
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "foo")
+        XCTAssertEqual(tv.selectedRange().location, 2, "Caret tracks the character it was against")
+        XCTAssertEqual(tv.selectedRange().length, 0)
+    }
+
+    func test_performWrap_caretOnly_menuPathEquivalence() {
+        // Menu path (AppDelegate.formatBold) converges on the same performWrap
+        // call, so this test also covers "Format > Bold" toggling off.
+        let tv = makeTextView("*foo*", selection: NSRange(location: 2, length: 0))
+        FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: tv)
+        XCTAssertEqual(tv.string, "foo")
+        XCTAssertEqual(tv.selectedRange().location, 1)
     }
 }
