@@ -268,7 +268,7 @@ struct FormattingToolbarView: View {
     static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
         let body = textView.string
         let range = textView.selectedRange()
-        let (_, cursor) = applyMarkdownWrap(
+        let (newBody, cursor) = applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
             body: body,
@@ -284,11 +284,29 @@ struct FormattingToolbarView: View {
             inserted = prefix + selected + suffix
         }
 
-        // Edit sandwich — registers undo on textView.undoManager automatically.
-        guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
-        textView.replaceCharacters(in: range, with: inserted)
-        textView.didChangeText()
-        textView.setSelectedRange(NSRange(location: cursor, length: 0))
+        // Per plan 10-03: detect toggle-off by body-length delta.
+        // If newBody shortened by exactly prefix.length + suffix.length AND selection was non-empty,
+        // it's a toggle-off strip — set selection length = original selected length so repeated ⌘B toggles in place.
+        let prefixLen = (prefix as NSString).length
+        let suffixLen = (suffix as NSString).length
+        let bodyDelta = (body as NSString).length - (newBody as NSString).length
+        let originalSelectedLength = range.length
+        let didToggleOff = originalSelectedLength > 0 && bodyDelta == prefixLen + suffixLen
+        let newSelectionLength = didToggleOff ? originalSelectedLength : 0
+
+        // For toggle-off, apply the full-body replacement; otherwise apply selection-only replacement.
+        if didToggleOff {
+            let fullRange = NSRange(location: 0, length: (body as NSString).length)
+            guard textView.shouldChangeText(in: fullRange, replacementString: newBody) else { return }
+            textView.replaceCharacters(in: fullRange, with: newBody)
+            textView.didChangeText()
+        } else {
+            // Edit sandwich — registers undo on textView.undoManager automatically.
+            guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
+            textView.replaceCharacters(in: range, with: inserted)
+            textView.didChangeText()
+        }
+        textView.setSelectedRange(NSRange(location: cursor, length: newSelectionLength))
     }
 
     /// Applies a line-prefix toggle (bulleted list) directly on an NSTextView,
