@@ -43,6 +43,15 @@ struct FencedCodeMatch {
     let fenceCloseRange: NSRange
 }
 
+struct LinkMatch {
+    let openBracketRange: NSRange     // "[", length 1
+    let labelRange: NSRange            // content between brackets
+    let closeBracketRange: NSRange    // "]", length 1
+    let openParenRange: NSRange       // "(", length 1
+    let urlRange: NSRange              // content between parens (may be length 0)
+    let closeParenRange: NSRange      // ")", length 1
+}
+
 // MARK: - MarkdownInlineParser
 
 /// Namespace type for all markdown range-finding pure functions.
@@ -291,6 +300,48 @@ enum MarkdownInlineParser {
         }
 
         return results
+    }
+
+    // MARK: Links
+
+    /// Finds fully-closed markdown link patterns `[label](url)` per D-LR-01 (pair-only-hide).
+    /// Returns empty when no closed pair exists. Regex pattern per D-LR-06:
+    /// `\[([^\]\n]+)\]\(([^)\n]*)\)` — capture group 1 = label, group 2 = url.
+    /// UTF-16-safe — all NSRanges are in UTF-16 code units relative to `string`.
+    static func findLinkRanges(in string: String) -> [LinkMatch] {
+        let ns = string as NSString
+        guard let regex = try? NSRegularExpression(
+            pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)",
+            options: []
+        ) else { return [] }
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let rawMatches = regex.matches(in: string, range: fullRange)
+        return rawMatches.compactMap { match -> LinkMatch? in
+            let labelRange = match.range(at: 1)
+            let urlRange = match.range(at: 2)
+            guard labelRange.location != NSNotFound,
+                  urlRange.location != NSNotFound else { return nil }
+            let full = match.range
+            // Reconstruct bracket/paren ranges by construction:
+            //   "[" = full.location (length 1)
+            //   label = labelRange
+            //   "]" = labelRange.location + labelRange.length (length 1)
+            //   "(" = closeBracket.location + 1 (length 1)
+            //   url = urlRange
+            //   ")" = urlRange.location + urlRange.length (length 1)
+            let openBracket = NSRange(location: full.location, length: 1)
+            let closeBracket = NSRange(location: labelRange.location + labelRange.length, length: 1)
+            let openParen = NSRange(location: closeBracket.location + 1, length: 1)
+            let closeParen = NSRange(location: urlRange.location + urlRange.length, length: 1)
+            return LinkMatch(
+                openBracketRange: openBracket,
+                labelRange: labelRange,
+                closeBracketRange: closeBracket,
+                openParenRange: openParen,
+                urlRange: urlRange,
+                closeParenRange: closeParen
+            )
+        }
     }
 
     // MARK: Fenced Code Blocks
