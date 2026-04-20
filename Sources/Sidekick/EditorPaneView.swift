@@ -16,10 +16,10 @@ struct EditorPaneView: View {
     // @State isPreviewMode migrated to panelState.isPreviewMode (Phase 8 D-R-02)
     @State private var cursorOffset: Int = 0
 
-    // Phase 7 — formatting toolbar: cache TV ref + range so button clicks
-    // (which steal first responder before the action fires) still work.
-    @State private var cachedTextView: NSTextView? = nil
-    @State private var cachedSelection: NSRange = NSRange(location: 0, length: 0)
+    // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
+    // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
+    // (D-TB-02, D-TB-03, D-TB-04).
+    @StateObject private var editorController = HybridEditorController()
 
     // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
     // Banner state is derived from store.externallyChangedIDs (WR-06): a single
@@ -69,7 +69,7 @@ struct EditorPaneView: View {
                 if panelState.isPreviewMode {
                     MarkdownPreviewView(content: localBody)
                 } else {
-                    HybridEditorView(text: $localBody)
+                    HybridEditorView(text: $localBody, controller: editorController)
                         .onChange(of: localBody) { _, newValue in
                             scheduleAutoSave(body: newValue)
                         }
@@ -86,16 +86,6 @@ struct EditorPaneView: View {
 
             }
             .background(Color(.textBackgroundColor))
-            .onReceive(NotificationCenter.default.publisher(
-                for: NSTextView.didChangeSelectionNotification
-            )) { note in
-                // Cache TV ref + selection before any button click can steal
-                // first responder. The notification fires on the TV's own thread
-                // but @State writes are safe from any thread in SwiftUI.
-                guard let tv = note.object as? NSTextView else { return }
-                cachedTextView = tv
-                cachedSelection = tv.selectedRange()
-            }
 
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {
@@ -214,82 +204,27 @@ struct EditorPaneView: View {
 
     // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)
 
-    /// Walk the key window's view hierarchy to find the TextEditor's NSTextView.
-    /// This works even after a toolbar button has stolen first responder, because
-    /// NSTextView keeps its selection range when it's no longer first responder
-    /// (the selection just renders greyed out).
-    private func findTextView(in view: NSView?) -> NSTextView? {
-        guard let view = view else { return nil }
-        if let tv = view as? NSTextView { return tv }
-        for subview in view.subviews {
-            if let tv = findTextView(in: subview) { return tv }
-        }
-        return nil
-    }
-
     /// Bridge from FormattingToolbarView button taps to the editor's NSTextView.
     ///
-    /// Delegates to the shared static helper `FormattingToolbarView.performWrap`
-    /// (D-R-03) so that the toolbar-button path and the menu-action path (Plan 04
-    /// AppDelegate handlers) use the same NSTextView edit-sandwich code.
-    ///
-    /// Undo is registered automatically on `textView.undoManager` via the
-    /// sandwich — no manual `UndoManager.registerUndo` needed (RESEARCH Pitfall 2).
+    /// Routes through `editorController.textView` → `FormattingToolbarView.performWrap`
+    /// (D-TB-01). All three surfaces (toolbar button, Format menu, ⌘B shortcut)
+    /// converge on the same `performWrap` call — no $localBody mutation or
+    /// DispatchQueue.main.async cursor-restore dance needed (Phase 10 unification).
     private func wrapSelection(prefix: String, suffix: String) {
         guard !panelState.isPreviewMode else { return }
-        // Toolbar-button path: SwiftUI Button fires this synchronously inside
-        // SwiftUI's state-update cycle. Calling NSTextView.replaceCharacters
-        // from here is silently reverted by SwiftUI because the TextEditor is
-        // bound to $localBody — SwiftUI re-pushes localBody into the NSTextView
-        // after we mutate it. The menu-bar path works because it fires from an
-        // AppKit target/action *outside* SwiftUI's update cycle.
-        //
-        // Fix: update localBody (SwiftUI's source of truth) directly. SwiftUI
-        // propagates the change into the NSTextView. Restore the cursor on the
-        // next run loop, once SwiftUI has re-rendered.
-        let tv = cachedTextView
-            ?? findTextView(in: NSApp.keyWindow?.contentView)
-            ?? NSApp.windows.lazy.compactMap { findTextView(in: $0.contentView) }.first
-        let range = tv?.selectedRange() ?? cachedSelection
-        let (newBody, cursor) = FormattingToolbarView.applyMarkdownWrap(
-            prefix: prefix,
-            suffix: suffix,
-            body: localBody,
-            range: range
-        )
-        localBody = newBody
-        DispatchQueue.main.async {
-            let target = tv ?? (NSApp.keyWindow?.firstResponder as? NSTextView)
-            target?.setSelectedRange(NSRange(location: cursor, length: 0))
-        }
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
     }
 
     /// Toolbar-button bridge for the bulleted-list toggle (⌘⇧8 equivalent).
     ///
-    /// Parallel to `wrapSelection` — mutates `$localBody` (SwiftUI source of
-    /// truth) instead of calling `NSTextView.replaceCharacters` directly,
-    /// for the same reason documented on `wrapSelection`: SwiftUI would
-    /// re-push localBody into the TextEditor and silently revert a direct
-    /// NSTextView edit from a SwiftUI button handler.
-    ///
-    /// The menu path (`AppDelegate.formatBulletedList`) fires outside
-    /// SwiftUI's update cycle and calls `FormattingToolbarView.performLinePrefix`
-    /// directly — same split as bold/italic/link.
+    /// Routes through `editorController.textView` → `FormattingToolbarView.performLinePrefix`
+    /// (D-TB-01). Mirrors the wrapSelection simplification — no $localBody mutation
+    /// or DispatchQueue dance needed (Phase 10 unification).
     private func applyLinePrefix() {
         guard !panelState.isPreviewMode else { return }
-        let tv = cachedTextView
-            ?? findTextView(in: NSApp.keyWindow?.contentView)
-            ?? NSApp.windows.lazy.compactMap { findTextView(in: $0.contentView) }.first
-        let range = tv?.selectedRange() ?? cachedSelection
-        let (newBody, newSelection) = FormattingToolbarView.applyBulletedList(
-            body: localBody,
-            range: range
-        )
-        localBody = newBody
-        DispatchQueue.main.async {
-            let target = tv ?? (NSApp.keyWindow?.firstResponder as? NSTextView)
-            target?.setSelectedRange(newSelection)
-        }
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performLinePrefix(in: tv)
     }
 
     private func restoreCursorOffset() {

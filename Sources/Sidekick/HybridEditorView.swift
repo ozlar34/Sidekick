@@ -22,6 +22,7 @@ import SwiftUI
 
 struct HybridEditorView: NSViewRepresentable {
     @Binding var text: String
+    @ObservedObject var controller: HybridEditorController   // NEW (D-TB-02)
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -76,6 +77,7 @@ struct HybridEditorView: NSViewRepresentable {
         textView.drawsBackground = true
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
+        controller.textView = textView   // NEW (D-TB-02) — publish upward once
 
         // Seed initial text. replaceCharacters triggers processEditing which
         // applies the initial attribute pass.
