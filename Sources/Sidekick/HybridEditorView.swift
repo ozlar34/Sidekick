@@ -153,9 +153,9 @@ struct HybridEditorView: NSViewRepresentable {
                 url = nil
             }
             if let url {
-                // D-LC-02: mirror MarkdownPreviewView.swift:22-25 URL-dispatch behavior.
+                // D-LC-02: dispatch link URL via NSWorkspace (hybrid editor owns this path; prior preview consumer was removed in Phase 11).
                 // All schemes pass through (http/https/mailto/file/custom);
-                // no whitelist, no confirm sheet — matches preview-path policy.
+                // no whitelist, no confirm sheet.
                 NSWorkspace.shared.open(url)
             }
             return true   // ⌘-click handled (or no-op'd on nil URL)

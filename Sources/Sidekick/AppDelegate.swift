@@ -191,23 +191,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         formatItem.submenu = formatMenu
         mainMenu.addItem(formatItem)
 
-        // View submenu (D-M-05) — MENU-03 + KBD-01
-        let viewItem = NSMenuItem()
-        let viewMenu = NSMenu(title: "View")
-
-        let togglePreviewItem = NSMenuItem(
-            title: "Toggle Preview",
-            action: #selector(togglePreview(_:)),
-            keyEquivalent: "P"       // uppercase → AppKit auto-implies Shift (D-S-02)
-        )
-        // keyEquivalentModifierMask defaults to .command; do NOT add .shift
-        // (uppercase covers it; adding .shift draws the shift glyph twice).
-        togglePreviewItem.target = self
-        viewMenu.addItem(togglePreviewItem)
-
-        viewItem.submenu = viewMenu
-        mainMenu.addItem(viewItem)
-
         // Note submenu (D-M-06) — MENU-04
         let noteItem = NSMenuItem()
         let noteMenu = NSMenu(title: "Note")
@@ -240,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Installs a persistent NSStatusItem in the right-side system menu bar with a
-    /// three-item dropdown: Toggle Sidekick Panel, Toggle Preview Mode, Quit Sidekick.
+    /// two-item dropdown: Toggle Sidekick Panel, Quit Sidekick.
     /// The status item survives activation-policy flips (.accessory ↔ .regular) that
     /// PanelController performs in slideIn/slideOut.
     internal func installStatusItem() {
@@ -273,17 +256,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         toggleItem.target = self
         menu.addItem(toggleItem)
-
-        // Reuse the EXISTING togglePreview(_:) selector from the main menu
-        // (line 310). It flips panelState.isPreviewMode; EditorPaneView's
-        // .onChange observer runs the cursor capture/restore dance (D-K-02).
-        let previewItem = NSMenuItem(
-            title: "Toggle Preview Mode",
-            action: #selector(togglePreview(_:)),
-            keyEquivalent: ""
-        )
-        previewItem.target = self
-        menu.addItem(previewItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -374,13 +346,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             await store.reload()
         }
-    }
-
-    /// View > Toggle Preview (⌘⇧P). KBD-01 + MENU-03. Flips the shared
-    /// PanelState flag; EditorPaneView observes via .onChange and runs the
-    /// cursor capture/restore dance (D-K-02).
-    @objc func togglePreview(_ sender: Any?) {
-        panelController.panelState.isPreviewMode.toggle()
     }
 
     /// Status-bar > Toggle Sidekick Panel. Invokes the SAME code path as the
@@ -475,7 +440,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// gating and ⌘-key gating (RESEARCH Pattern 2). Rules per CONTEXT D-V-01..06:
 ///
 ///   - File > New Note / Reload Notes:           enable iff panel visible              (D-V-05, D-U-01)
-///   - View > Toggle Preview:                     enable iff panel visible + selection (D-V-03)
 ///   - Format > Bold / Italic / Code / Link:      enable iff editor is first responder (D-V-02)
 ///   - Note > Pin/Unpin + Delete:                 enable iff note selected             (D-V-04)
 ///   - Pin/Unpin also mutates item.title (D-U-02): "Pin" or "Unpin" based on pinned state
@@ -493,9 +457,6 @@ extension AppDelegate: NSUserInterfaceValidations {
         case #selector(newNote(_:)),
              #selector(reloadNotes(_:)):
             return panelVisible                                   // D-V-05 + D-U-01
-
-        case #selector(togglePreview(_:)):
-            return panelVisible && hasSelection                   // D-V-03
 
         case #selector(toggleSidekickPanel(_:)):
             return true                    // always enabled — status bar must work whether panel is open or closed

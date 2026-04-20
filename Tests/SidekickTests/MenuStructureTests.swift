@@ -23,16 +23,16 @@ final class MenuStructureTests: XCTestCase {
 
     // MARK: - D-M-01 — submenu order
 
-    func test_mainMenu_hasAppFileEditFormatViewNoteInOrder() {
+    func test_mainMenu_hasAppFileEditFormatNoteInOrder() {
         _ = install()
         let mainMenu = NSApp.mainMenu
         XCTAssertNotNil(mainMenu, "installMainMenu() must set NSApp.mainMenu")
-        XCTAssertEqual(mainMenu?.items.count, 6,
-                       "mainMenu has 6 top-level items after Phase 8: App, File, Edit, Format, View, Note")
+        XCTAssertEqual(mainMenu?.items.count, 5,
+                       "mainMenu has 5 top-level items after Phase 11: App, File, Edit, Format, Note")
 
         let submenuTitles = mainMenu?.items.compactMap { $0.submenu?.title } ?? []
-        XCTAssertEqual(submenuTitles, ["Sidekick", "File", "Edit", "Format", "View", "Note"],
-                       "Submenu order must be D-M-01: App → File → Edit → Format → View → Note")
+        XCTAssertEqual(submenuTitles, ["Sidekick", "File", "Edit", "Format", "Note"],
+                       "Submenu order must be D-M-01: App → File → Edit → Format → Note")
     }
 
     // MARK: - D-M-02 — App submenu
