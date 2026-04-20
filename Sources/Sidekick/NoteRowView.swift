@@ -110,6 +110,7 @@ struct NoteRowView: View {
 
 // MARK: - Previews
 
+#if DEBUG
 #Preview("Regular") {
     let note = Note(
         id: UUID(),
@@ -136,3 +137,4 @@ struct NoteRowView: View {
     return NoteRowView(note: note, store: store, selectedID: .constant(nil))
         .frame(width: 220)
 }
+#endif

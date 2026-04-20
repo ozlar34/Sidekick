@@ -231,6 +231,7 @@ struct SidebarView: View {
 
 // MARK: - Previews
 
+#if DEBUG
 #Preview("Empty") {
     let store = PreviewFixtures.makeStore()
     let panelState = PanelState()
@@ -243,3 +244,4 @@ struct SidebarView: View {
     panelState.selectedNoteID = store.notes.first?.id
     return SidebarView(store: store, panelState: panelState)
 }
+#endif

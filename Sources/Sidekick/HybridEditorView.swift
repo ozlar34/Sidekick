@@ -162,3 +162,25 @@ struct HybridEditorView: NSViewRepresentable {
         }
     }
 }
+
+// MARK: - Previews
+
+#Preview("Empty") {
+    @Previewable @State var text = ""
+    let controller = HybridEditorController()
+    return HybridEditorView(text: $text, controller: controller)
+        .frame(width: 400, height: 500)
+}
+
+#Preview("Mixed formatting") {
+    @Previewable @State var text = """
+# Heading Example
+This is **bold text** and *italic text* with `inline code`.
+- Bullet point one
+- Bullet point two
+A [link example](https://example.com) ends this preview.
+"""
+    let controller = HybridEditorController()
+    return HybridEditorView(text: $text, controller: controller)
+        .frame(width: 400, height: 500)
+}
