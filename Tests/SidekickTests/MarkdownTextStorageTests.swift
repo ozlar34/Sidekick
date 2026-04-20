@@ -308,4 +308,69 @@ final class MarkdownTextStorageTests: XCTestCase {
         XCTAssertEqual(Double(fontAfter?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01,
                        "Edits on later lines must not drop first-line H1 style")
     }
+
+    // MARK: - SF Pro body font (aesthetic pass)
+
+    func test_baseFont_isSFPro_notMono() {
+        // Plain body text on line 2+ uses SF Pro (not SF Mono).
+        let storage = makeStorage("Title\nplain body text")
+        // Index past the H1 first line — points into "plain body text".
+        let bodyIdx = ("Title\n" as NSString).length + 2  // mid "plain"
+        let font = storage.attribute(.font, at: bodyIdx, effectiveRange: nil) as? NSFont
+        XCTAssertNotNil(font, "Body must have a font attribute")
+        XCTAssertFalse(font?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true,
+                       "Body font must not carry the .monoSpace trait — SF Pro, not SF Mono")
+    }
+
+    func test_inlineCode_staysMonospaced_underSFProBody() {
+        // Inline code keeps its mono font even though the body is now SF Pro.
+        let storage = makeStorage("Title\nbefore `code` after")
+        // Find the offset of the 'c' in `code`.
+        let codeIdx = (storage.string as NSString).range(of: "code").location
+        let font = storage.attribute(.font, at: codeIdx, effectiveRange: nil) as? NSFont
+        XCTAssertNotNil(font)
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true,
+                      "Inline code must remain monospaced")
+    }
+
+    // MARK: - H1 paragraph spacing
+
+    func test_firstLine_autoH1_hasParagraphSpacing() {
+        let storage = makeStorage("Shopping List\nmilk")
+        let style = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertNotNil(style, "Auto-H1 first line must carry a paragraphStyle")
+        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
+                       "Auto-H1 paragraphSpacing should be 10pt below the title")
+    }
+
+    func test_explicitH1_hasParagraphSpacing() {
+        let storage = makeStorage("# Title\nbody line")
+        // Inspect the paragraph style at the heading content (index 2 — past `# `).
+        let style = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertNotNil(style, "Explicit H1 must carry a paragraphStyle")
+        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
+                       "Explicit H1 paragraphSpacing should be 10pt")
+    }
+
+    func test_explicitH2_hasNoParagraphSpacing() {
+        // Guard: H2 is intentionally untouched in this pass.
+        let storage = makeStorage("# H1 line\n## Sub\nbody")
+        let h2Start = ("# H1 line\n" as NSString).length + 3  // past `## `
+        let style = storage.attribute(.paragraphStyle, at: h2Start, effectiveRange: nil) as? NSParagraphStyle
+        // Either no style, or a style with zero paragraphSpacing — both acceptable.
+        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 0, accuracy: 0.01,
+                       "H2 must not pick up the H1-only paragraph spacing")
+    }
+
+    func test_h1_paragraphSpacing_survivesEditOnLaterLine() {
+        let storage = makeStorage("Title\n\npara 2\n\npara 3")
+        let styleBefore = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(Double(styleBefore?.paragraphSpacing ?? 0), 10, accuracy: 0.01)
+
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: "X")
+
+        let styleAfter = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(Double(styleAfter?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
+                       "Edits on later lines must not drop first-line H1 paragraph spacing")
+    }
 }

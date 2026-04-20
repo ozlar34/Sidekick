@@ -65,7 +65,7 @@ struct EditorPaneView: View {
                 if localBody.isEmpty {
                     Text("Start writing...")
                         .foregroundStyle(.secondary)
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.system(size: 14))
                         .padding(.leading, 10)    // Align with NSTextView cursor x-position
                         .padding(.top, 12)        // Align with NSTextView cursor y-position
                         .allowsHitTesting(false)

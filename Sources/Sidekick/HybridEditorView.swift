@@ -68,7 +68,7 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isEditable = true
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
-        textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)  // matches EditorPaneView.swift:74
+        textView.font = NSFont.systemFont(ofSize: 14, weight: .regular)  // SF Pro body — matches EditorPaneView placeholder
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark
         // appearance, matching the old TextEditor + SwiftUI .primary behavior.
         textView.textColor = NSColor.textColor

@@ -27,6 +27,18 @@ final class MarkdownTextStorage: NSTextStorage {
 
     private let backing = NSMutableAttributedString()
 
+    /// Paragraph style applied to H1 paragraphs so the title line gets visible
+    /// breathing room above the body. paragraphSpacing adds space *after* the
+    /// paragraph, so attaching it to the H1 paragraph creates the gap before
+    /// whatever follows. Re-applied on every edit pass via applyFirstLineH1
+    /// and applyHeadings — clearManagedAttributes strips .paragraphStyle, so
+    /// the re-application is what makes the gap survive edits elsewhere.
+    private static let h1ParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 10
+        return style
+    }()
+
     // MARK: - Required overrides (NSTextStorage subclass contract)
 
     override var string: String { backing.string }
@@ -167,10 +179,11 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
         backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
-        // Reset font to the base monospaced 14pt editor font, matching
-        // EditorPaneView.swift:74 (.system(size: 14, design: .monospaced)).
+        // Reset font to the base SF Pro 14pt editor font, matching
+        // EditorPaneView placeholder (.system(size: 14)) and HybridEditorView
+        // textView.font. Code blocks and inline code re-apply mono explicitly.
         // Do NOT use 16pt — that's the preview reader font (PATTERNS.md line 477).
-        let baseFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let baseFont = NSFont.systemFont(ofSize: 14, weight: .regular)
         backing.addAttribute(.font, value: baseFont, range: range)
         // Pin foreground to NSColor.textColor so it stays dynamic across
         // light/dark appearance and persists across note-switch full-text
@@ -204,7 +217,7 @@ final class MarkdownTextStorage: NSTextStorage {
             tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
-            let base = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            let base = NSFont.systemFont(ofSize: 14, weight: .regular)
             let italic = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
             backing.addAttribute(.font, value: italic, range: content)
         }
@@ -294,6 +307,9 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.addAttribute(.font,
                              value: NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold),
                              range: range)
+        backing.addAttribute(.paragraphStyle,
+                             value: Self.h1ParagraphStyle,
+                             range: firstLineRange)
     }
 
     /// Apply heading styling: level-specific font size on content, .sidekickHiddenMarker on `# ` prefix.
@@ -308,9 +324,15 @@ final class MarkdownTextStorage: NSTextStorage {
             case 1:        font = NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold)
             case 2:        font = NSFont.systemFont(ofSize: 14 * 1.25, weight: .semibold)
             case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-            default:       font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            default:       font = NSFont.systemFont(ofSize: 14, weight: .regular)
             }
             backing.addAttribute(.font, value: font, range: content)
+            if m.level == 1 {
+                let lineRange = (backing.string as NSString).lineRange(for: content)
+                backing.addAttribute(.paragraphStyle,
+                                     value: Self.h1ParagraphStyle,
+                                     range: lineRange)
+            }
         }
     }
 
