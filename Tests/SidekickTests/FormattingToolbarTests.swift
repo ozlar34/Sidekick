@@ -150,4 +150,100 @@ final class FormattingToolbarTests: XCTestCase {
         // is "- foo\n- bar\n" = 12 UTF-16 units starting at index 6.
         XCTAssertEqual(newSelection, NSRange(location: 6, length: 12))
     }
+
+    // MARK: - Toggle-off tests (D-T-03, UI-AUDIT-P1-4)
+
+    func test_toggleOff_bold_wrappedSelection_strips() {
+        // body "**foo**" — selection of "foo" at (2, 3)
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "**foo**",
+            range: NSRange(location: 2, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo", "Bold wrap stripped from wrapped selection")
+        XCTAssertEqual(result.cursorLocation, 0, "Cursor at start of stripped span")
+    }
+
+    func test_toggleOff_italicAsterisk_strips() {
+        // body "*foo*" — selection "foo" at (1, 3), invoke with prefix/suffix "*"
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "*foo*",
+            range: NSRange(location: 1, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_italicUnderscore_stripsViaCmdI() {
+        // body "_foo_" — user hits ⌘I (which inserts "*"); D-TG-04 allows strip of "_" wrapper
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "_foo_",
+            range: NSRange(location: 1, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo", "⌘I on _foo_ strips underscores per D-TG-04")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_inlineCode_strips() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "`", suffix: "`",
+            body: "`foo`",
+            range: NSRange(location: 1, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_nonMatchingWrapper_additive() {
+        // body "*foo*" — invoke ⌘B (prefix/suffix "**") — outer wrapper is "*" not "**" → no strip, falls through additive
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "*foo*",
+            range: NSRange(location: 1, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "***foo***", "No strip — wrapper mismatch; additive insert wraps the selected 'foo'")
+        // Cursor = safeLocation + insert.length = 1 + len("**foo**") = 1 + 7 = 8
+        XCTAssertEqual(result.cursorLocation, 8)
+    }
+
+    func test_toggleOff_caretOnly_noStripDeferred() {
+        // D-TG-05: caret-inside case deferred — caret at (4, 0) inside "**foo**" → falls through to additive
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "**foo**",
+            range: NSRange(location: 4, length: 0)
+        )
+        // Empty-selection additive: inserts "****" at position 4 → "**fo****o**"
+        XCTAssertEqual(result.newBody, "**fo****o**")
+        // Cursor = safeLocation + prefix.length = 4 + 2 = 6
+        XCTAssertEqual(result.cursorLocation, 6)
+    }
+
+    // MARK: - Link cursor UX tests (D-T-04, D-UX-01)
+
+    func test_link_nonEmptySelection_cursorLandsInsideParens() {
+        // body "hello world" — selection "hello" at (0, 5) — prefix "[" suffix "]()"
+        // Expected: insert "[hello]()" → newBody "[hello]() world"
+        // Cursor inside () = 0 + 1 (for "[") + 5 (for "hello") + 2 (for "](") = 8
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "[", suffix: "]()",
+            body: "hello world",
+            range: NSRange(location: 0, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "[hello]() world")
+        XCTAssertEqual(result.cursorLocation, 8, "Cursor inside () at position 8 (between ]( and ))")
+    }
+
+    func test_link_emptySelection_preservesExistingBracketsCursor() {
+        // Ensures existing empty-selection behavior unchanged (test_linkEmptySelection_cursorLandsInsideBrackets equivalent)
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "[", suffix: "]()",
+            body: "abc",
+            range: NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "abc[]()")
+        XCTAssertEqual(result.cursorLocation, 4, "Empty-selection cursor stays between [] — unchanged from pre-Phase-10")
+    }
 }

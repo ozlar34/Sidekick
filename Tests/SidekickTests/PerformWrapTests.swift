@@ -61,4 +61,24 @@ final class PerformWrapTests: XCTestCase {
         XCTAssertEqual(tv.selectedRange().location, 5,
                        "Cursor must land between the two '**' markers (location 3 + 2-char prefix = 5)")
     }
+
+    // MARK: - Toggle-off at NSTextView level (D-T-03)
+
+    func test_performWrap_boldToggleOff_selectionSpanPreserved() {
+        // ⌘B on pre-wrapped "**foo**" with "foo" selected → strips markers; selection stays on "foo"
+        let tv = makeTextView("**foo**", selection: NSRange(location: 2, length: 3))
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
+        XCTAssertEqual(tv.string, "foo", "Toggle-off strips the outer **")
+        XCTAssertEqual(tv.selectedRange().location, 0, "Cursor at start of formerly-stripped span")
+        XCTAssertEqual(tv.selectedRange().length, 3, "Selection length == original selected length (D-TG-02 re-select)")
+    }
+
+    func test_performWrap_italicToggleOff_underscoreWrap_cmdI() {
+        // ⌘I on _foo_ with "foo" selected → strips underscores (D-TG-04); selection stays on "foo"
+        let tv = makeTextView("_foo_", selection: NSRange(location: 1, length: 3))
+        FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: tv)
+        XCTAssertEqual(tv.string, "foo", "⌘I on _foo_ strips underscores (D-TG-04)")
+        XCTAssertEqual(tv.selectedRange().length, 3, "Selection length preserved")
+        XCTAssertEqual(tv.selectedRange().location, 0)
+    }
 }
