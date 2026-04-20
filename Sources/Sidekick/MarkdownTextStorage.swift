@@ -23,7 +23,7 @@
 ///   D-T-03 (byte-identical round trip).
 import AppKit
 
-class MarkdownTextStorage: NSTextStorage {
+final class MarkdownTextStorage: NSTextStorage {
 
     private let backing = NSMutableAttributedString()
 
@@ -123,6 +123,7 @@ class MarkdownTextStorage: NSTextStorage {
             try applyBold(in: substring, offset: base)
             try applyItalic(in: substring, offset: base)
             try applyInlineCode(in: substring, offset: base)
+            try applyLinks(in: substring, offset: base)   // D-LR-04, HYBRID-07
         } catch {
             // Parser failure fallback: clear attributes on the edited range
             // (leave bytes intact — STORAGE-01 / D-T-03 round-trip is sacred).
@@ -159,6 +160,8 @@ class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.sidekickBulletMarker, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
+        backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
+        backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
         // Reset font to the base monospaced 14pt editor font, matching
         // EditorPaneView.swift:74 (.system(size: 14, design: .monospaced)).
         // Do NOT use 16pt — that's the preview reader font (PATTERNS.md line 477).
@@ -217,6 +220,40 @@ class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.backgroundColor,
                                  value: NSColor.separatorColor.withAlphaComponent(0.15),
                                  range: content)
+        }
+    }
+
+    /// Hides [, ], (, URL, ) marker ranges and styles the label with link-foreground + underline.
+    /// Tags the label with AppKit's .link attribute when URL(string:) parses; omits .link otherwise (D-LR-06 fallback).
+    /// Mirrors applyInlineCode shape. Per D-LR-02, D-LR-03, D-LR-05.
+    private func applyLinks(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findLinkRanges(in: substring)
+        for m in matches {
+            // Hide bracket/paren/url markup (D-LR-02: everything except label is hidden)
+            tagHiddenMarker(shifting: m.openBracketRange, by: offset)
+            tagHiddenMarker(shifting: m.closeBracketRange, by: offset)
+            tagHiddenMarker(shifting: m.openParenRange, by: offset)
+            tagHiddenMarker(shifting: m.urlRange, by: offset)
+            tagHiddenMarker(shifting: m.closeParenRange, by: offset)
+
+            let label = shift(m.labelRange, by: offset)
+
+            // Visible label styling (D-LR-03): link color + single underline
+            backing.addAttribute(.foregroundColor, value: NSColor.linkColor, range: label)
+            backing.addAttribute(.underlineStyle,
+                                 value: NSUnderlineStyle.single.rawValue,
+                                 range: label)
+
+            // AppKit .link attribute on label (D-LR-05) — nil-fallback per D-LR-06
+            let ns = backing.string as NSString
+            let shiftedURLRange = shift(m.urlRange, by: offset)
+            if shiftedURLRange.length > 0,
+               shiftedURLRange.location + shiftedURLRange.length <= ns.length {
+                let urlText = ns.substring(with: shiftedURLRange)
+                if let url = URL(string: urlText) {
+                    backing.addAttribute(.link, value: url, range: label)
+                }
+            }
         }
     }
 
