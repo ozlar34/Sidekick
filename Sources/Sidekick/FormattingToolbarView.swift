@@ -112,6 +112,36 @@ struct FormattingToolbarView: View {
         let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
         let safeRange = NSRange(location: safeLocation, length: safeLength)
 
+        // MARK: Toggle-off detection (D-TG-01..04)
+        // If selection is non-empty AND the characters immediately before/after the
+        // selection exactly match prefix/suffix (OR the italic-swap case per D-TG-04),
+        // strip the outer pair and return. Keeps applyMarkdownWrap signature stable;
+        // performWrap infers new selection length from body-length delta (see performWrap).
+        let prefixNS = prefix as NSString
+        let suffixNS = suffix as NSString
+        let prefixLen = prefixNS.length
+        let suffixLen = suffixNS.length
+        if safeLength > 0,
+           safeLocation - prefixLen >= 0,
+           safeLocation + safeLength + suffixLen <= nsBody.length {
+            let beforeRange = NSRange(location: safeLocation - prefixLen, length: prefixLen)
+            let afterRange = NSRange(location: safeLocation + safeLength, length: suffixLen)
+            let beforeText = nsBody.substring(with: beforeRange)
+            let afterText = nsBody.substring(with: afterRange)
+            // Exact match OR italic underscore-variant (D-TG-04): pressing ⌘I (inserts *)
+            // on _foo_ should strip the _ wrapper — semantic intent is "italic off", not "remove asterisk".
+            let exactMatch = (beforeText == prefix && afterText == suffix)
+            let italicSwap = (prefix == "*" && beforeText == "_" && afterText == "_")
+            if exactMatch || italicSwap {
+                let selectedText = nsBody.substring(with: safeRange)
+                let stripRange = NSRange(location: beforeRange.location,
+                                         length: prefixLen + safeLength + suffixLen)
+                let newBody = nsBody.replacingCharacters(in: stripRange, with: selectedText)
+                // Cursor at start of stripped span; performWrap re-selects via length delta.
+                return (newBody, beforeRange.location)
+            }
+        }
+
         let selected = safeLength > 0 ? nsBody.substring(with: safeRange) : ""
         let insert: String
         let cursor: Int
@@ -120,7 +150,13 @@ struct FormattingToolbarView: View {
             cursor = safeLocation + (prefix as NSString).length
         } else {
             insert = prefix + selected + suffix
-            cursor = safeLocation + (insert as NSString).length
+            // D-UX-01: for Link wrap on non-empty selection, cursor lands INSIDE ().
+            // Specifically: safeLocation + "[".length + selected.length + "](".length = safeLocation + 1 + N + 2
+            if prefix == "[" && suffix == "]()" {
+                cursor = safeLocation + 1 + (selected as NSString).length + 2
+            } else {
+                cursor = safeLocation + (insert as NSString).length
+            }
         }
         let newBody = nsBody.replacingCharacters(in: safeRange, with: insert)
         return (newBody, cursor)
