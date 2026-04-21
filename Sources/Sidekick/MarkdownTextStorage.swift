@@ -36,6 +36,23 @@ final class MarkdownTextStorage: NSTextStorage {
     private static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         style.paragraphSpacing = 10
+        // Mirror the default paragraph style's lineHeightMultiple so the H1
+        // line's vertical rhythm matches body/bullet lines (H1 sets its own
+        // explicit paragraphStyle, overriding bodyParagraphStyle).
+        style.lineHeightMultiple = 1.4
+        return style
+    }()
+
+    /// Default paragraph style applied to every reparsed range in storage
+    /// (before H1 optionally overrides on line 0 / heading paragraphs).
+    /// Applied directly on storage rather than relying on
+    /// `textView.defaultParagraphStyle` — the latter is unreliable in TextKit 1
+    /// once storage starts setting its own paragraph styles anywhere, so we
+    /// enforce the rhythm at the storage layer.
+    static let bodyParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = 1.4
+        style.paragraphSpacing = 4
         return style
     }()
 
@@ -179,11 +196,11 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
         backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
-        // Reset font to the base SF Pro 14pt editor font, matching
-        // EditorPaneView placeholder (.system(size: 14)) and HybridEditorView
-        // textView.font. Code blocks and inline code re-apply mono explicitly.
-        // Do NOT use 16pt — that's the preview reader font (PATTERNS.md line 477).
-        let baseFont = NSFont.systemFont(ofSize: 14, weight: .regular)
+        // Reset font to the base Josefin Sans 14pt editor font, matching
+        // HybridEditorView textView.font. Code blocks and inline code
+        // re-apply mono explicitly. Do NOT use 16pt — that's the preview
+        // reader font (PATTERNS.md line 477).
+        let baseFont = SidekickFont.ns(size: 15, weight: .regular)
         backing.addAttribute(.font, value: baseFont, range: range)
         // Pin foreground to NSColor.textColor so it stays dynamic across
         // light/dark appearance and persists across note-switch full-text
@@ -191,12 +208,17 @@ final class MarkdownTextStorage: NSTextStorage {
         // foregroundColor attribute and can render with a stale cached
         // value baked in at the previous appearance.
         backing.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
+        // Stamp the body paragraph style so every reparsed range picks up
+        // lineHeightMultiple / paragraphSpacing. H1 paragraphs overwrite
+        // this with h1ParagraphStyle in applyHeadings / applyFirstLineH1.
+        backing.addAttribute(.paragraphStyle,
+                             value: Self.bodyParagraphStyle,
+                             range: range)
     }
 
     // MARK: - Per-construct attribute writers
 
-    /// Apply bold styling: semibold font on content, .sidekickHiddenMarker on `**` markers.
-    /// Font weight: NSFont.systemFont(ofSize: 14, weight: .semibold).
+    /// Apply bold styling: Josefin Sans SemiBold on content, .sidekickHiddenMarker on `**` markers.
     private func applyBold(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findBoldRanges(in: substring)
         for m in matches {
@@ -204,22 +226,23 @@ final class MarkdownTextStorage: NSTextStorage {
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
             backing.addAttribute(.font,
-                                 value: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                                 value: SidekickFont.ns(size: 15, weight: .semibold),
                                  range: content)
         }
     }
 
-    /// Apply italic styling: italic font trait on content, .sidekickHiddenMarker on `*`/`_` markers.
-    /// Uses NSFontManager to convert the base mono font to italic trait.
+    /// Apply italic styling: Josefin Sans Italic on content, .sidekickHiddenMarker on `*`/`_` markers.
+    /// The helper resolves the Josefin Sans italic cut by family+trait; falls
+    /// back to the italic-synthesized system font if the family isn't loaded.
     private func applyItalic(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findItalicRanges(in: substring)
         for m in matches {
             tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
-            let base = NSFont.systemFont(ofSize: 14, weight: .regular)
-            let italic = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
-            backing.addAttribute(.font, value: italic, range: content)
+            backing.addAttribute(.font,
+                                 value: SidekickFont.ns(size: 15, weight: .regular, italic: true),
+                                 range: content)
         }
     }
 
@@ -233,7 +256,7 @@ final class MarkdownTextStorage: NSTextStorage {
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
             backing.addAttribute(.font,
-                                 value: NSFont.monospacedSystemFont(ofSize: 14 * 0.9, weight: .regular),
+                                 value: NSFont.monospacedSystemFont(ofSize: 15 * 0.9, weight: .regular),
                                  range: content)
             backing.addAttribute(.backgroundColor,
                                  value: NSColor.separatorColor.withAlphaComponent(0.15),
@@ -305,7 +328,7 @@ final class MarkdownTextStorage: NSTextStorage {
         }
         let range = NSRange(location: 0, length: contentLength)
         backing.addAttribute(.font,
-                             value: NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold),
+                             value: SidekickFont.ns(size: 22, weight: .bold),
                              range: range)
         backing.addAttribute(.paragraphStyle,
                              value: Self.h1ParagraphStyle,
@@ -321,10 +344,10 @@ final class MarkdownTextStorage: NSTextStorage {
             let content = shift(m.contentRange, by: offset)
             let font: NSFont
             switch m.level {
-            case 1:        font = NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold)
-            case 2:        font = NSFont.systemFont(ofSize: 14 * 1.25, weight: .semibold)
-            case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-            default:       font = NSFont.systemFont(ofSize: 14, weight: .regular)
+            case 1:        font = SidekickFont.ns(size: 22, weight: .bold)
+            case 2:        font = SidekickFont.ns(size: 18.5, weight: .semibold)
+            case 3, 4, 5, 6: font = SidekickFont.ns(size: 15, weight: .semibold)
+            default:       font = SidekickFont.ns(size: 15, weight: .regular)
             }
             backing.addAttribute(.font, value: font, range: content)
             if m.level == 1 {
@@ -357,6 +380,16 @@ final class MarkdownTextStorage: NSTextStorage {
                   shifted.location + 1 <= backing.length else { continue }
             let markerRange = NSRange(location: shifted.location, length: 1)
             backing.addAttribute(.sidekickBulletMarker, value: true, range: markerRange)
+            // Bullet glyph uses SF Pro bold at body size. MarkdownLayoutManager
+            // substitutes U+2022 using whatever font is on the marker char; SF
+            // Pro's bullet glyph sits at x-height mid reliably, while Josefin
+            // Sans's bullet drifts vertically and looks off-centered with body
+            // text. Matching body size (15pt) also keeps line height consistent
+            // with surrounding lines so bullet rows don't grow taller than
+            // non-bullet rows.
+            backing.addAttribute(.font,
+                                 value: NSFont.systemFont(ofSize: 15, weight: .bold),
+                                 range: markerRange)
         }
     }
 

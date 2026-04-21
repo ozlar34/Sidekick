@@ -65,15 +65,14 @@ struct NoteRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(NoteRowFormatting.title(for: note.body))
-                .font(.body)
-                .fontWeight(.semibold)
+                .font(.josefin(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             if let preview = NoteRowFormatting.preview(for: note.body) {
                 Text(preview)
-                    .font(.caption)
+                    .font(.josefin(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)

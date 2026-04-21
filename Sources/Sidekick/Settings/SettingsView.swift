@@ -54,7 +54,7 @@ struct SettingsView: View {
                     })
                     if let app = conflictAppName {
                         Text("⚠ Already used by \(app)")
-                            .font(.caption)
+                            .font(.josefin(size: 11))
                             .foregroundColor(Color(.systemRed))
                     }
                 }

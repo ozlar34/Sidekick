@@ -68,7 +68,20 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isEditable = true
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
-        textView.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        textView.font = SidekickFont.ns(size: 15, weight: .regular)
+        // Default paragraph style: lineHeightMultiple scales EVERY line's
+        // intrinsic height (body, bullets, wrapped lines) so vertical
+        // breathing room is consistent whether text is newline-separated or
+        // soft-wrapped. lineSpacing only applies to wrapped lines within a
+        // single paragraph, so it had no effect on the common case (one line
+        // per paragraph via \n). paragraphSpacing adds a small extra gap at
+        // paragraph terminators on top of the multiplied line height.
+        // Paragraphs without an explicit .paragraphStyle fall back to this, so
+        // bullets and body text all pick it up automatically.
+        let defaultStyle = NSMutableParagraphStyle()
+        defaultStyle.lineHeightMultiple = 1.4
+        defaultStyle.paragraphSpacing = 4
+        textView.defaultParagraphStyle = defaultStyle
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark
         // appearance, matching the old TextEditor + SwiftUI .primary behavior.
         textView.textColor = NSColor.textColor
@@ -157,8 +170,8 @@ struct HybridEditorView: NSViewRepresentable {
             let isOnFirstLine = firstNewline.location == NSNotFound
                                 || caretLoc <= firstNewline.location
             let font: NSFont = isOnFirstLine
-                ? NSFont.systemFont(ofSize: 14 * 1.5, weight: .bold)
-                : NSFont.systemFont(ofSize: 14, weight: .regular)
+                ? SidekickFont.ns(size: 22, weight: .bold)
+                : SidekickFont.ns(size: 15, weight: .regular)
             var attrs = tv.typingAttributes
             attrs[.font] = font
             tv.typingAttributes = attrs
