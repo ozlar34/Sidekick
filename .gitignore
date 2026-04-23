@@ -6,3 +6,8 @@ Packages/
 xcuserdata/
 DerivedData/
 Package.resolved
+
+# Claude Code agent scratch (local-only)
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/agent-memory/
