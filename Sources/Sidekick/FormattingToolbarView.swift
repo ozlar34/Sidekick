@@ -8,58 +8,49 @@ import SwiftUI
 struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
     let applyLinePrefix: () -> Void
+    /// Set when the caret is inside a bold / italic / code span. Drives the
+    /// active-state highlight on the corresponding button. Defaults to nil so
+    /// existing call sites (tests, previews, menu-only invocations) compile
+    /// without change. Populated by EditorPaneView from
+    /// HybridEditorController.activeInlineKind.
+    var activeInlineKind: InlineKind? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                wrapSelection("**", "**")
-            } label: {
-                Image(systemName: "bold")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .help("Bold (⌘B)")
-            .accessibilityLabel("Bold")
+        HStack(spacing: 2) {
+            FormatButton(
+                systemName: "bold",
+                tooltip: "Bold (⌘B)",
+                accessibilityLabel: "Bold",
+                isActive: activeInlineKind == .bold
+            ) { wrapSelection("**", "**") }
 
-            Button {
-                wrapSelection("*", "*")
-            } label: {
-                Image(systemName: "italic")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .help("Italic (⌘I)")
-            .accessibilityLabel("Italic")
+            FormatButton(
+                systemName: "italic",
+                tooltip: "Italic (⌘I)",
+                accessibilityLabel: "Italic",
+                isActive: activeInlineKind == .italic
+            ) { wrapSelection("*", "*") }
 
-            Button {
-                wrapSelection("`", "`")
-            } label: {
-                Image(systemName: "curlybraces")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .help("Inline code (⌘⌥C)")
-            .accessibilityLabel("Inline code")
+            FormatButton(
+                systemName: "chevron.left.forwardslash.chevron.right",
+                tooltip: "Inline code (⌘⌥C)",
+                accessibilityLabel: "Inline code",
+                isActive: activeInlineKind == .code
+            ) { wrapSelection("`", "`") }
 
-            Button {
-                wrapSelection("[", "]()")
-            } label: {
-                Image(systemName: "link")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .help("Link (⌘K)")
-            .accessibilityLabel("Link")
+            FormatButton(
+                systemName: "link",
+                tooltip: "Link (⌘K)",
+                accessibilityLabel: "Link",
+                isActive: false
+            ) { wrapSelection("[", "]()") }
 
-            Button {
-                applyLinePrefix()
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.borderless)
-            .help("Bulleted list (⌘⇧8)")
-            .accessibilityLabel("Bulleted list")
+            FormatButton(
+                systemName: "list.bullet",
+                tooltip: "Bulleted list (⌘⇧8)",
+                accessibilityLabel: "Bulleted list",
+                isActive: false
+            ) { applyLinePrefix() }
 
             Spacer()
         }
@@ -93,39 +84,57 @@ struct FormattingToolbarView: View {
         let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
         let safeRange = NSRange(location: safeLocation, length: safeLength)
 
-        // MARK: Universal toggle-off
+        // MARK: Universal toggle-off / swap
         // The hybrid editor hides `**`/`*`/`` ` `` glyphs as zero-width, so the
         // caret/selection can land in subtly different byte positions for the
         // same visual click. Instead of case-matching on selection shape, ask
-        // the parser: "is there a same-kind pair on this line that the
-        // selection overlaps or contains?" — if yes, strip it. Covers:
-        //   • selection strictly between markers ("foo" in "**foo**")
-        //   • selection wrapping the whole pair ("**foo**" via ⌘A/triple-click)
-        //   • caret anywhere in the whole pair (including on the hidden marker
-        //     glyphs, which is how AppKit often lands clicks on a bold word)
-        //   • selection that spans markers unevenly (e.g. half the opening `**`)
-        // Bold uses findBoldRanges; italic uses findItalicRanges (covers `_..._`
-        // underscore-swap for ⌘I); inline code uses findInlineCodeRanges.
-        if let pair = findEnclosingPair(prefix: prefix, body: body, selection: safeRange) {
+        // the parser: "is there an inline-kind pair on this line that the
+        // selection overlaps or contains?" — if yes, transform it.
+        //
+        // Transform rules for inline formats (bold/italic/code):
+        //   • same kind  → strip markers (toggle off).
+        //   • different kind → swap: replace the pair's markers with the
+        //     requested ones, keep inner text. Inline formats are mutually
+        //     exclusive at toggle time (no composed ***bold-italic***).
+        // Link (`prefix == "["`) intentionally skips this branch — ⌘K over
+        // bold text should wrap the whole thing as a link, not strip it.
+        let requestedKind: InlineKind? = inlineKind(forPrefix: prefix)
+        if let kind = requestedKind,
+           let pair = findAnyEnclosingInlinePair(body: body, selection: safeRange) {
             let innerText = nsBody.substring(with: pair.inner)
-            let newBody = nsBody.replacingCharacters(in: pair.whole, with: innerText)
-            let openLen = pair.inner.location - pair.whole.location
-            let closeLen = (pair.whole.location + pair.whole.length)
-                - (pair.inner.location + pair.inner.length)
-            // Cursor placement based on where the original caret/selection
-            // start sat relative to the pair:
-            //   - before pair → unchanged (nothing stripped before it)
-            //   - inside pair → shift left by openLen (open marker removed)
-            //   - after pair → shift left by openLen + closeLen (both removed)
-            let newCursor: Int
-            if safeLocation <= pair.whole.location {
-                newCursor = safeLocation
-            } else if safeLocation <= pair.whole.location + pair.whole.length {
-                newCursor = max(pair.whole.location, safeLocation - openLen)
+            if pair.kind == kind {
+                // Same kind → strip.
+                let newBody = nsBody.replacingCharacters(in: pair.whole, with: innerText)
+                let openLen = pair.inner.location - pair.whole.location
+                let closeLen = (pair.whole.location + pair.whole.length)
+                    - (pair.inner.location + pair.inner.length)
+                // Cursor placement based on where the original caret/selection
+                // start sat relative to the pair:
+                //   - before pair → unchanged (nothing stripped before it)
+                //   - inside pair → shift left by openLen (open marker removed)
+                //   - after pair → shift left by openLen + closeLen (both removed)
+                let newCursor: Int
+                if safeLocation <= pair.whole.location {
+                    newCursor = safeLocation
+                } else if safeLocation <= pair.whole.location + pair.whole.length {
+                    newCursor = max(pair.whole.location, safeLocation - openLen)
+                } else {
+                    newCursor = safeLocation - (openLen + closeLen)
+                }
+                return (newBody, newCursor)
             } else {
-                newCursor = safeLocation - (openLen + closeLen)
+                // Different kind → swap markers, keep inner text.
+                let replacement = prefix + innerText + suffix
+                let newBody = nsBody.replacingCharacters(in: pair.whole, with: replacement)
+                // Cursor: preserve the caret's offset within the inner text
+                // when possible; otherwise land at the start of the new inner.
+                let newPrefixLen = (prefix as NSString).length
+                let innerLen = (innerText as NSString).length
+                let oldInnerStart = pair.inner.location
+                let caretOffsetInInner = max(0, min(safeLocation - oldInnerStart, innerLen))
+                let newCursor = pair.whole.location + newPrefixLen + caretOffsetInInner
+                return (newBody, newCursor)
             }
-            return (newBody, newCursor)
         }
 
         let selected = safeLength > 0 ? nsBody.substring(with: safeRange) : ""
@@ -148,13 +157,42 @@ struct FormattingToolbarView: View {
         return (newBody, cursor)
     }
 
-    /// Find a same-kind marker pair on the line containing the selection
-    /// whose whole span (open + content + close) overlaps or contains the
-    /// selection. Returns (whole, inner) in body coordinates, or nil if no
-    /// such pair exists on that line.
+    /// Inline-format kind for toggle/swap detection. Line-prefix formats
+    /// (headings, bullets) and link are intentionally NOT inline kinds.
+    internal enum InlineKind { case bold, italic, code }
+
+    /// Returns the inline kind whose pair currently encloses the selection
+    /// (caret or range), or nil if the selection sits in plain text. Thin
+    /// wrapper over `findAnyEnclosingInlinePair` — exposed so the editor's
+    /// selection observer can drive the toolbar's active-state highlight.
+    /// Bold/italic/code are mutually exclusive in the parser (italic regex
+    /// excludes `**…**` via lookarounds), so a single optional suffices.
+    internal static func activeInlineKind(body: String, selection: NSRange) -> InlineKind? {
+        return findAnyEnclosingInlinePair(body: body, selection: selection)?.kind
+    }
+
+    /// Map a wrap prefix to its inline kind; returns nil for non-inline
+    /// prefixes (link `[`, or anything unrecognized). Used by
+    /// `applyMarkdownWrap` to gate the universal toggle-off / swap branch.
+    internal static func inlineKind(forPrefix prefix: String) -> InlineKind? {
+        switch prefix {
+        case "**": return .bold
+        case "*":  return .italic
+        case "`":  return .code
+        default:   return nil
+        }
+    }
+
+    /// Find any inline-kind marker pair (bold / italic / code) on the line
+    /// containing the selection whose whole span (open + content + close)
+    /// overlaps or contains the selection. Returns (kind, whole, inner) in
+    /// body coordinates, or nil if no such pair exists on that line.
     ///
-    /// Supports `**` (bold), `*`/`_` (italic — parser handles both), and
-    /// `` ` `` (inline code). Overlap match covers:
+    /// Scan order is bold → italic → code. Italic regex already excludes
+    /// `**…**` via lookarounds so bold-first is deterministic; code is last
+    /// since `` `…` `` is the least ambiguous.
+    ///
+    /// Overlap match covers:
     ///   • caret (length 0) anywhere in [wholeStart…wholeEnd], including on
     ///     the hidden zero-width marker glyphs
     ///   • selection fully inside the whole pair
@@ -162,11 +200,10 @@ struct FormattingToolbarView: View {
     ///   • selection containing the whole pair
     /// Pairs cannot span paragraph boundaries in CommonMark, so scanning the
     /// single line containing the selection start is sufficient.
-    private static func findEnclosingPair(
-        prefix: String,
+    private static func findAnyEnclosingInlinePair(
         body: String,
         selection: NSRange
-    ) -> (whole: NSRange, inner: NSRange)? {
+    ) -> (kind: InlineKind, whole: NSRange, inner: NSRange)? {
         let ns = body as NSString
         guard selection.location >= 0,
               selection.location + selection.length <= ns.length else { return nil }
@@ -196,17 +233,19 @@ struct FormattingToolbarView: View {
             return (whole, inner)
         }
 
-        if prefix == "**" {
-            for m in MarkdownInlineParser.findBoldRanges(in: lineText) {
-                if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) { return r }
+        for m in MarkdownInlineParser.findBoldRanges(in: lineText) {
+            if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
+                return (.bold, r.whole, r.inner)
             }
-        } else if prefix == "*" {
-            for m in MarkdownInlineParser.findItalicRanges(in: lineText) {
-                if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) { return r }
+        }
+        for m in MarkdownInlineParser.findItalicRanges(in: lineText) {
+            if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
+                return (.italic, r.whole, r.inner)
             }
-        } else if prefix == "`" {
-            for m in MarkdownInlineParser.findInlineCodeRanges(in: lineText) {
-                if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) { return r }
+        }
+        for m in MarkdownInlineParser.findInlineCodeRanges(in: lineText) {
+            if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
+                return (.code, r.whole, r.inner)
             }
         }
         return nil
@@ -334,26 +373,36 @@ struct FormattingToolbarView: View {
             inserted = prefix + selected + suffix
         }
 
-        // Detect toggle-off by body-length delta; any of the three strip shapes
-        // (selection between markers, selection wrapping markers, caret inside pair)
-        // produces the same `prefix.length + suffix.length` shrink.
+        // Classify the transformation by comparing `newBody` to what a pure
+        // additive wrap of the selection would produce. Three outcomes:
+        //   • additive  → newBody == selection-only insert of prefix+sel+suffix
+        //   • strip     → non-additive AND body shrank by prefixLen+suffixLen
+        //                 (same-kind toggle-off)
+        //   • swap      → non-additive AND body-delta doesn't match strip
+        //                 (different-kind inline swap, e.g. **x** → *x*)
         let prefixLen = (prefix as NSString).length
         let suffixLen = (suffix as NSString).length
         let bodyDelta = (body as NSString).length - (newBody as NSString).length
         let originalSelectedLength = range.length
-        let didToggleOff = bodyDelta == prefixLen + suffixLen
+        let expectedAdditiveBody = (body as NSString).replacingCharacters(in: range, with: inserted)
+        let isAdditive = newBody == expectedAdditiveBody
+        let didStripSameKind = !isAdditive && bodyDelta == prefixLen + suffixLen
+        let didSwap = !isAdditive && !didStripSameKind
 
-        // Selection restore depends on which case fired:
-        //   - toggle-off, caret-only (length 0) → caret lands at returned cursor
-        //   - toggle-off, selection wraps markers → inner text is shorter by bodyDelta
-        //   - toggle-off, selection between markers → inner span length unchanged
-        //   - additive wrap, non-empty selection (non-link) → re-select the inner
-        //     text at (range.location + prefixLen, selected.length) so the user
-        //     can hit ⌘B again to toggle back off without re-selecting
+        // Selection restore:
+        //   - strip, caret-only (length 0) → caret lands at returned cursor
+        //   - strip, selection wraps markers → inner text is shorter by bodyDelta
+        //   - strip, selection between markers → inner span length unchanged
+        //   - additive wrap, non-empty selection (non-link) → re-select inner
+        //     so repeated ⌘B toggles the same word cleanly
         //   - additive wrap, empty selection OR link → collapse to returned cursor
+        //   - swap, non-empty selection → re-select the new inner text so ⌘B
+        //     again toggles off cleanly; located by re-running the inline-pair
+        //     detector on the new body at the returned cursor position
+        //   - swap, caret-only → collapse to returned cursor
         let effectiveCursor: Int
         let newSelectionLength: Int
-        if didToggleOff {
+        if didStripSameKind {
             effectiveCursor = cursor
             if originalSelectedLength > 0 {
                 let sel = (body as NSString).substring(with: range) as NSString
@@ -365,7 +414,18 @@ struct FormattingToolbarView: View {
             } else {
                 newSelectionLength = 0
             }
-        } else if originalSelectedLength > 0 && prefix != "[" {
+        } else if didSwap && originalSelectedLength > 0 {
+            // Locate the new pair by probing the new body at the returned
+            // cursor — that position is guaranteed to be inside the new inner.
+            let probe = NSRange(location: cursor, length: 0)
+            if let newPair = findAnyEnclosingInlinePair(body: newBody, selection: probe) {
+                effectiveCursor = newPair.inner.location
+                newSelectionLength = newPair.inner.length
+            } else {
+                effectiveCursor = cursor
+                newSelectionLength = 0
+            }
+        } else if isAdditive && originalSelectedLength > 0 && prefix != "[" {
             // Additive wrap of a real selection: re-select the newly-wrapped
             // inner text so repeated ⌘B toggles the same word cleanly. Link
             // (`[`) is excluded — that case wants the caret inside `()` ready
@@ -377,16 +437,16 @@ struct FormattingToolbarView: View {
             newSelectionLength = 0
         }
 
-        // For toggle-off, apply the full-body replacement; otherwise apply selection-only replacement.
-        if didToggleOff {
+        // Additive → selection-only edit; strip or swap → full-body replace
+        // (both alter bytes outside the original selection range).
+        if isAdditive {
+            guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
+            textView.replaceCharacters(in: range, with: inserted)
+            textView.didChangeText()
+        } else {
             let fullRange = NSRange(location: 0, length: (body as NSString).length)
             guard textView.shouldChangeText(in: fullRange, replacementString: newBody) else { return }
             textView.replaceCharacters(in: fullRange, with: newBody)
-            textView.didChangeText()
-        } else {
-            // Edit sandwich — registers undo on textView.undoManager automatically.
-            guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
-            textView.replaceCharacters(in: range, with: inserted)
             textView.didChangeText()
         }
         textView.setSelectedRange(NSRange(location: effectiveCursor, length: newSelectionLength))
@@ -449,5 +509,42 @@ struct FormattingToolbarView: View {
                 NSRange(location: blockRange.location, length: (newBlock as NSString).length)
             )
         }
+    }
+}
+
+/// Single toolbar button — 28×28 hit target with rounded-rect background that
+/// shows hover (subtle gray) and active (accent-tinted) states. Plain button
+/// style so the background is fully under our control; borderless was leaving
+/// the button feeling dead with no hover affordance, which hurt discoverability.
+private struct FormatButton: View {
+    let systemName: String
+    let tooltip: String
+    let accessibilityLabel: String
+    let isActive: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(backgroundColor)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .accessibilityLabel(accessibilityLabel)
+        .onHover { isHovered = $0 }
+    }
+
+    private var backgroundColor: Color {
+        if isActive { return Color.accentColor.opacity(0.18) }
+        if isHovered { return Color.primary.opacity(0.07) }
+        return .clear
     }
 }

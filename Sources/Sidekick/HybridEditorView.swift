@@ -101,6 +101,10 @@ struct HybridEditorView: NSViewRepresentable {
         // Seed caret typing attributes for the initial selection — programmatic
         // seeding does not fire textViewDidChangeSelection, so call directly.
         context.coordinator.updateCaretTypingAttributes(in: textView)
+        // Same reason: seed the toolbar's active-format highlight for the
+        // initial caret position so a freshly-mounted note with the caret
+        // already inside formatted text shows the correct active button.
+        context.coordinator.updateActiveInlineKind(in: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -148,6 +152,10 @@ struct HybridEditorView: NSViewRepresentable {
             if parent.text != tv.string {
                 parent.text = tv.string
             }
+            // Text edits can change which inline pair encloses the caret
+            // without the selection itself moving (e.g. typing the closing
+            // `*` of an italic pair around the caret). Refresh here too.
+            updateActiveInlineKind(in: tv)
         }
 
         /// Caret typing attributes are sticky after edits — when the user
@@ -159,6 +167,31 @@ struct HybridEditorView: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             updateCaretTypingAttributes(in: tv)
+            updateActiveInlineKind(in: tv)
+        }
+
+        /// Recompute which inline pair (bold / italic / code) currently
+        /// encloses the selection and publish it to the controller so the
+        /// toolbar can highlight the matching button. Only writes when the
+        /// value actually changes — `@Published` fires objectWillChange even
+        /// on identical writes, which would re-render EditorPaneView on
+        /// every keystroke unnecessarily.
+        ///
+        /// `MainActor.assumeIsolated` because NSTextViewDelegate methods are
+        /// documented main-thread-only but their Swift signatures are not
+        /// `@MainActor` annotated, while `HybridEditorController` is —
+        /// without the assertion the controller property writes flag a
+        /// concurrency diagnostic.
+        func updateActiveInlineKind(in tv: NSTextView) {
+            let kind = FormattingToolbarView.activeInlineKind(
+                body: tv.string,
+                selection: tv.selectedRange()
+            )
+            MainActor.assumeIsolated {
+                if parent.controller.activeInlineKind != kind {
+                    parent.controller.activeInlineKind = kind
+                }
+            }
         }
 
         func updateCaretTypingAttributes(in tv: NSTextView) {

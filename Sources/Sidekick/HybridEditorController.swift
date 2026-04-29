@@ -30,4 +30,11 @@ final class HybridEditorController: ObservableObject {
     weak var textView: NSTextView? {
         willSet { objectWillChange.send() }
     }
+
+    /// Set when the caret sits inside a bold / italic / code inline span.
+    /// Driven by HybridEditorView's Coordinator on selection and text
+    /// changes; consumed by FormattingToolbarView for its active-state
+    /// highlight. Coordinator only writes when the value actually differs,
+    /// so unrelated keystrokes do not fire SwiftUI re-renders.
+    @Published var activeInlineKind: FormattingToolbarView.InlineKind?
 }

@@ -196,16 +196,20 @@ final class FormattingToolbarTests: XCTestCase {
         XCTAssertEqual(result.cursorLocation, 0)
     }
 
-    func test_toggleOff_nonMatchingWrapper_additive() {
-        // body "*foo*" — invoke ⌘B (prefix/suffix "**") — outer wrapper is "*" not "**" → no strip, falls through additive
+    func test_swap_italicToBold_replacesMarkers() {
+        // body "*foo*" — invoke ⌘B (prefix/suffix "**") — different inline kind on
+        // the selection → swap the markers, keep inner text. Inline formats are
+        // mutually exclusive at toggle time (no ***foo*** compose).
         let result = FormattingToolbarView.applyMarkdownWrap(
             prefix: "**", suffix: "**",
             body: "*foo*",
             range: NSRange(location: 1, length: 3)
         )
-        XCTAssertEqual(result.newBody, "***foo***", "No strip — wrapper mismatch; additive insert wraps the selected 'foo'")
-        // Cursor = safeLocation + insert.length = 1 + len("**foo**") = 1 + 7 = 8
-        XCTAssertEqual(result.cursorLocation, 8)
+        XCTAssertEqual(result.newBody, "**foo**", "Swap: italic pair replaced by bold markers, inner 'foo' preserved")
+        // Cursor lands inside the new bold pair at the same offset within
+        // 'foo' that the user's caret had in the old inner (here: start).
+        // pair.whole.location (0) + newPrefixLen (2) + caretOffsetInInner (0) = 2
+        XCTAssertEqual(result.cursorLocation, 2)
     }
 
     func test_toggleOff_caretOnly_insideBoldPair_strips() {
@@ -291,5 +295,119 @@ final class FormattingToolbarTests: XCTestCase {
         )
         XCTAssertEqual(result.newBody, "abc[]()")
         XCTAssertEqual(result.cursorLocation, 4, "Empty-selection cursor stays between [] — unchanged from pre-Phase-10")
+    }
+
+    // MARK: - Inline-format swap (different-kind toggle)
+
+    func test_swap_boldToItalic_replacesMarkers() {
+        // "**hello**" + ⌘I → "*hello*". Selection covers inner 'hello'.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "**hello**",
+            range: NSRange(location: 2, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "*hello*")
+        XCTAssertEqual(result.cursorLocation, 1, "Cursor inside the new italic pair at the inner offset (0)")
+    }
+
+    func test_swap_boldToCode_replacesMarkers() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "`", suffix: "`",
+            body: "**hello**",
+            range: NSRange(location: 2, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "`hello`")
+        XCTAssertEqual(result.cursorLocation, 1)
+    }
+
+    func test_swap_codeToBold_replacesMarkers() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "`hello`",
+            range: NSRange(location: 1, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "**hello**")
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    func test_swap_italicUnderscoreToBold_replacesMarkers() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "_hello_",
+            range: NSRange(location: 1, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "**hello**")
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    func test_swap_boldToItalic_caretOnly_insidePair() {
+        // Caret-only selection inside a bolded word also triggers swap.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "**hello**",
+            range: NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "*hello*")
+        // Caret was at inner offset 2 (inside "he|llo"); preserved inside new pair.
+        XCTAssertEqual(result.cursorLocation, 3)
+    }
+
+    func test_swap_preservesSurroundingText() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "*", suffix: "*",
+            body: "pre **hello** post",
+            range: NSRange(location: 6, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "pre *hello* post")
+    }
+
+    func test_link_overBold_doesNotSwap_additiveWrap() {
+        // ⌘K over a bolded selection should NOT strip the bold — link is not
+        // an inline-format kind and participates only in additive wrap.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "[", suffix: "]()",
+            body: "**hello**",
+            range: NSRange(location: 2, length: 5)
+        )
+        XCTAssertEqual(result.newBody, "**[hello]()**", "Link wraps inside bold; bold markers preserved")
+    }
+
+    // MARK: - activeInlineKind (toolbar active-state highlight detector)
+
+    func test_activeInlineKind_caretInsideBold_returnsBold() {
+        // "**bold**" — caret inside the inner text. Expect .bold.
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "**bold**",
+            selection: NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(kind, .bold)
+    }
+
+    func test_activeInlineKind_caretInsideItalic_returnsItalic() {
+        // "*it*" — caret between the markers. Expect .italic.
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "hello *it* world",
+            selection: NSRange(location: 8, length: 0)
+        )
+        XCTAssertEqual(kind, .italic)
+    }
+
+    func test_activeInlineKind_caretInsideCode_returnsCode() {
+        // "`code`" — caret inside backticks. Expect .code.
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "before `code` after",
+            selection: NSRange(location: 9, length: 0)
+        )
+        XCTAssertEqual(kind, .code)
+    }
+
+    func test_activeInlineKind_caretInPlainText_returnsNil() {
+        // No formatting markers around the caret. Expect nil — no button
+        // should highlight as active.
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "plain unformatted text",
+            selection: NSRange(location: 5, length: 0)
+        )
+        XCTAssertNil(kind)
     }
 }

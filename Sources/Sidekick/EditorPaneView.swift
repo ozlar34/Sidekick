@@ -46,7 +46,8 @@ struct EditorPaneView: View {
             // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
             FormattingToolbarView(
                 wrapSelection: wrapSelection,
-                applyLinePrefix: applyLinePrefix
+                applyLinePrefix: applyLinePrefix,
+                activeInlineKind: editorController.activeInlineKind
             )
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
