@@ -52,6 +52,20 @@ struct LinkMatch {
     let closeParenRange: NSRange      // ")", length 1
 }
 
+struct TableMatch {
+    /// Header line content (excluding trailing newline). Always non-empty.
+    let headerRange: NSRange
+    /// Separator line INCLUDING its trailing newline (if any). Hiding this whole
+    /// range collapses the visual line so the `| --- | --- |` row disappears.
+    let separatorRange: NSRange
+    /// Combined body lines (each row's full line range, contiguous). Length 0
+    /// when the table has only a header + separator with no body rows.
+    let bodyRange: NSRange
+    /// Every `|` character inside header + body lines (length 1 each). Used to
+    /// fade pipes to a subtle color so cells read more like a table.
+    let pipeRanges: [NSRange]
+}
+
 // MARK: - MarkdownInlineParser
 
 /// Namespace type for all markdown range-finding pure functions.
@@ -417,5 +431,159 @@ enum MarkdownInlineParser {
 
         // Unterminated fence (inFence == true at end of string): yield NO match per spec
         return results
+    }
+
+    // MARK: Tables
+
+    /// Returns matches for all GFM-style markdown tables in `string`.
+    ///
+    /// Detection rules (deliberately permissive):
+    ///   - Header line: contains at least one `|` and at least one non-pipe char.
+    ///   - Separator line (immediately below header): contains only whitespace,
+    ///     pipes, colons, and dashes; AND has at least one `|`; AND has at least one `-`.
+    ///   - Body lines: each subsequent line containing `|`, until the first
+    ///     non-pipe line (or end of string).
+    ///
+    /// Unterminated tables (header without a matching separator) return nothing —
+    /// matches the pair-only-hide principle (D-MH-04). All NSRanges are UTF-16.
+    static func findTableBlocks(in string: String) -> [TableMatch] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        // Lines inside a fenced code block are claimed by the fence and must not
+        // be re-interpreted as table syntax (CommonMark: code spans win, and
+        // visually `\`\`\`` blocks must preserve the literal source line-for-line).
+        let fenceContentRanges = findFencedCodeBlocks(in: string).map(\.contentRange)
+        func intersectsFence(_ r: NSRange) -> Bool {
+            fenceContentRanges.contains { NSIntersectionRange($0, r).length > 0 }
+        }
+
+        // Pre-scan: collect line ranges (location + length, with trailing newline included).
+        var lineRanges: [NSRange] = []
+        var lineStart = 0
+        while lineStart < fullLength {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            lineRanges.append(lineRange)
+            let nextStart = lineRange.location + lineRange.length
+            if nextStart == lineStart { break }
+            lineStart = nextStart
+        }
+
+        var results: [TableMatch] = []
+        var i = 0
+        while i + 1 < lineRanges.count {
+            let headerLineText = lineContent(in: ns, lineRange: lineRanges[i])
+            let separatorLineText = lineContent(in: ns, lineRange: lineRanges[i + 1])
+
+            if intersectsFence(lineRanges[i]) || intersectsFence(lineRanges[i + 1]) {
+                i += 1
+                continue
+            }
+
+            if isPipeLine(headerLineText) && isSeparatorLine(separatorLineText) {
+                // Walk forward to collect contiguous body lines.
+                var lastBodyIdx: Int? = nil
+                var j = i + 2
+                while j < lineRanges.count {
+                    let bodyText = lineContent(in: ns, lineRange: lineRanges[j])
+                    if isPipeLine(bodyText) {
+                        lastBodyIdx = j
+                        j += 1
+                    } else {
+                        break
+                    }
+                }
+
+                let headerRange = trimTrailingNewline(lineRanges[i], in: ns)
+                let separatorRange = lineRanges[i + 1]  // include newline so layout collapses the row
+                let bodyRange: NSRange
+                if let lastBodyIdx {
+                    let bodyStart = lineRanges[i + 2].location
+                    let bodyLast = lineRanges[lastBodyIdx]
+                    let bodyEnd = bodyLast.location + bodyLast.length
+                    bodyRange = NSRange(location: bodyStart, length: bodyEnd - bodyStart)
+                } else {
+                    let after = lineRanges[i + 1].location + lineRanges[i + 1].length
+                    bodyRange = NSRange(location: after, length: 0)
+                }
+
+                var pipeRanges: [NSRange] = []
+                collectPipeOffsets(in: headerRange, ns: ns, into: &pipeRanges)
+                if bodyRange.length > 0 {
+                    collectPipeOffsets(in: bodyRange, ns: ns, into: &pipeRanges)
+                }
+
+                results.append(TableMatch(
+                    headerRange: headerRange,
+                    separatorRange: separatorRange,
+                    bodyRange: bodyRange,
+                    pipeRanges: pipeRanges
+                ))
+
+                // Advance past the table.
+                i = (lastBodyIdx ?? (i + 1)) + 1
+            } else {
+                i += 1
+            }
+        }
+
+        return results
+    }
+
+    // MARK: - Table helpers
+
+    /// Returns the line text without its trailing newline (if any).
+    private static func lineContent(in ns: NSString, lineRange: NSRange) -> String {
+        let trimmed = trimTrailingNewline(lineRange, in: ns)
+        return ns.substring(with: trimmed)
+    }
+
+    /// Returns `lineRange` with a trailing `\n` or `\r` stripped (if present).
+    private static func trimTrailingNewline(_ lineRange: NSRange, in ns: NSString) -> NSRange {
+        guard lineRange.length > 0 else { return lineRange }
+        let lastIdx = lineRange.location + lineRange.length - 1
+        let last = ns.substring(with: NSRange(location: lastIdx, length: 1))
+        if last == "\n" || last == "\r" {
+            return NSRange(location: lineRange.location, length: lineRange.length - 1)
+        }
+        return lineRange
+    }
+
+    private static func isPipeLine(_ line: String) -> Bool {
+        guard line.contains("|") else { return false }
+        return !line.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// A separator line uses only whitespace / `|` / `:` / `-`, contains at least
+    /// one `|`, and at least one `-`. Permissive enough to allow `--- | ---`
+    /// (no outer pipes) and alignment colons (`:---:`).
+    private static func isSeparatorLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+        guard trimmed.contains("|"), trimmed.contains("-") else { return false }
+        let allowed: Set<Character> = ["|", "-", ":", " ", "\t"]
+        return trimmed.allSatisfy { allowed.contains($0) }
+    }
+
+    /// Append a length-1 NSRange for every `|` inside `range` to `out`.
+    private static func collectPipeOffsets(
+        in range: NSRange,
+        ns: NSString,
+        into out: inout [NSRange]
+    ) {
+        guard range.length > 0,
+              range.location >= 0,
+              range.location + range.length <= ns.length else { return }
+        let scanRange = range
+        var searchStart = scanRange.location
+        let scanEnd = scanRange.location + scanRange.length
+        while searchStart < scanEnd {
+            let remaining = NSRange(location: searchStart, length: scanEnd - searchStart)
+            let found = ns.range(of: "|", options: [], range: remaining)
+            if found.location == NSNotFound { break }
+            out.append(NSRange(location: found.location, length: 1))
+            searchStart = found.location + 1
+        }
     }
 }

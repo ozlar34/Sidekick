@@ -247,4 +247,105 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertEqual(m.labelRange.length, 2, "Emoji label is 2 UTF-16 code units")
         XCTAssertEqual(m.urlRange.location, 5, "URL starts after '[🎉](' = 5 UTF-16 code units in")
     }
+
+    // MARK: - Tables happy path
+
+    func test_table_simple() {
+        // Header  "| h1 | h2 |" + "\n"        → 12 UTF-16 units
+        // Sep     "| --- | --- |" + "\n"      → 14 UTF-16 units (location 12, length 14)
+        // Body    "| a | b |" + "\n"          → 10 UTF-16 units (location 26, length 10)
+        let body = "| h1 | h2 |\n| --- | --- |\n| a | b |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 1, "Should find exactly one table block")
+        let m = matches[0]
+        XCTAssertEqual(m.headerRange, NSRange(location: 0, length: 11),
+                       "Header excludes its trailing newline")
+        XCTAssertEqual(m.separatorRange, NSRange(location: 12, length: 14),
+                       "Separator INCLUDES its trailing newline so the layout collapses the row")
+        XCTAssertEqual(m.bodyRange, NSRange(location: 26, length: 10),
+                       "Body covers the trailing pipe-line including its newline")
+        XCTAssertEqual(m.pipeRanges.count, 6, "3 pipes in header + 3 pipes in body = 6 total")
+    }
+
+    func test_table_headerSeparatorOnly_emptyBody() {
+        let body = "| h1 | h2 |\n| --- | --- |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].bodyRange.length, 0, "Body must be length 0 when no body rows present")
+    }
+
+    func test_table_alignmentColons_recognized() {
+        // GFM alignment markers (`:---`, `:---:`, `---:`) must still parse as separator.
+        let body = "| left | center | right |\n| :--- | :---: | ---: |\n| a | b | c |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 1, "Alignment colons are valid separator syntax")
+    }
+
+    func test_table_noOuterPipes_recognized() {
+        // GFM allows separator and body lines without outer pipes.
+        let body = "h1 | h2\n--- | ---\na | b\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 1, "Tables without outer pipes still parse")
+    }
+
+    // MARK: - Tables negative cases
+
+    func test_table_noSeparator_rejected() {
+        // Two pipe lines with no separator between them are NOT a table.
+        let body = "| h1 | h2 |\n| a | b |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertTrue(matches.isEmpty, "Pair without separator must not parse as table (D-MH-04 pair principle)")
+    }
+
+    func test_table_horizontalRule_notSeparator() {
+        // A line that's just "---" (no pipes) is a horizontal rule, not a separator.
+        let body = "h1 | h2\n---\na | b\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertTrue(matches.isEmpty, "`---` without `|` must not be treated as table separator")
+    }
+
+    func test_table_pipesOnly_notSeparator() {
+        // A line that's "|||" has pipes but no dashes — not a separator.
+        let body = "| h1 | h2 |\n|||\n| a | b |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertTrue(matches.isEmpty, "Pipes-without-dashes must not be treated as separator")
+    }
+
+    func test_table_insideFencedBlock_ignored() {
+        // Table syntax inside a fenced code block must NOT parse as a table —
+        // fenced blocks must preserve their content visually (no row collapse).
+        let body = "```\n| h1 | h2 |\n| --- | --- |\n| a | b |\n```\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertTrue(matches.isEmpty, "Tables inside fenced code blocks must be ignored")
+    }
+
+    // MARK: - Tables — UTF-16 / multi-table
+
+    func test_table_multipleTablesInDocument() {
+        let body = """
+        | a | b |
+        | --- | --- |
+        | 1 | 2 |
+
+        Some text between tables.
+
+        | x | y |
+        | --- | --- |
+        | 9 | 8 |
+        """
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 2, "Two distinct tables in one document must produce two matches")
+    }
+
+    func test_table_emojiInCell_utf16Safe() {
+        // 🎉 is 2 UTF-16 code units. Pipe positions must remain UTF-16-correct.
+        let body = "| 🎉 | x |\n| --- | --- |\n"
+        let matches = MarkdownInlineParser.findTableBlocks(in: body)
+        XCTAssertEqual(matches.count, 1)
+        let m = matches[0]
+        // Header: "| 🎉 | x |" = 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 = 10 UTF-16 units
+        XCTAssertEqual(m.headerRange.length, 10, "Emoji header must measure in UTF-16 units")
+        // 3 pipes in header (no body in this fixture)
+        XCTAssertEqual(m.pipeRanges.count, 3)
+    }
 }

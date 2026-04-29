@@ -131,9 +131,13 @@ final class MarkdownTextStorage: NSTextStorage {
         let ns = backing.string as NSString
 
         // Compute the reparse range: paragraph-containing-edit (D-PS-02),
-        // expanded to any fenced-code-block that the edit touches.
+        // expanded to any fenced-code-block or table block that the edit touches.
+        // Tables span multiple paragraphs (header / separator / body each get
+        // their own paragraph break), so without expansion an edit on row N
+        // would leave rows N±k carrying stale table styling.
         let paragraphRange = ns.paragraphRange(for: editedRange)
-        let reparseRange = expandToEnclosingFence(paragraphRange, in: ns)
+        let fenceExpanded = expandToEnclosingFence(paragraphRange, in: ns)
+        let reparseRange = expandToEnclosingTable(fenceExpanded, in: ns)
 
         // Guard: reparseRange must be within the backing store's bounds.
         guard reparseRange.location >= 0,
@@ -164,6 +168,7 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyFenced(in: substring, offset: base)
             try applyHeadings(in: substring, offset: base)
             try applyBullets(in: substring, offset: base)
+            try applyTables(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
             try applyItalic(in: substring, offset: base)
             try applyInlineCode(in: substring, offset: base)
@@ -193,6 +198,29 @@ final class MarkdownTextStorage: NSTextStorage {
             }
         }
         return range
+    }
+
+    /// Expand `range` to include the full table (header + separator + body)
+    /// when the edit overlaps one. Mirrors `expandToEnclosingFence` —
+    /// without this, an edit on the body row would only reparse that one
+    /// paragraph and leave the header and separator rows carrying stale styling
+    /// (header bold, separator hidden, pipes faded).
+    ///
+    /// Caret-at-end of the table is treated as inside, matching the fence guard.
+    /// Tables that no longer parse (e.g. user just deleted the separator line)
+    /// won't be found here — recovery happens on the next edit, same caveat as
+    /// fenced blocks.
+    private func expandToEnclosingTable(_ range: NSRange, in ns: NSString) -> NSRange {
+        let tables = MarkdownInlineParser.findTableBlocks(in: ns as String)
+        var expanded = range
+        for t in tables {
+            let tableWhole = NSUnionRange(NSUnionRange(t.headerRange, t.separatorRange), t.bodyRange)
+            if NSIntersectionRange(tableWhole, range).length > 0
+               || range.location == tableWhole.location + tableWhole.length {
+                expanded = NSUnionRange(expanded, tableWhole)
+            }
+        }
+        return expanded
     }
 
     /// Clear all Sidekick-managed attributes (font, background, hidden-marker)
@@ -421,6 +449,53 @@ final class MarkdownTextStorage: NSTextStorage {
                 backing.addAttribute(.backgroundColor,
                                      value: NSColor.separatorColor.withAlphaComponent(0.1),
                                      range: content)
+            }
+        }
+    }
+
+    /// Apply table styling: hide the `| --- | --- |` separator row entirely,
+    /// semibold the header row content, and fade `|` characters to a subtle
+    /// color so cells read more like a table without claiming grid alignment.
+    ///
+    /// Round-trip stays byte-identical — the separator row is hidden via the
+    /// existing `.sidekickHiddenMarker` glyph-substitution path (D-MH-02) so
+    /// the bytes survive untouched and re-emerge in the saved .md file.
+    ///
+    /// Limitations matching `applyFenced`: a table that is currently broken
+    /// (e.g. user just deleted the separator) will not be detected, leaving
+    /// stale styling on the former-table rows until the next edit on those
+    /// rows clears it.
+    private func applyTables(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findTableBlocks(in: substring)
+        for m in matches {
+            // Hide the entire separator line (including its trailing newline)
+            // so the layout collapses the row to nothing visible.
+            tagHiddenMarker(shifting: m.separatorRange, by: offset)
+
+            // Semibold the header row content. Inline parsers (bold/italic/code/
+            // link) run after this and may override the font on inner spans —
+            // expected: `**foo**` inside a header should still render bolder
+            // emphasis, just on top of the header's semibold baseline.
+            let header = shift(m.headerRange, by: offset)
+            if header.length > 0,
+               header.location >= 0,
+               header.location + header.length <= backing.length {
+                backing.addAttribute(.font,
+                                     value: SidekickFont.ns(size: 15, weight: .semibold),
+                                     range: header)
+            }
+
+            // Fade every `|` in the header + body to tertiary so the dividers
+            // recede visually. Bounds-checked per pipe — defensive against
+            // future parser drift even though collectPipeOffsets is bounded.
+            for pipe in m.pipeRanges {
+                let shifted = shift(pipe, by: offset)
+                guard shifted.location >= 0,
+                      shifted.length > 0,
+                      shifted.location + shifted.length <= backing.length else { continue }
+                backing.addAttribute(.foregroundColor,
+                                     value: NSColor.tertiaryLabelColor,
+                                     range: shifted)
             }
         }
     }
