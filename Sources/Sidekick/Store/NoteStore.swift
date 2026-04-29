@@ -95,7 +95,7 @@ final class NoteStore: ObservableObject {
         newIndex.notes.append(IndexEntry(id: id, filename: filename, pinned: false, order: order))
         try await io.saveIndex(newIndex)
 
-        let note = Note(id: id, filename: filename, body: "", pinned: false, order: order)
+        let note = Note(id: id, filename: filename, body: "", pinned: false, order: order, modified: Date())
         notes.append(note)
         return note
     }
@@ -131,6 +131,7 @@ final class NoteStore: ObservableObject {
         if let noteIdx = notes.firstIndex(where: { $0.id == id }) {
             notes[noteIdx].body = body
             notes[noteIdx].filename = newFilename
+            notes[noteIdx].modified = Date()
         }
     }
 
@@ -158,8 +159,10 @@ final class NoteStore: ObservableObject {
               let entry = index.notes.first(where: { $0.id == id }) else { return }
         do {
             let body = try await io.readNote(filename: entry.filename)
+            let modified = await io.mtime(filename: entry.filename)
             if let idx = notes.firstIndex(where: { $0.id == id }) {
                 notes[idx].body = body
+                notes[idx].modified = modified
             }
         } catch {
             // Preserve in-memory body on read failure so the next auto-save
@@ -319,12 +322,14 @@ final class NoteStore: ObservableObject {
         var materialized: [Note] = []
         for entry in index.notes {
             let body = (try? await io.readNote(filename: entry.filename)) ?? ""
+            let modified = await io.mtime(filename: entry.filename)
             materialized.append(Note(
                 id: entry.id,
                 filename: entry.filename,
                 body: body,
                 pinned: entry.pinned,
-                order: entry.order
+                order: entry.order,
+                modified: modified
             ))
         }
         // Sort: pinned first, then by order.

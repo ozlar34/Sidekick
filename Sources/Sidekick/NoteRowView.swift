@@ -4,11 +4,10 @@ import SwiftUI
 /// Pure-function formatters for note row title + preview. Extracted so
 /// formatting can be unit-tested without SwiftUI view instantiation.
 enum NoteRowFormatting {
-    /// G-04: First non-empty, non-heading, whitespace-guarded-bullet-stripped line.
-    /// Shared between title() (cap 80) and preview() (cap 50). No cap applied here —
-    /// callers handle their own truncation.
-    /// IN-02 rule: only strip `- `, `* `, `> ` when followed by whitespace.
-    static func firstMeaningfulLine(for body: String) -> String? {
+    /// All meaningful lines in body order: non-empty, non-heading, with leading
+    /// `- `/`* `/`> ` markers stripped (only when followed by whitespace, per IN-02).
+    static func meaningfulLines(in body: String) -> [String] {
+        var result: [String] = []
         for line in body.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = String(line).trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
@@ -20,9 +19,13 @@ enum NoteRowFormatting {
                 stripped = trimmed
             }
             guard !stripped.isEmpty else { continue }
-            return stripped
+            result.append(stripped)
         }
-        return nil
+        return result
+    }
+
+    static func firstMeaningfulLine(for body: String) -> String? {
+        return meaningfulLines(in: body).first
     }
 
     /// G-04: Title derivation chain —
@@ -39,10 +42,68 @@ enum NoteRowFormatting {
         return "Untitled"
     }
 
-    /// Preview line — consumes firstMeaningfulLine, applies 50-char cap.
+    /// Preview — the line *after* whatever became the title.
+    /// - Heading present: title is the heading, preview = first meaningful body line.
+    /// - No heading: title is the first meaningful line, preview = the second.
+    /// 50-char cap. Returns nil when there is no distinct preview line.
     static func preview(for body: String) -> String? {
-        guard let line = firstMeaningfulLine(for: body) else { return nil }
-        return String(line.prefix(50))
+        let lines = meaningfulLines(in: body)
+        if HeadingExtractor.firstHeading(in: body) != nil {
+            return lines.first.map { String($0.prefix(50)) }
+        }
+        guard lines.count >= 2 else { return nil }
+        return String(lines[1].prefix(50))
+    }
+
+    private static let timeOfDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static let weekdayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.dateFormat = "EEEE"
+        return f
+    }()
+
+    private static let monthDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f
+    }()
+
+    private static let monthDayYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        return f
+    }()
+
+    /// Compact relative-modified label for sidebar rows. Apple-Notes / Mail-style:
+    /// today → "10:34 AM"; yesterday → "Yesterday"; within 7 days → weekday name;
+    /// this year → "Apr 15"; older → "Apr 15, 2024". `now` is injectable for tests.
+    static func formattedModifiedTime(_ date: Date, now: Date = Date()) -> String {
+        let cal = Calendar.current
+        if cal.isDate(date, inSameDayAs: now) {
+            return timeOfDayFormatter.string(from: date)
+        }
+        if let yesterdayStart = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: now)),
+           cal.isDate(date, inSameDayAs: yesterdayStart) {
+            return "Yesterday"
+        }
+        if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day,
+           days >= 0 && days < 7 {
+            return weekdayFormatter.string(from: date)
+        }
+        if cal.component(.year, from: date) == cal.component(.year, from: now) {
+            return monthDayFormatter.string(from: date)
+        }
+        return monthDayYearFormatter.string(from: date)
     }
 
     /// G-03: Successor-selection rule for post-delete reassignment.
@@ -64,15 +125,25 @@ struct NoteRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(NoteRowFormatting.title(for: note.body))
-                .font(.josefin(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(NoteRowFormatting.title(for: note.body))
+                    .font(.geist(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                if let modified = note.modified {
+                    Text(NoteRowFormatting.formattedModifiedTime(modified))
+                        .font(.geist(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
+            }
 
             if let preview = NoteRowFormatting.preview(for: note.body) {
                 Text(preview)
-                    .font(.josefin(size: 11))
+                    .font(.geist(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -114,9 +185,10 @@ struct NoteRowView: View {
     let note = Note(
         id: UUID(),
         filename: "example.md",
-        body: "Sample note body for the regular state preview.",
+        body: "Sample note body for the regular state preview.\nA second line that should appear in the preview area.",
         pinned: false,
-        order: 0
+        order: 0,
+        modified: Date().addingTimeInterval(-3600)
     )
     let store = PreviewFixtures.makeStore(notes: [note])
     return NoteRowView(note: note, store: store, selectedID: .constant(nil))

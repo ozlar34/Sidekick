@@ -6,6 +6,7 @@ struct Note: Identifiable, Equatable {
     var body: String
     var pinned: Bool
     var order: Int
+    var modified: Date? = nil
 }
 
 struct NoteIndex: Codable, Equatable {

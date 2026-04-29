@@ -41,14 +41,16 @@ struct PreviewFixtures {
                 filename: "meeting-notes.md",
                 body: "# Meeting Notes\nDiscussed Q2 roadmap and release timeline.",
                 pinned: false,
-                order: 0
+                order: 0,
+                modified: Date().addingTimeInterval(-3600)
             ),
             Note(
                 id: UUID(),
                 filename: "ideas.md",
-                body: "Random ideas for the next project.",
+                body: "Random ideas for the next project.\nA few more lines of brainstorming below.",
                 pinned: false,
-                order: 1
+                order: 1,
+                modified: Date().addingTimeInterval(-86400 * 2)
             )
         ]
     }
@@ -60,7 +62,8 @@ struct PreviewFixtures {
             filename: "pinned.md",
             body: "# Pinned Note\nThis note is pinned to the top.",
             pinned: true,
-            order: 0
+            order: 0,
+            modified: Date().addingTimeInterval(-86400 * 5)
         )
     }
 
@@ -73,7 +76,8 @@ struct PreviewFixtures {
             filename: "long-title.md",
             body: longHeading + "\nThis is the second line of the note body.",
             pinned: false,
-            order: 0
+            order: 0,
+            modified: Date()
         )
     }
 }

@@ -31,6 +31,12 @@ actor IOActor {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    func mtime(filename: String) -> Date? {
+        let url = folder.appendingPathComponent(filename)
+        let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+        return vals?.contentModificationDate
+    }
+
     func deleteNote(filename: String) throws {
         let url = folder.appendingPathComponent(filename)
         try FileManager.default.removeItem(at: url)
