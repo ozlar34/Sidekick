@@ -26,7 +26,7 @@ struct SidebarView: View {
                 VStack(spacing: 0) {
                     HStack {
                         Text("Notes")
-                            .font(.josefin(size: 13, weight: .semibold))
+                            .font(.geist(size: 13, weight: .semibold))
                             .foregroundStyle(.primary)
                         Spacer()
                         Button {
@@ -96,9 +96,9 @@ struct SidebarView: View {
                     // True empty-state — no notes exist.
                     VStack(spacing: 24) {
                         Text("No Notes Yet")
-                            .font(.josefin(size: 13, weight: .semibold))
+                            .font(.geist(size: 13, weight: .semibold))
                         Text("Press + to create your first note.")
-                            .font(.josefin(size: 11))
+                            .font(.geist(size: 11))
                     }
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -110,9 +110,9 @@ struct SidebarView: View {
                     // transient between delete → onChange reassign).
                     VStack(spacing: 12) {
                         Text("No Note Selected")
-                            .font(.josefin(size: 13, weight: .semibold))
+                            .font(.geist(size: 13, weight: .semibold))
                         Text("Pick a note from the sidebar.")
-                            .font(.josefin(size: 11))
+                            .font(.geist(size: 11))
                     }
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -181,7 +181,7 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $showMissingFolderSheet) {
             VStack(spacing: 16) {
-                Text("Notes Folder Not Found").font(.josefin(size: 13, weight: .semibold))
+                Text("Notes Folder Not Found").font(.geist(size: 13, weight: .semibold))
                 Text("The notes folder could not be found. Create it now or choose a different location.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

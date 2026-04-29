@@ -69,18 +69,20 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
         textView.font = SidekickFont.ns(size: 15, weight: .regular)
-        // Default paragraph style: lineHeightMultiple scales EVERY line's
-        // intrinsic height (body, bullets, wrapped lines) so vertical
-        // breathing room is consistent whether text is newline-separated or
-        // soft-wrapped. lineSpacing only applies to wrapped lines within a
-        // single paragraph, so it had no effect on the common case (one line
-        // per paragraph via \n). paragraphSpacing adds a small extra gap at
-        // paragraph terminators on top of the multiplied line height.
-        // Paragraphs without an explicit .paragraphStyle fall back to this, so
-        // bullets and body text all pick it up automatically.
+        // Absolute line-height clamp instead of lineHeightMultiple. Geist's
+        // intrinsic ascent+descent+leading is airy, so a multiplier compounds
+        // it and also inflates the caret rect: AppKit derives the insertion
+        // point's height from the layout fragment height, and on macOS 14+
+        // it uses NSTextInsertionIndicator (a sibling subview) so the legacy
+        // drawInsertionPoint(in:color:turnedOn:) override is bypassed. Setting
+        // min == max forces a fixed pixel line box regardless of font metrics
+        // so the caret stays in proportion to the rendered glyph height. The
+        // bumped paragraphSpacing adds breathing room between bullets and
+        // paragraphs without growing the line box (and thus the caret).
         let defaultStyle = NSMutableParagraphStyle()
-        defaultStyle.lineHeightMultiple = 1.4
-        defaultStyle.paragraphSpacing = 4
+        defaultStyle.minimumLineHeight = 18
+        defaultStyle.maximumLineHeight = 18
+        defaultStyle.paragraphSpacing = 8
         textView.defaultParagraphStyle = defaultStyle
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark
         // appearance, matching the old TextEditor + SwiftUI .primary behavior.

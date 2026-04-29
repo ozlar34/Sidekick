@@ -6,7 +6,7 @@ import AppKit
 // main thread. `MainActor.assumeIsolated` records that fact and lets us
 // construct and wire the delegate without an async hop.
 MainActor.assumeIsolated {
-    // Register bundled Josefin Sans before NSApplication boots so every
+    // Register bundled Geist before NSApplication boots so every
     // view's first font resolution finds the family. Info.plist's
     // ATSApplicationFontsPath also registers, but calling here covers
     // `swift run` dev builds that run without a bundle.

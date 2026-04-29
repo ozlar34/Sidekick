@@ -36,10 +36,13 @@ final class MarkdownTextStorage: NSTextStorage {
     private static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         style.paragraphSpacing = 10
-        // Mirror the default paragraph style's lineHeightMultiple so the H1
-        // line's vertical rhythm matches body/bullet lines (H1 sets its own
-        // explicit paragraphStyle, overriding bodyParagraphStyle).
-        style.lineHeightMultiple = 1.4
+        // Absolute line-height clamp — see HybridEditorView.makeNSView for
+        // the rationale (caret height tracks layout fragment height on
+        // macOS 14+ via NSTextInsertionIndicator). 28pt over 22pt H1 gives
+        // the title visible breathing room without inheriting Geist's airy
+        // intrinsic metrics.
+        style.minimumLineHeight = 28
+        style.maximumLineHeight = 28
         return style
     }()
 
@@ -51,8 +54,15 @@ final class MarkdownTextStorage: NSTextStorage {
     /// enforce the rhythm at the storage layer.
     static let bodyParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = 1.4
-        style.paragraphSpacing = 4
+        // See HybridEditorView.makeNSView for why this is absolute (min==max)
+        // instead of lineHeightMultiple — Geist's intrinsic line metrics are
+        // airy and a multiplier compounds them, blowing up the caret rect on
+        // macOS 14+ (NSTextInsertionIndicator follows the layout fragment).
+        // paragraphSpacing carries the breathing-room budget instead, since
+        // it adds gap between paragraphs without growing the line box.
+        style.minimumLineHeight = 18
+        style.maximumLineHeight = 18
+        style.paragraphSpacing = 8
         return style
     }()
 
@@ -196,7 +206,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
         backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
-        // Reset font to the base Josefin Sans 14pt editor font, matching
+        // Reset font to the base Geist 15pt editor font, matching
         // HybridEditorView textView.font. Code blocks and inline code
         // re-apply mono explicitly. Do NOT use 16pt — that's the preview
         // reader font (PATTERNS.md line 477).
@@ -218,7 +228,7 @@ final class MarkdownTextStorage: NSTextStorage {
 
     // MARK: - Per-construct attribute writers
 
-    /// Apply bold styling: Josefin Sans SemiBold on content, .sidekickHiddenMarker on `**` markers.
+    /// Apply bold styling: Geist SemiBold on content, .sidekickHiddenMarker on `**` markers.
     private func applyBold(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findBoldRanges(in: substring)
         for m in matches {
@@ -231,8 +241,8 @@ final class MarkdownTextStorage: NSTextStorage {
         }
     }
 
-    /// Apply italic styling: Josefin Sans Italic on content, .sidekickHiddenMarker on `*`/`_` markers.
-    /// The helper resolves the Josefin Sans italic cut by family+trait; falls
+    /// Apply italic styling: Geist Italic on content, .sidekickHiddenMarker on `*`/`_` markers.
+    /// The helper resolves the Geist italic cut by family+trait; falls
     /// back to the italic-synthesized system font if the family isn't loaded.
     private func applyItalic(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findItalicRanges(in: substring)
@@ -382,9 +392,9 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.sidekickBulletMarker, value: true, range: markerRange)
             // Bullet glyph uses SF Pro bold at body size. MarkdownLayoutManager
             // substitutes U+2022 using whatever font is on the marker char; SF
-            // Pro's bullet glyph sits at x-height mid reliably, while Josefin
-            // Sans's bullet drifts vertically and looks off-centered with body
-            // text. Matching body size (15pt) also keeps line height consistent
+            // Pro's bullet glyph sits at x-height mid reliably, while Geist's
+            // bullet drifts vertically and looks off-centered with body text.
+            // Matching body size (15pt) also keeps line height consistent
             // with surrounding lines so bullet rows don't grow taller than
             // non-bullet rows.
             backing.addAttribute(.font,

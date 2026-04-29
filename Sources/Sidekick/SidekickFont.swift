@@ -1,20 +1,21 @@
-/// Josefin Sans font routing + registration for Sidekick.
+/// Geist font routing + registration for Sidekick.
 ///
-/// Josefin Sans ships with Sidekick as bundled TTF (`Resources/Fonts/*.ttf`,
-/// copied into `.app/Contents/Resources/Fonts/` by build-and-run.sh). The
-/// .app's Info.plist sets `ATSApplicationFontsPath = Fonts` so AppKit
-/// registers the fonts at launch. `register()` below is a belt-and-suspenders
-/// path for `swift run` dev builds where Info.plist is not present.
+/// Geist (Vercel, OFL) ships with Sidekick as bundled TTFs
+/// (`Resources/Fonts/Geist-*.ttf`, copied into `.app/Contents/Resources/Fonts/`
+/// by build-and-run.sh). The .app's Info.plist sets
+/// `ATSApplicationFontsPath = Fonts` so AppKit registers the fonts at launch.
+/// `register()` below is a belt-and-suspenders path for `swift run` dev builds
+/// where Info.plist is not present.
 ///
 /// Code spans (inline + fenced) intentionally stay on
-/// NSFont.monospacedSystemFont — Josefin Sans is not a programming font and
+/// NSFont.monospacedSystemFont — Geist Sans is not a programming font and
 /// using it for code would hurt legibility.
 import AppKit
 import CoreText
 import SwiftUI
 
 enum SidekickFont {
-    static let family = "Josefin Sans"
+    static let family = "Geist"
 
     /// Programmatic font registration — safety net for non-bundle runs.
     /// Looks in Bundle.main's `Fonts` resource directory first (the path
@@ -60,7 +61,7 @@ enum SidekickFont {
             return f
         }
         // Fallback preserves the shape of the requested face so the UI still
-        // reads as Regular/Bold/Italic even when Josefin Sans isn't loaded
+        // reads as Regular/Bold/Italic even when Geist isn't loaded
         // (e.g. before register() runs or inside unit tests).
         let sysTraits: NSFontDescriptor.SymbolicTraits = italic ? [.italic] : []
         let base = NSFont.systemFont(ofSize: size, weight: weight)
@@ -88,28 +89,28 @@ enum SidekickFont {
 }
 
 extension Font {
-    /// SwiftUI Font.custom using the PostScript name for the exact Josefin Sans
-    /// cut, since Josefin ships with mixed PostScript naming
-    /// (`JosefinSans-Thin`, `JosefinSansRoman-Regular`, `JosefinSansItalic-*`)
-    /// that Font.custom won't resolve by family name + weight alone.
-    static func josefin(size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
-        .custom(josefinPostScriptName(for: weight, italic: italic), size: size)
+    /// SwiftUI Font.custom using the PostScript name for the exact Geist cut.
+    /// Geist's PostScript names follow `Geist-{Weight}{Italic?}` cleanly, so
+    /// resolution by family + weight would also work — the explicit map keeps
+    /// SwiftUI in lock-step with the AppKit `SidekickFont.ns(...)` path.
+    static func geist(size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
+        .custom(geistPostScriptName(for: weight, italic: italic), size: size)
     }
 }
 
-private func josefinPostScriptName(for weight: Font.Weight, italic: Bool) -> String {
+private func geistPostScriptName(for weight: Font.Weight, italic: Bool) -> String {
     switch (weight, italic) {
-    case (.thin, false):     return "JosefinSans-Thin"
-    case (.thin, true):      return "JosefinSans-ThinItalic"
-    case (.light, false):    return "JosefinSansRoman-Light"
-    case (.light, true):     return "JosefinSansItalic-Light"
-    case (.medium, false):   return "JosefinSansRoman-Medium"
-    case (.medium, true):    return "JosefinSansItalic-Medium"
-    case (.semibold, false): return "JosefinSansRoman-SemiBold"
-    case (.semibold, true):  return "JosefinSansItalic-SemiBold"
-    case (.bold, false):     return "JosefinSansRoman-Bold"
-    case (.bold, true):      return "JosefinSansItalic-Bold"
-    case (_, false):         return "JosefinSansRoman-Regular"
-    case (_, true):          return "JosefinSansItalic-Regular"
+    case (.thin, false):     return "Geist-Thin"
+    case (.thin, true):      return "Geist-ThinItalic"
+    case (.light, false):    return "Geist-Light"
+    case (.light, true):     return "Geist-LightItalic"
+    case (.medium, false):   return "Geist-Medium"
+    case (.medium, true):    return "Geist-MediumItalic"
+    case (.semibold, false): return "Geist-SemiBold"
+    case (.semibold, true):  return "Geist-SemiBoldItalic"
+    case (.bold, false):     return "Geist-Bold"
+    case (.bold, true):      return "Geist-BoldItalic"
+    case (_, false):         return "Geist-Regular"
+    case (_, true):          return "Geist-Italic"
     }
 }
