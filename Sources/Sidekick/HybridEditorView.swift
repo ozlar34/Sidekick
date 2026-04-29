@@ -20,6 +20,67 @@
 import AppKit
 import SwiftUI
 
+/// NSTextView subclass that floors its frame height at the enclosing scroll
+/// view's clip-view height. Without this, a short note's text view ends at
+/// content height, leaving a "dead zone" below — clicks in that empty area
+/// fall outside the text view's frame and never reach it. With the floor in
+/// place, NSTextView's built-in "click below the last glyph → caret at end
+/// of document" behavior covers the empty area for free, no mouseDown
+/// override required.
+///
+/// Two paths feed the height update:
+///   1. setConstrainedFrameSize — invoked by the layout manager after every
+///      text edit. Flooring `desiredSize.height` at clip-view height makes
+///      every layout-driven resize respect the floor.
+///   2. clipFrameChanged — invoked when the scroll view (and thus the clip
+///      view) resizes, e.g. window resize. Layout doesn't re-fire on a
+///      height-only resize, so we re-floor explicitly here.
+///
+/// `widthTracksTextView` + `autoresizingMask = .width` continue to handle
+/// width tracking; we only own the vertical floor.
+final class HybridTextView: NSTextView {
+    override func setConstrainedFrameSize(_ desiredSize: NSSize) {
+        var size = desiredSize
+        if let clipHeight = enclosingScrollView?.contentView.bounds.height {
+            size.height = max(size.height, clipHeight)
+        }
+        super.setConstrainedFrameSize(size)
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        guard let clipView = enclosingScrollView?.contentView else { return }
+        // Remove first to avoid stacking observers if the view re-mounts
+        // (e.g. SwiftUI tearing down and recreating the NSViewRepresentable).
+        NotificationCenter.default.removeObserver(
+            self, name: NSView.frameDidChangeNotification, object: clipView
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(clipFrameChanged),
+            name: NSView.frameDidChangeNotification, object: clipView
+        )
+        clipView.postsFrameChangedNotifications = true
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func clipFrameChanged() {
+        guard let lm = layoutManager, let tc = textContainer else { return }
+        lm.ensureLayout(for: tc)
+        let used = lm.usedRect(for: tc)
+        let clipHeight = enclosingScrollView?.contentView.bounds.height ?? used.height
+        let insetY = textContainerInset.height * 2
+        let target = max(used.height + insetY, clipHeight)
+        if abs(frame.height - target) > 0.5 {
+            var f = frame
+            f.size.height = target
+            frame = f
+        }
+    }
+}
+
 struct HybridEditorView: NSViewRepresentable {
     @Binding var text: String
     @ObservedObject var controller: HybridEditorController   // NEW (D-TB-02)
@@ -53,7 +114,7 @@ struct HybridEditorView: NSViewRepresentable {
         // these, the text view stays 0×0, clicks never land on it, and typing
         // never reaches the storage. (This is distinct from the .zero frame
         // that works for standalone NSTextView instances.)
-        let textView = NSTextView(
+        let textView = HybridTextView(
             frame: NSRect(x: 0, y: 0, width: 100, height: 0),
             textContainer: container
         )
