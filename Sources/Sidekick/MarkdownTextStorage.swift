@@ -35,13 +35,13 @@ final class MarkdownTextStorage: NSTextStorage {
     /// the re-application is what makes the gap survive edits elsewhere.
     private static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 10
+        style.paragraphSpacing = 16
         // Absolute line-height clamp — see HybridEditorView.makeNSView for
         // the rationale (caret height tracks layout fragment height on
-        // macOS 14+ via NSTextInsertionIndicator). 28pt over 22pt H1 gives
+        // macOS 14+ via NSTextInsertionIndicator). 36pt over 28pt H1 gives
         // the title visible breathing room.
-        style.minimumLineHeight = 28
-        style.maximumLineHeight = 28
+        style.minimumLineHeight = 36
+        style.maximumLineHeight = 36
         return style
     }()
 
@@ -383,9 +383,9 @@ final class MarkdownTextStorage: NSTextStorage {
             let content = shift(m.contentRange, by: offset)
             let font: NSFont
             switch m.level {
-            case 1:        font = NSFont.systemFont(ofSize: 22, weight: .bold)
-            case 2:        font = NSFont.systemFont(ofSize: 18.5, weight: .semibold)
-            case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+            case 1:        font = NSFont.systemFont(ofSize: 28, weight: .bold)
+            case 2:        font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+            case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 18, weight: .semibold)
             default:       font = NSFont.systemFont(ofSize: 15, weight: .regular)
             }
             backing.addAttribute(.font, value: font, range: content)
