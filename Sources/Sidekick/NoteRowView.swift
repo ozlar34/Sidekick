@@ -124,29 +124,32 @@ struct NoteRowView: View {
     @Binding var selectedID: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(NoteRowFormatting.title(for: note.body))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(NoteRowFormatting.title(for: note.body))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 if let modified = note.modified {
                     Text(NoteRowFormatting.formattedModifiedTime(modified))
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
-                        .layoutPriority(1)
                 }
-            }
-
-            if let preview = NoteRowFormatting.preview(for: note.body) {
-                Text(preview)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if let preview = NoteRowFormatting.preview(for: note.body) {
+                    if note.modified != nil {
+                        Text("·")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(preview)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
         }
         .padding(.leading, 12)
