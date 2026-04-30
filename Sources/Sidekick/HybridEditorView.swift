@@ -256,28 +256,13 @@ struct HybridEditorView: NSViewRepresentable {
         }
 
         func updateCaretTypingAttributes(in tv: NSTextView) {
-            let ns = tv.string as NSString
-            let caretLoc = tv.selectedRange().location
-            let firstNewline = ns.range(of: "\n")
-            // Caret is on line 1 if there is no newline yet (single-line doc)
-            // or its position is at/before the first newline character.
-            let isOnFirstLine = firstNewline.location == NSNotFound
-                                || caretLoc <= firstNewline.location
-            let font: NSFont = isOnFirstLine
-                ? NSFont.systemFont(ofSize: 22, weight: .bold)
-                : NSFont.systemFont(ofSize: 15, weight: .regular)
-            // Pair the paragraph style with the font so the caret's layout
-            // fragment height matches what applyFirstLineH1 will install
-            // *after* the first keystroke. Without this, the caret renders
-            // with defaultParagraphStyle (18pt line height) on an empty doc
-            // and jumps down to the H1 line box (36pt) when the first
-            // character lands.
-            let paragraphStyle: NSParagraphStyle = isOnFirstLine
-                ? MarkdownTextStorage.h1ParagraphStyle
-                : MarkdownTextStorage.bodyParagraphStyle
+            // Body editor is uniformly body-styled now that title lives in
+            // its own field. Pin font + paragraph style so the caret on an
+            // empty doc reserves the body line box (18pt) instead of falling
+            // back to defaultParagraphStyle metrics.
             var attrs = tv.typingAttributes
-            attrs[.font] = font
-            attrs[.paragraphStyle] = paragraphStyle
+            attrs[.font] = NSFont.systemFont(ofSize: 15, weight: .regular)
+            attrs[.paragraphStyle] = MarkdownTextStorage.bodyParagraphStyle
             tv.typingAttributes = attrs
         }
 

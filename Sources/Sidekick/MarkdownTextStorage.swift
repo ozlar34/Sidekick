@@ -27,12 +27,13 @@ final class MarkdownTextStorage: NSTextStorage {
 
     private let backing = NSMutableAttributedString()
 
-    /// Paragraph style applied to H1 paragraphs so the title line gets visible
-    /// breathing room above the body. paragraphSpacing adds space *after* the
-    /// paragraph, so attaching it to the H1 paragraph creates the gap before
-    /// whatever follows. Re-applied on every edit pass via applyFirstLineH1
-    /// and applyHeadings — clearManagedAttributes strips .paragraphStyle, so
-    /// the re-application is what makes the gap survive edits elsewhere.
+    /// Paragraph style applied to H1 paragraphs (explicit `# ` headings) so
+    /// the title line gets visible breathing room above the body.
+    /// paragraphSpacing adds space *after* the paragraph, so attaching it to
+    /// the H1 paragraph creates the gap before whatever follows. Re-applied
+    /// on every edit pass via applyHeadings — clearManagedAttributes strips
+    /// .paragraphStyle, so the re-application is what makes the gap survive
+    /// edits elsewhere.
     static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         style.paragraphSpacing = 16
@@ -126,11 +127,6 @@ final class MarkdownTextStorage: NSTextStorage {
         // land outside the edit's atomic notification window.
         if backing.length > 0 {
             applyAttributes(forEditedRange: editedRange)
-            // Always reapply first-line H1 after the paragraph reparse — the
-            // reparse range is paragraph-scoped, so edits on later lines won't
-            // touch line 0. Running this every pass keeps line 0's auto-H1
-            // style consistent even as the edit happens elsewhere in the doc.
-            applyFirstLineH1()
         }
         super.processEditing()
     }
@@ -267,8 +263,8 @@ final class MarkdownTextStorage: NSTextStorage {
         // value baked in at the previous appearance.
         backing.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
         // Stamp the body paragraph style so every reparsed range picks up
-        // lineHeightMultiple / paragraphSpacing. H1 paragraphs overwrite
-        // this with h1ParagraphStyle in applyHeadings / applyFirstLineH1.
+        // lineHeightMultiple / paragraphSpacing. Explicit `# ` heading
+        // paragraphs overwrite this with h1ParagraphStyle in applyHeadings.
         backing.addAttribute(.paragraphStyle,
                              value: Self.bodyParagraphStyle,
                              range: range)
@@ -355,43 +351,6 @@ final class MarkdownTextStorage: NSTextStorage {
                 }
             }
         }
-    }
-
-    /// Render a plain first line as H1 (bold 14×1.5) when it doesn't already
-    /// begin with a CommonMark block marker (`#`, `- `, `* `, ```` ``` ````).
-    /// Preserves the SideNotes / Notes.app convention the v1.1 preview path
-    /// used (commit e1d815e): the first line of a note is its title.
-    ///
-    /// Runs AFTER the per-construct inline parsers so the H1 font wins over any
-    /// inline 14pt bold/italic/code fonts on line 0 — matches the existing
-    /// visible behaviour of `# Heading with **bold**` lines (the heading font
-    /// also wins). This is intentional: the first line is a title, not a mixed
-    /// inline span.
-    private func applyFirstLineH1() {
-        guard backing.length > 0 else { return }
-        let ns = backing.string as NSString
-        let firstLineRange = ns.lineRange(for: NSRange(location: 0, length: 0))
-        // Trim the trailing newline (if any) — style the content, not the line break.
-        var contentLength = firstLineRange.length
-        if contentLength > 0,
-           ns.substring(with: NSRange(location: contentLength - 1, length: 1)) == "\n" {
-            contentLength -= 1
-        }
-        guard contentLength > 0 else { return }
-        let firstLine = ns.substring(with: NSRange(location: 0, length: contentLength))
-        let trimmed = firstLine.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        // Don't clobber explicit block-level markers.
-        if trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("```") {
-            return
-        }
-        let range = NSRange(location: 0, length: contentLength)
-        backing.addAttribute(.font,
-                             value: NSFont.systemFont(ofSize: 22, weight: .bold),
-                             range: range)
-        backing.addAttribute(.paragraphStyle,
-                             value: Self.h1ParagraphStyle,
-                             range: firstLineRange)
     }
 
     /// Apply heading styling: level-specific font size on content, .sidekickHiddenMarker on `# ` prefix.
