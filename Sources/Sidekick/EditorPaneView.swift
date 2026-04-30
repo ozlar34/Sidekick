@@ -7,10 +7,13 @@ struct EditorPaneView: View {
     let note: Note
     @Binding var selectedID: UUID?
 
+    @State private var localTitle: String = ""
     @State private var localBody: String = ""
     @State private var debouncer = Debouncer(interval: 0.5)
-    @FocusState private var editorFocused: Bool
+    @FocusState private var focus: EditorField?
     @Environment(\.setDocumentEdited) private var setDocumentEdited
+
+    private enum EditorField: Hashable { case title, body }
 
     // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
     // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
@@ -43,6 +46,28 @@ struct EditorPaneView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
+            // Title field — discrete, replaces the v1.2 first-line auto-H1.
+            // Padding aligns horizontally with the editor's textContainerInset
+            // (20pt h, HybridEditorView.swift) so the title and body text
+            // share a left edge.
+            TextField("Untitled", text: $localTitle)
+                .textFieldStyle(.plain)
+                .font(.system(size: 22, weight: .semibold))
+                .focused($focus, equals: .title)
+                .submitLabel(.next)
+                .onSubmit { focusBody() }
+                .onKeyPress(.tab) {
+                    focusBody()
+                    return .handled
+                }
+                .onChange(of: localTitle) { _, newValue in
+                    scheduleAutoSave(title: newValue, body: localBody)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 6)
+                .background(Color(.textBackgroundColor))
+
             // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). Matches the editor's
             // textBackground so toolbar + editor read as one continuous surface
             // — no hairline divider needed.
@@ -58,7 +83,7 @@ struct EditorPaneView: View {
             // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
             HybridEditorView(text: $localBody, controller: editorController)
                 .onChange(of: localBody) { _, newValue in
-                    scheduleAutoSave(body: newValue)
+                    scheduleAutoSave(title: localTitle, body: newValue)
                 }
                 .background(Color(.textBackgroundColor))
 
@@ -69,7 +94,7 @@ struct EditorPaneView: View {
                     Spacer()
                     Button("Retry") {
                         diskWriteError = false
-                        scheduleAutoSave(body: localBody)
+                        scheduleAutoSave(title: localTitle, body: localBody)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -79,30 +104,31 @@ struct EditorPaneView: View {
             }
         }
         .onAppear {
+            localTitle = note.title
             localBody = note.body
-            focusEditorAfterDelay()
+            seedFocusForCurrentNote()
         }
         .onChange(of: note.id) { _, _ in
+            localTitle = note.title
             localBody = note.body
             diskWriteError = false
-            focusEditorAfterDelay()
+            seedFocusForCurrentNote()
         }
     }
 
     // MARK: - Auto-save (STORE-05, EDIT-04, EDIT-05)
 
-    private func scheduleAutoSave(body: String) {
+    private func scheduleAutoSave(title: String, body: String) {
         // Immediate unsaved indicator (EDIT-05)
         setDocumentEdited(true)
 
         let id = note.id
-        let noteTitle = note.title
         let editedSetter = setDocumentEdited
         let storeRef = store
         Task {
             await debouncer.schedule {
                 do {
-                    try await storeRef.update(id, title: noteTitle, body: body)
+                    try await storeRef.update(id, title: title, body: body)
                     await MainActor.run { editedSetter(false) }
                 } catch {
                     NSLog("[Sidekick] autosave failed: \(error.localizedDescription)")
@@ -125,12 +151,28 @@ struct EditorPaneView: View {
         }
     }
 
-    // MARK: - Auto-focus (RESEARCH Pitfall 2: 50ms delay required)
+    // MARK: - Focus management
 
-    private func focusEditorAfterDelay() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            editorFocused = true
+    /// Pick the right starting field for the freshly-mounted note. Empty
+    /// notes (newly-created via ⌘N) get title focus so the user can type a
+    /// name immediately; otherwise let AppKit hand first-responder to the
+    /// NSTextView naturally — no SwiftUI focus needed.
+    private func seedFocusForCurrentNote() {
+        if note.title.isEmpty && note.body.isEmpty {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                focus = .title
+            }
+        }
+    }
+
+    /// Hand off from the SwiftUI title field to the AppKit body editor.
+    /// Releases SwiftUI focus first so .focused() doesn't fight AppKit's
+    /// makeFirstResponder.
+    private func focusBody() {
+        focus = nil
+        if let tv = editorController.textView {
+            tv.window?.makeFirstResponder(tv)
         }
     }
 
