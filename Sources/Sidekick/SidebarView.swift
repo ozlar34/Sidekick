@@ -20,9 +20,12 @@ struct SidebarView: View {
     var body: some View {
         HStack(spacing: 0) {
             // ResizeHandleView is attached as .overlay(alignment: .leading) below
-            // Sidebar — 140pt, vibrancy via ZStack
+            // Sidebar — 140pt, vibrancy via ZStack with windowBackground tint
+            // layered on top to dampen desktop bleed-through (borderless panels
+            // can't rely on opaque window chrome behind the vibrancy view).
             ZStack {
                 VisualEffectBackground()
+                Color(.windowBackgroundColor).opacity(0.85)
                 VStack(spacing: 0) {
                     HStack {
                         Text("Notes")
