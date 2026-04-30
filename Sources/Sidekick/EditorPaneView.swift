@@ -53,8 +53,8 @@ struct EditorPaneView: View {
                 .padding(.vertical, 6)
                 .background(Color(.controlBackgroundColor))
             Rectangle()
-                .fill(Color(NSColor(white: 0.55, alpha: 1.0)))
-                .frame(height: 1)
+                .fill(Color(.separatorColor))
+                .frame(height: 0.5)
 
             // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
             HybridEditorView(text: $localBody, controller: editorController)
