@@ -363,7 +363,8 @@ final class NoteStore: ObservableObject {
     }
 
     /// Title-bootstrap chain used when migrating pre-title `.index.json`
-    /// entries. Mirrors the previous `NoteRowFormatting.title(for:)` logic.
+    /// entries: first explicit `# `/`## ` heading → first meaningful line
+    /// → empty string (sidebar shows "Untitled" placeholder for empty).
     private static func deriveTitle(fromBody body: String) -> String {
         if let heading = HeadingExtractor.firstHeading(in: body) {
             return String(heading.prefix(80))

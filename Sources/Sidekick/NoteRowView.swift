@@ -28,31 +28,11 @@ enum NoteRowFormatting {
         return meaningfulLines(in: body).first
     }
 
-    /// G-04: Title derivation chain —
-    ///   firstHeading → firstMeaningfulLine → "Untitled"
-    /// Cap at 80 chars (SwiftUI .lineLimit(1).truncationMode(.tail) further truncates visually,
-    /// but the 80-char hard cap avoids pathological thousand-character single-line bodies).
-    static func title(for body: String) -> String {
-        if let heading = HeadingExtractor.firstHeading(in: body) {
-            return String(heading.prefix(80))
-        }
-        if let line = firstMeaningfulLine(for: body) {
-            return String(line.prefix(80))
-        }
-        return "Untitled"
-    }
-
-    /// Preview — the line *after* whatever became the title.
-    /// - Heading present: title is the heading, preview = first meaningful body line.
-    /// - No heading: title is the first meaningful line, preview = the second.
-    /// 50-char cap. Returns nil when there is no distinct preview line.
+    /// Preview — first meaningful body line, 50-char cap. Title now lives
+    /// in its own field (Note.title), so the body is freely scanned from
+    /// line 1. Returns nil when the body has no meaningful content.
     static func preview(for body: String) -> String? {
-        let lines = meaningfulLines(in: body)
-        if HeadingExtractor.firstHeading(in: body) != nil {
-            return lines.first.map { String($0.prefix(50)) }
-        }
-        guard lines.count >= 2 else { return nil }
-        return String(lines[1].prefix(50))
+        return meaningfulLines(in: body).first.map { String($0.prefix(50)) }
     }
 
     private static let timeOfDayFormatter: DateFormatter = {
@@ -125,7 +105,7 @@ struct NoteRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(NoteRowFormatting.title(for: note.body))
+            Text(note.title.isEmpty ? "Untitled" : note.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
