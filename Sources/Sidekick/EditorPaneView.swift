@@ -43,7 +43,9 @@ struct EditorPaneView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
-            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
+            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). Matches the editor's
+            // textBackground so toolbar + editor read as one continuous surface
+            // — no hairline divider needed.
             FormattingToolbarView(
                 wrapSelection: wrapSelection,
                 applyLinePrefix: applyLinePrefix,
@@ -51,10 +53,7 @@ struct EditorPaneView: View {
             )
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(Color(.controlBackgroundColor))
-            Rectangle()
-                .fill(Color(.separatorColor))
-                .frame(height: 0.5)
+                .background(Color(.textBackgroundColor))
 
             // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
             HybridEditorView(text: $localBody, controller: editorController)
