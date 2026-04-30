@@ -57,16 +57,6 @@ struct SidebarView: View {
                     Divider()
 
                     HStack {
-                        Button {
-                            Task { await store.reload() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 14, weight: .medium))
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Refresh notes from disk")
-                        .accessibilityLabel("Refresh notes from disk")
-
                         Spacer()
 
                         Button(action: {
