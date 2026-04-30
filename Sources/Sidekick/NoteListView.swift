@@ -24,7 +24,7 @@ struct NoteListView: View {
                     }
                 }
             }
-            Section("Notes") {
+            if pinnedNotes.isEmpty {
                 ForEach(regularNotes) { note in
                     NoteRowView(note: note, store: store, selectedID: $selectedID)
                         .tag(note.id)
@@ -32,9 +32,21 @@ struct NoteListView: View {
                 .onMove { source, destination in
                     var regularIDs = regularNotes.map(\.id)
                     regularIDs.move(fromOffsets: source, toOffset: destination)
-                    let pinnedIDs = pinnedNotes.map(\.id)
-                    let fullOrder = pinnedIDs + regularIDs
-                    Task { try? await store.reorder(fullOrder) }
+                    Task { try? await store.reorder(regularIDs) }
+                }
+            } else {
+                Section("Notes") {
+                    ForEach(regularNotes) { note in
+                        NoteRowView(note: note, store: store, selectedID: $selectedID)
+                            .tag(note.id)
+                    }
+                    .onMove { source, destination in
+                        var regularIDs = regularNotes.map(\.id)
+                        regularIDs.move(fromOffsets: source, toOffset: destination)
+                        let pinnedIDs = pinnedNotes.map(\.id)
+                        let fullOrder = pinnedIDs + regularIDs
+                        Task { try? await store.reorder(fullOrder) }
+                    }
                 }
             }
         }
