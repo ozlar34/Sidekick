@@ -33,7 +33,7 @@ final class MarkdownTextStorage: NSTextStorage {
     /// whatever follows. Re-applied on every edit pass via applyFirstLineH1
     /// and applyHeadings — clearManagedAttributes strips .paragraphStyle, so
     /// the re-application is what makes the gap survive edits elsewhere.
-    private static let h1ParagraphStyle: NSParagraphStyle = {
+    static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         style.paragraphSpacing = 16
         // Absolute line-height clamp — see HybridEditorView.makeNSView for

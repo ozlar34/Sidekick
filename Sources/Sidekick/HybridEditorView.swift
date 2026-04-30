@@ -266,8 +266,18 @@ struct HybridEditorView: NSViewRepresentable {
             let font: NSFont = isOnFirstLine
                 ? NSFont.systemFont(ofSize: 22, weight: .bold)
                 : NSFont.systemFont(ofSize: 15, weight: .regular)
+            // Pair the paragraph style with the font so the caret's layout
+            // fragment height matches what applyFirstLineH1 will install
+            // *after* the first keystroke. Without this, the caret renders
+            // with defaultParagraphStyle (18pt line height) on an empty doc
+            // and jumps down to the H1 line box (36pt) when the first
+            // character lands.
+            let paragraphStyle: NSParagraphStyle = isOnFirstLine
+                ? MarkdownTextStorage.h1ParagraphStyle
+                : MarkdownTextStorage.bodyParagraphStyle
             var attrs = tv.typingAttributes
             attrs[.font] = font
+            attrs[.paragraphStyle] = paragraphStyle
             tv.typingAttributes = attrs
         }
 
