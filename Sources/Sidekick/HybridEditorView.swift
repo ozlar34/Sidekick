@@ -129,17 +129,15 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isEditable = true
         textView.isSelectable = true
         textView.textContainerInset = NSSize(width: 0, height: 12)        // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
-        textView.font = SidekickFont.ns(size: 15, weight: .regular)
-        // Absolute line-height clamp instead of lineHeightMultiple. Geist's
-        // intrinsic ascent+descent+leading is airy, so a multiplier compounds
-        // it and also inflates the caret rect: AppKit derives the insertion
-        // point's height from the layout fragment height, and on macOS 14+
-        // it uses NSTextInsertionIndicator (a sibling subview) so the legacy
-        // drawInsertionPoint(in:color:turnedOn:) override is bypassed. Setting
-        // min == max forces a fixed pixel line box regardless of font metrics
-        // so the caret stays in proportion to the rendered glyph height. The
-        // bumped paragraphSpacing adds breathing room between bullets and
-        // paragraphs without growing the line box (and thus the caret).
+        textView.font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        // Absolute line-height clamp instead of lineHeightMultiple. AppKit
+        // derives the insertion-point height from the layout fragment height,
+        // and on macOS 14+ uses NSTextInsertionIndicator (a sibling subview)
+        // so the legacy drawInsertionPoint(in:color:turnedOn:) override is
+        // bypassed. Setting min == max forces a fixed pixel line box regardless
+        // of font metrics so the caret stays in proportion to the rendered
+        // glyph height. paragraphSpacing adds breathing room between bullets
+        // and paragraphs without growing the line box (and thus the caret).
         let defaultStyle = NSMutableParagraphStyle()
         defaultStyle.minimumLineHeight = 18
         defaultStyle.maximumLineHeight = 18
@@ -266,8 +264,8 @@ struct HybridEditorView: NSViewRepresentable {
             let isOnFirstLine = firstNewline.location == NSNotFound
                                 || caretLoc <= firstNewline.location
             let font: NSFont = isOnFirstLine
-                ? SidekickFont.ns(size: 22, weight: .bold)
-                : SidekickFont.ns(size: 15, weight: .regular)
+                ? NSFont.systemFont(ofSize: 22, weight: .bold)
+                : NSFont.systemFont(ofSize: 15, weight: .regular)
             var attrs = tv.typingAttributes
             attrs[.font] = font
             tv.typingAttributes = attrs

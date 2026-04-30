@@ -39,8 +39,7 @@ final class MarkdownTextStorage: NSTextStorage {
         // Absolute line-height clamp — see HybridEditorView.makeNSView for
         // the rationale (caret height tracks layout fragment height on
         // macOS 14+ via NSTextInsertionIndicator). 28pt over 22pt H1 gives
-        // the title visible breathing room without inheriting Geist's airy
-        // intrinsic metrics.
+        // the title visible breathing room.
         style.minimumLineHeight = 28
         style.maximumLineHeight = 28
         return style
@@ -55,11 +54,12 @@ final class MarkdownTextStorage: NSTextStorage {
     static let bodyParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         // See HybridEditorView.makeNSView for why this is absolute (min==max)
-        // instead of lineHeightMultiple — Geist's intrinsic line metrics are
-        // airy and a multiplier compounds them, blowing up the caret rect on
-        // macOS 14+ (NSTextInsertionIndicator follows the layout fragment).
-        // paragraphSpacing carries the breathing-room budget instead, since
-        // it adds gap between paragraphs without growing the line box.
+        // instead of lineHeightMultiple — caret height tracks layout fragment
+        // height on macOS 14+ (NSTextInsertionIndicator follows the layout
+        // fragment), so a multiplier would inflate the caret rect with any
+        // font that has airy intrinsic metrics. paragraphSpacing carries the
+        // breathing-room budget instead, since it adds gap between paragraphs
+        // without growing the line box.
         style.minimumLineHeight = 18
         style.maximumLineHeight = 18
         style.paragraphSpacing = 8
@@ -234,11 +234,11 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
         backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
-        // Reset font to the base Geist 15pt editor font, matching
+        // Reset font to the base 15pt editor font, matching
         // HybridEditorView textView.font. Code blocks and inline code
         // re-apply mono explicitly. Do NOT use 16pt — that's the preview
         // reader font (PATTERNS.md line 477).
-        let baseFont = SidekickFont.ns(size: 15, weight: .regular)
+        let baseFont = NSFont.systemFont(ofSize: 15, weight: .regular)
         backing.addAttribute(.font, value: baseFont, range: range)
         // Pin foreground to NSColor.textColor so it stays dynamic across
         // light/dark appearance and persists across note-switch full-text
@@ -256,7 +256,7 @@ final class MarkdownTextStorage: NSTextStorage {
 
     // MARK: - Per-construct attribute writers
 
-    /// Apply bold styling: Geist SemiBold on content, .sidekickHiddenMarker on `**` markers.
+    /// Apply bold styling: SemiBold on content, .sidekickHiddenMarker on `**` markers.
     private func applyBold(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findBoldRanges(in: substring)
         for m in matches {
@@ -264,23 +264,24 @@ final class MarkdownTextStorage: NSTextStorage {
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
             backing.addAttribute(.font,
-                                 value: SidekickFont.ns(size: 15, weight: .semibold),
+                                 value: NSFont.systemFont(ofSize: 15, weight: .semibold),
                                  range: content)
         }
     }
 
-    /// Apply italic styling: Geist Italic on content, .sidekickHiddenMarker on `*`/`_` markers.
-    /// The helper resolves the Geist italic cut by family+trait; falls
-    /// back to the italic-synthesized system font if the family isn't loaded.
+    /// Apply italic styling: italic on content, .sidekickHiddenMarker on `*`/`_` markers.
+    /// Resolves the italic cut via NSFontManager.convert(_:toHaveTrait:).
     private func applyItalic(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findItalicRanges(in: substring)
         for m in matches {
             tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
-            backing.addAttribute(.font,
-                                 value: SidekickFont.ns(size: 15, weight: .regular, italic: true),
-                                 range: content)
+            let italic = NSFontManager.shared.convert(
+                NSFont.systemFont(ofSize: 15, weight: .regular),
+                toHaveTrait: .italicFontMask
+            )
+            backing.addAttribute(.font, value: italic, range: content)
         }
     }
 
@@ -366,7 +367,7 @@ final class MarkdownTextStorage: NSTextStorage {
         }
         let range = NSRange(location: 0, length: contentLength)
         backing.addAttribute(.font,
-                             value: SidekickFont.ns(size: 22, weight: .bold),
+                             value: NSFont.systemFont(ofSize: 22, weight: .bold),
                              range: range)
         backing.addAttribute(.paragraphStyle,
                              value: Self.h1ParagraphStyle,
@@ -382,10 +383,10 @@ final class MarkdownTextStorage: NSTextStorage {
             let content = shift(m.contentRange, by: offset)
             let font: NSFont
             switch m.level {
-            case 1:        font = SidekickFont.ns(size: 22, weight: .bold)
-            case 2:        font = SidekickFont.ns(size: 18.5, weight: .semibold)
-            case 3, 4, 5, 6: font = SidekickFont.ns(size: 15, weight: .semibold)
-            default:       font = SidekickFont.ns(size: 15, weight: .regular)
+            case 1:        font = NSFont.systemFont(ofSize: 22, weight: .bold)
+            case 2:        font = NSFont.systemFont(ofSize: 18.5, weight: .semibold)
+            case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+            default:       font = NSFont.systemFont(ofSize: 15, weight: .regular)
             }
             backing.addAttribute(.font, value: font, range: content)
             if m.level == 1 {
@@ -481,7 +482,7 @@ final class MarkdownTextStorage: NSTextStorage {
                header.location >= 0,
                header.location + header.length <= backing.length {
                 backing.addAttribute(.font,
-                                     value: SidekickFont.ns(size: 15, weight: .semibold),
+                                     value: NSFont.systemFont(ofSize: 15, weight: .semibold),
                                      range: header)
             }
 

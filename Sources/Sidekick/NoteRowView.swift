@@ -127,14 +127,14 @@ struct NoteRowView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(NoteRowFormatting.title(for: note.body))
-                    .font(.geist(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
                 if let modified = note.modified {
                     Text(NoteRowFormatting.formattedModifiedTime(modified))
-                        .font(.geist(size: 11))
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .layoutPriority(1)
@@ -143,7 +143,7 @@ struct NoteRowView: View {
 
             if let preview = NoteRowFormatting.preview(for: note.body) {
                 Text(preview)
-                    .font(.geist(size: 11))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)

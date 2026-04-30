@@ -32,7 +32,7 @@ struct EditorPaneView: View {
             // External-edit banner (STORE-07) — top of editor
             if showExternalChangeBanner {
                 HStack {
-                    Text("⚠ File changed on disk").font(.geist(size: 13))
+                    Text("⚠ File changed on disk").font(.system(size: 13))
                     Spacer()
                     Button("Reload") {
                         Task { await reloadFromDisk() }
@@ -66,7 +66,7 @@ struct EditorPaneView: View {
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {
                 HStack {
-                    Text("Could not save — check disk permissions.").font(.geist(size: 13))
+                    Text("Could not save — check disk permissions.").font(.system(size: 13))
                     Spacer()
                     Button("Retry") {
                         diskWriteError = false
