@@ -34,15 +34,6 @@ cp "$BINARY" "$MACOS_DIR/Sidekick"
 # Copy app icon
 cp "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 
-# Copy bundled fonts (Geist) — ATSApplicationFontsPath in Info.plist
-# points here so AppKit auto-registers them at launch. SidekickFont.register()
-# in main.swift handles programmatic registration for non-bundle dev runs.
-if [ -d "Resources/Fonts" ]; then
-    mkdir -p "$RESOURCES_DIR/Fonts"
-    cp Resources/Fonts/*.ttf "$RESOURCES_DIR/Fonts/" 2>/dev/null || true
-    cp Resources/Fonts/*.otf "$RESOURCES_DIR/Fonts/" 2>/dev/null || true
-fi
-
 # Copy SPM-generated resource bundles (e.g. KeyboardShortcuts localizations).
 # Without these, Bundle.module traps when dependencies with resources init.
 cp -R .build/release/*.bundle "$RESOURCES_DIR/" 2>/dev/null || true
@@ -75,8 +66,6 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
-    <key>ATSApplicationFontsPath</key>
-    <string>Fonts</string>
 </dict>
 </plist>
 PLIST

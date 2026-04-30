@@ -444,13 +444,9 @@ final class MarkdownTextStorage: NSTextStorage {
                   shifted.location + 1 <= backing.length else { continue }
             let markerRange = NSRange(location: shifted.location, length: 1)
             backing.addAttribute(.sidekickBulletMarker, value: true, range: markerRange)
-            // Bullet glyph uses SF Pro bold at body size. MarkdownLayoutManager
-            // substitutes U+2022 using whatever font is on the marker char; SF
-            // Pro's bullet glyph sits at x-height mid reliably, while Geist's
-            // bullet drifts vertically and looks off-centered with body text.
-            // Matching body size (15pt) also keeps line height consistent
-            // with surrounding lines so bullet rows don't grow taller than
-            // non-bullet rows.
+            // Bullet glyph uses SF Pro bold at body size — MarkdownLayoutManager
+            // substitutes U+2022 using the marker char's font, and matching body
+            // size (15pt) keeps line height consistent with surrounding rows.
             backing.addAttribute(.font,
                                  value: NSFont.systemFont(ofSize: 15, weight: .bold),
                                  range: markerRange)
