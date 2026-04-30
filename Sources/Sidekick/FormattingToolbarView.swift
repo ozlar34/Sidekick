@@ -533,6 +533,7 @@ private struct FormatButton: View {
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(backgroundColor)
+                        .animation(.easeOut(duration: 0.12), value: isHovered)
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }
