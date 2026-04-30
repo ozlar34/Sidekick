@@ -149,10 +149,10 @@ struct NoteRowView: View {
                     .truncationMode(.tail)
             }
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .padding(.leading, 12)
+        .padding(.trailing, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contextMenu {
             if note.pinned {
