@@ -52,5 +52,6 @@ struct NoteListView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)   // RESEARCH Pitfall 5 — let sidebar vibrancy show through
+        .animation(.easeInOut(duration: 0.15), value: selectedID)
     }
 }
