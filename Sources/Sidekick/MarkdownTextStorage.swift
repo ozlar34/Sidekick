@@ -298,7 +298,7 @@ final class MarkdownTextStorage: NSTextStorage {
                                  value: NSFont.monospacedSystemFont(ofSize: 15 * 0.9, weight: .regular),
                                  range: content)
             backing.addAttribute(.backgroundColor,
-                                 value: NSColor.separatorColor.withAlphaComponent(0.15),
+                                 value: NSColor.quaternaryLabelColor,
                                  range: content)
         }
     }
@@ -448,7 +448,7 @@ final class MarkdownTextStorage: NSTextStorage {
                                      value: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
                                      range: content)
                 backing.addAttribute(.backgroundColor,
-                                     value: NSColor.separatorColor.withAlphaComponent(0.1),
+                                     value: NSColor.quaternaryLabelColor,
                                      range: content)
             }
         }
