@@ -45,6 +45,26 @@ final class MarkdownTextStorage: NSTextStorage {
         return style
     }()
 
+    /// Paragraph style for H2 — proportional line-height (28pt over 22pt
+    /// font) and paragraphSpacing for visual stepdown from H1.
+    private static let h2ParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 12
+        style.minimumLineHeight = 28
+        style.maximumLineHeight = 28
+        return style
+    }()
+
+    /// Paragraph style for H3-H6 — proportional line-height (24pt over 18pt
+    /// font) and modest paragraphSpacing.
+    private static let h3ParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 10
+        style.minimumLineHeight = 24
+        style.maximumLineHeight = 24
+        return style
+    }()
+
     /// Default paragraph style applied to every reparsed range in storage
     /// (before H1 optionally overrides on line 0 / heading paragraphs).
     /// Applied directly on storage rather than relying on
@@ -389,11 +409,16 @@ final class MarkdownTextStorage: NSTextStorage {
             default:       font = NSFont.systemFont(ofSize: 15, weight: .regular)
             }
             backing.addAttribute(.font, value: font, range: content)
-            if m.level == 1 {
+            let headingStyle: NSParagraphStyle?
+            switch m.level {
+            case 1: headingStyle = Self.h1ParagraphStyle
+            case 2: headingStyle = Self.h2ParagraphStyle
+            case 3, 4, 5, 6: headingStyle = Self.h3ParagraphStyle
+            default: headingStyle = nil
+            }
+            if let style = headingStyle {
                 let lineRange = (backing.string as NSString).lineRange(for: content)
-                backing.addAttribute(.paragraphStyle,
-                                     value: Self.h1ParagraphStyle,
-                                     range: lineRange)
+                backing.addAttribute(.paragraphStyle, value: style, range: lineRange)
             }
         }
     }

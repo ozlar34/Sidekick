@@ -39,4 +39,19 @@ final class SidekickPanel: NSPanel {
         hasShadow = true
         animationBehavior = .none  // we animate frame manually
     }
+
+    /// Round the content view's corners to match macOS Sequoia HUD/utility
+    /// panel aesthetics. Applied via the contentView setter so the radius
+    /// follows whatever SwiftUI hosting view PanelController mounts later.
+    /// Window-level shadow (hasShadow=true) renders outside the content layer,
+    /// so masksToBounds clipping doesn't suppress it.
+    override var contentView: NSView? {
+        get { super.contentView }
+        set {
+            super.contentView = newValue
+            newValue?.wantsLayer = true
+            newValue?.layer?.cornerRadius = 12
+            newValue?.layer?.masksToBounds = true
+        }
+    }
 }
