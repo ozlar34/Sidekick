@@ -531,10 +531,10 @@ private struct FormatButton: View {
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: 6)
                         .fill(backgroundColor)
                 )
-                .contentShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .help(tooltip)
