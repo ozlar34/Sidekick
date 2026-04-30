@@ -92,34 +92,39 @@ final class NoteStore: ObservableObject {
         // disk but is missing from .index.json — reconcile on next reload
         // will adopt it with a new UUID, which is a recoverable state.
         var newIndex = currentIndex
-        newIndex.notes.append(IndexEntry(id: id, filename: filename, pinned: false, order: order))
+        newIndex.notes.append(IndexEntry(id: id, filename: filename, title: "", pinned: false, order: order))
         try await io.saveIndex(newIndex)
 
-        let note = Note(id: id, filename: filename, body: "", pinned: false, order: order, modified: Date())
+        let note = Note(id: id, filename: filename, title: "", body: "", pinned: false, order: order, modified: Date())
         notes.append(note)
         return note
     }
 
-    func update(_ id: UUID, body: String) async throws {
+    func update(_ id: UUID, title: String, body: String) async throws {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
         guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
 
         var entry = currentIndex.notes[entryIdx]
         let oldFilename = entry.filename
+        let titleChanged = entry.title != title
 
-        // Compute new filename from first heading.
+        // Compute new filename from title (was: first heading of body).
         var newFilename = oldFilename
-        if let heading = HeadingExtractor.firstHeading(in: body) {
-            let slugBase = await io.slug(for: heading, excluding: id, index: currentIndex)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        if !trimmedTitle.isEmpty {
+            let slugBase = await io.slug(for: trimmedTitle, excluding: id, index: currentIndex)
             if !slugBase.isEmpty {
                 newFilename = slugBase + ".md"
             }
         }
 
-        // Rename if heading changed.
-        if newFilename != oldFilename {
-            try await io.renameNote(oldFilename: oldFilename, newFilename: newFilename)
-            entry.filename = newFilename
+        // Persist title + filename if either changed.
+        if newFilename != oldFilename || titleChanged {
+            if newFilename != oldFilename {
+                try await io.renameNote(oldFilename: oldFilename, newFilename: newFilename)
+                entry.filename = newFilename
+            }
+            entry.title = title
             currentIndex.notes[entryIdx] = entry
             try await io.saveIndex(currentIndex)
         }
@@ -129,6 +134,7 @@ final class NoteStore: ObservableObject {
 
         // Update in-memory notes.
         if let noteIdx = notes.firstIndex(where: { $0.id == id }) {
+            notes[noteIdx].title = title
             notes[noteIdx].body = body
             notes[noteIdx].filename = newFilename
             notes[noteIdx].modified = Date()
@@ -320,12 +326,25 @@ final class NoteStore: ObservableObject {
 
     private func applyIndex(_ index: NoteIndex) async {
         var materialized: [Note] = []
-        for entry in index.notes {
+        var migratedIndex = index
+        var didMigrate = false
+        for (i, entry) in index.notes.enumerated() {
             let body = (try? await io.readNote(filename: entry.filename)) ?? ""
             let modified = await io.mtime(filename: entry.filename)
+            // One-shot title bootstrap for pre-migration index entries.
+            // HeadingExtractor → first meaningful line → "Untitled".
+            let title: String
+            if let stored = entry.title {
+                title = stored
+            } else {
+                title = NoteStore.deriveTitle(fromBody: body)
+                migratedIndex.notes[i].title = title
+                didMigrate = true
+            }
             materialized.append(Note(
                 id: entry.id,
                 filename: entry.filename,
+                title: title,
                 body: body,
                 pinned: entry.pinned,
                 order: entry.order,
@@ -337,5 +356,21 @@ final class NoteStore: ObservableObject {
             if $0.pinned != $1.pinned { return $0.pinned }
             return $0.order < $1.order
         }
+        // Persist bootstrapped titles so the migration runs once per note.
+        if didMigrate {
+            try? await io.saveIndex(migratedIndex)
+        }
+    }
+
+    /// Title-bootstrap chain used when migrating pre-title `.index.json`
+    /// entries. Mirrors the previous `NoteRowFormatting.title(for:)` logic.
+    private static func deriveTitle(fromBody body: String) -> String {
+        if let heading = HeadingExtractor.firstHeading(in: body) {
+            return String(heading.prefix(80))
+        }
+        if let line = NoteRowFormatting.firstMeaningfulLine(for: body) {
+            return String(line.prefix(80))
+        }
+        return ""
     }
 }

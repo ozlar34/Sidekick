@@ -96,12 +96,13 @@ struct EditorPaneView: View {
         setDocumentEdited(true)
 
         let id = note.id
+        let noteTitle = note.title
         let editedSetter = setDocumentEdited
         let storeRef = store
         Task {
             await debouncer.schedule {
                 do {
-                    try await storeRef.update(id, body: body)
+                    try await storeRef.update(id, title: noteTitle, body: body)
                     await MainActor.run { editedSetter(false) }
                 } catch {
                     NSLog("[Sidekick] autosave failed: \(error.localizedDescription)")

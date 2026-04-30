@@ -3,6 +3,7 @@ import Foundation
 struct Note: Identifiable, Equatable {
     let id: UUID
     var filename: String
+    var title: String = ""
     var body: String
     var pinned: Bool
     var order: Int
@@ -17,6 +18,11 @@ struct NoteIndex: Codable, Equatable {
 struct IndexEntry: Codable, Equatable {
     let id: UUID
     var filename: String
+    // Optional for backwards compat with pre-migration .index.json files
+    // (Decodable synthesis tolerates missing keys for Optional). Populated
+    // lazily by NoteStore.applyIndex from HeadingExtractor → first
+    // meaningful line → "Untitled" when nil, then persisted on next save.
+    var title: String? = nil
     var pinned: Bool
     var order: Int
 }
