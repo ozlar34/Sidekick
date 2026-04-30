@@ -2,11 +2,13 @@ import AppKit
 import SwiftUI
 
 /// Bridges `NSVisualEffectView` into SwiftUI for the sidebar pane background.
-/// Material `.sidebar`, `.behindWindow` blending — see CONTEXT.md theme decision.
+/// `.sidebar` material + `.behindWindow` blending — matches Notes / Mail and
+/// gives the panel a saturated, sidebar-native feel rather than the more
+/// translucent `.underWindowBackground` that lets the desktop bleed through.
 struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let v = NSVisualEffectView()
-        v.material = .underWindowBackground
+        v.material = .sidebar
         v.blendingMode = .behindWindow
         v.state = .active
         v.alphaValue = 1.0
