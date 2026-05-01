@@ -183,6 +183,7 @@ final class MarkdownTextStorage: NSTextStorage {
             // preserves the monospaced font over the bold font.
             try applyFenced(in: substring, offset: base)
             try applyHeadings(in: substring, offset: base)
+            try applyChecklists(in: substring, offset: base)
             try applyBullets(in: substring, offset: base)
             try applyTables(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
@@ -248,6 +249,7 @@ final class MarkdownTextStorage: NSTextStorage {
     private func clearManagedAttributes(in range: NSRange) {
         backing.removeAttribute(.sidekickHiddenMarker, range: range)
         backing.removeAttribute(.sidekickBulletMarker, range: range)
+        backing.removeAttribute(.sidekickChecklistMarker, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
@@ -443,6 +445,51 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.font,
                                  value: NSFont.systemFont(ofSize: 15, weight: .bold),
                                  range: markerRange)
+        }
+    }
+
+    /// Apply task-list (checklist) styling: tag the leading `-` with
+    /// `.sidekickChecklistMarker` (value=isChecked) so the layout manager
+    /// substitutes ◯/◉; hide the surrounding ` [ ]` / ` [x]` chars via
+    /// `.sidekickHiddenMarker`. The trailing space stays visible so the
+    /// rendered result is `◯ item` / `◉ item`.
+    ///
+    /// On checked items, dim the content with strikethrough + tertiary color
+    /// to match Apple Notes' done-item treatment. Round-trip stays byte-
+    /// identical — only attributes change.
+    ///
+    /// Runs BEFORE `applyBullets` (parser order in `applyAttributes`) and the
+    /// bullet regex excludes task-list lines via negative lookahead, so the
+    /// dash never gets the bullet attribute on a checklist line.
+    private func applyChecklists(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: substring)
+        for m in matches {
+            let marker = shift(m.markerRange, by: offset)
+            guard marker.length == 1,
+                  marker.location >= 0,
+                  marker.location + marker.length <= backing.length else { continue }
+            backing.addAttribute(.sidekickChecklistMarker, value: m.isChecked, range: marker)
+            // Use the same bold body-size font as the bullet marker so the
+            // ◯/◉ glyph reads at consistent weight with surrounding text.
+            backing.addAttribute(.font,
+                                 value: NSFont.systemFont(ofSize: 15, weight: .bold),
+                                 range: marker)
+
+            tagHiddenMarker(shifting: m.hiddenRange, by: offset)
+
+            if m.isChecked {
+                let content = shift(m.contentRange, by: offset)
+                if content.length > 0,
+                   content.location >= 0,
+                   content.location + content.length <= backing.length {
+                    backing.addAttribute(.strikethroughStyle,
+                                         value: NSUnderlineStyle.single.rawValue,
+                                         range: content)
+                    backing.addAttribute(.foregroundColor,
+                                         value: NSColor.tertiaryLabelColor,
+                                         range: content)
+                }
+            }
         }
     }
 

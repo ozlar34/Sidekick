@@ -25,4 +25,14 @@ extension NSAttributedString.Key {
     /// The trailing space after the marker stays visible (not tagged) so
     /// the rendered result is `• item` instead of the tight `•item`.
     static let sidekickBulletMarker = NSAttributedString.Key("sidekickBulletMarker")
+
+    /// Marks the `-` character of a GFM task-list line (`- [ ] ` / `- [x] `)
+    /// for glyph substitution. Value is `Bool` — `false` substitutes U+25EF
+    /// (◯ unchecked), `true` substitutes U+25C9 (◉ checked).
+    /// `MarkdownLayoutManager.setGlyphs(...)` reads the bool and picks the
+    /// glyph; the surrounding ` [ ]` / ` [x]` chars are hidden via
+    /// `.sidekickHiddenMarker` so the rendered result is `◯ item` / `◉ item`
+    /// without mutating the underlying bytes (round-trip safe).
+    /// Mouse hits on this marker character flip the underlying ` ` ↔ `x` byte.
+    static let sidekickChecklistMarker = NSAttributedString.Key("sidekickChecklistMarker")
 }

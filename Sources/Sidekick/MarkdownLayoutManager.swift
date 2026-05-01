@@ -54,12 +54,36 @@ final class MarkdownLayoutManager: NSLayoutManager {
         var bulletScalar: UniChar = 0x2022
         CTFontGetGlyphsForCharacters(font as CTFont, &bulletScalar, &bulletGlyph, 1)
 
+        // Precompute checklist glyphs. The SF system font (used by storage at
+        // 15pt bold) does NOT ship U+25EF LARGE CIRCLE or U+25C9 FISHEYE — both
+        // resolve to glyph 0, which silently falls through and renders the raw
+        // `-` instead. We use ○ U+25CB / ● U+25CF (both present in SF Pro)
+        // with ☐/☑ ballot boxes as a defensive cascade for any future font
+        // that lacks even those.
+        func resolve(_ scalars: [UniChar]) -> CGGlyph {
+            for var s in scalars {
+                var g: CGGlyph = 0
+                CTFontGetGlyphsForCharacters(font as CTFont, &s, &g, 1)
+                if g != 0 { return g }
+            }
+            return 0
+        }
+        let checklistEmptyGlyph = resolve([0x25CB, 0x25EF, 0x2610])
+        let checklistFilledGlyph = resolve([0x25CF, 0x25C9, 0x2611])
+
         for i in 0..<count {
             var prop = properties[i]
             let charIndex = characterIndexes[i]
             if charIndex < storage.length {
                 let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
-                if attrs[.sidekickBulletMarker] != nil {
+                if let checked = attrs[.sidekickChecklistMarker] as? Bool {
+                    // Substitute the dash with ◯ (unchecked) or ◉ (checked).
+                    // Keep visible — do NOT set .null.
+                    let target = checked ? checklistFilledGlyph : checklistEmptyGlyph
+                    if target != 0 {
+                        mutableGlyphs[i] = target
+                    }
+                } else if attrs[.sidekickBulletMarker] != nil {
                     // Substitute the dash/star glyph with a bullet glyph.
                     // Keep visible — do NOT set .null.
                     if bulletGlyph != 0 {

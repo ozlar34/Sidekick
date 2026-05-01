@@ -80,6 +80,7 @@ struct EditorPaneView: View {
                     applyHeading: applyHeadingLevel,
                     applyNumberedList: applyNumberedList,
                     applyBlockQuote: applyBlockQuote,
+                    applyChecklist: applyChecklist,
                     activeInlineKind: editorController.activeInlineKind,
                     activeHeadingLevel: editorController.activeHeadingLevel
                 )
@@ -239,6 +240,13 @@ struct EditorPaneView: View {
     private func applyBlockQuote() {
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performBlockQuote(in: tv)
+    }
+
+    /// Toolbar/menu bridge for the GFM task-list toggle (⌘⇧L). Mirrors
+    /// `applyBlockQuote` — same routing pattern.
+    private func applyChecklist() {
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performChecklist(in: tv)
     }
 
 }

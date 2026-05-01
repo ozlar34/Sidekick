@@ -39,6 +39,46 @@ import SwiftUI
 /// `widthTracksTextView` + `autoresizingMask = .width` continue to handle
 /// width tracking; we only own the vertical floor.
 final class HybridTextView: NSTextView {
+    /// Click-to-toggle for GFM task-list checkboxes. When the user clicks on
+    /// the substituted ◯/◉ glyph (the leading `-` char of a task-list line),
+    /// flip the state byte (` ` ↔ `x`) instead of moving the caret. Anywhere
+    /// else, fall through to NSTextView's default cursor placement.
+    ///
+    /// Hit detection uses `glyphIndex(for:in:fractionOfDistanceThroughGlyph:)`:
+    /// only treat as a hit if `fraction < 1.0` (the click landed inside the
+    /// glyph rect, not past its trailing edge — past-the-edge hits should
+    /// place the caret like normal).
+    override func mouseDown(with event: NSEvent) {
+        if let lm = layoutManager,
+           let tc = textContainer,
+           let storage = textStorage {
+            let viewPoint = convert(event.locationInWindow, from: nil)
+            let textPoint = NSPoint(
+                x: viewPoint.x - textContainerOrigin.x,
+                y: viewPoint.y - textContainerOrigin.y
+            )
+            var fraction: CGFloat = 0
+            let glyphIdx = lm.glyphIndex(
+                for: textPoint,
+                in: tc,
+                fractionOfDistanceThroughGlyph: &fraction
+            )
+            if fraction < 1.0 {
+                let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+                if charIdx >= 0,
+                   charIdx < storage.length,
+                   storage.attribute(.sidekickChecklistMarker,
+                                     at: charIdx,
+                                     effectiveRange: nil) != nil {
+                    if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
+                        return
+                    }
+                }
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
     override func setConstrainedFrameSize(_ desiredSize: NSSize) {
         var size = desiredSize
         if let clipHeight = enclosingScrollView?.contentView.bounds.height {
@@ -300,6 +340,18 @@ struct HybridEditorView: NSViewRepresentable {
             attrs[.font] = NSFont.systemFont(ofSize: 15, weight: .regular)
             attrs[.paragraphStyle] = MarkdownTextStorage.bodyParagraphStyle
             tv.typingAttributes = attrs
+        }
+
+        /// Enter continuation for GFM task-list lines. Pressed Enter on
+        /// `- [ ] task` continues the list (`\n- [ ] `); pressed Enter on
+        /// an empty `- [ ] ` line strips the prefix and exits the list.
+        /// Other `doCommandBy` selectors (insert tab, delete forward, etc.)
+        /// fall through to NSTextView's default behavior.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                return FormattingToolbarView.handleChecklistReturn(in: textView)
+            }
+            return false
         }
 
         /// PRIMARY PATH — NSTextViewDelegate method invoked when the user clicks on a

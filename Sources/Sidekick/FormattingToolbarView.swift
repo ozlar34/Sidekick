@@ -21,6 +21,10 @@ struct FormattingToolbarView: View {
     /// Toggle a block-quote (`> `) prefix on the line(s) containing the
     /// selection. Mirrors `applyLinePrefix` exactly with `"> "` instead of `"- "`.
     var applyBlockQuote: () -> Void = {}
+    /// Toggle a GFM task-list (`- [ ] ` / `- [x] `) prefix on the line(s)
+    /// containing the selection. Mirrors `applyLinePrefix`'s shape — toggle
+    /// off when every non-empty line already has the prefix.
+    var applyChecklist: () -> Void = {}
     /// Set when the caret is inside a bold / italic / code span. Drives the
     /// active-state highlight on the corresponding button. Defaults to nil so
     /// existing call sites (tests, previews, menu-only invocations) compile
@@ -51,11 +55,22 @@ struct FormattingToolbarView: View {
                         applyHeading: applyHeading,
                         applyNumberedList: applyNumberedList,
                         applyBlockQuote: applyBlockQuote,
+                        applyChecklist: applyChecklist,
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
                         dismiss: { popoverShown = false }
                     )
                 }
+
+            // Apple Notes places the checklist button immediately right of
+            // the "Aa" trigger — single tap, no popover. ⌘⇧L parity (D-S-02
+            // explicit modifier mask via the menu equivalent in AppDelegate).
+            FormatButton(
+                systemName: "checklist",
+                tooltip: "Checklist (⌘⇧L)",
+                accessibilityLabel: "Checklist",
+                isActive: false
+            ) { applyChecklist() }
 
             Spacer()
         }
@@ -585,6 +600,221 @@ struct FormattingToolbarView: View {
         return (newBody, newSelection)
     }
 
+    /// Pure string transformation: toggles a GFM task-list prefix
+    /// (`- [ ] `) on every line in the block containing `range`. Mirrors
+    /// `applyBulletedList` exactly — line-block expansion, all-prefixed-
+    /// toggle-off rule, UTF-16 discipline. Both unchecked (`- [ ] `) and
+    /// checked (`- [x] ` / `- [X] `) prefixes count as "prefixed" for the
+    /// toggle-off check, so flipping a partially-completed list off works.
+    /// On add, an unchecked `- [ ] ` prefix is prepended to every line
+    /// (including empties — a blank task line is real).
+    internal static func applyChecklist(
+        body: String,
+        range: NSRange
+    ) -> (newBody: String, newSelection: NSRange) {
+        let nsBody = body as NSString
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+
+        let blockRange = nsBody.lineRange(for: safeRange)
+        let blockSubstring = nsBody.substring(with: blockRange)
+        let endsWithNewline = blockSubstring.hasSuffix("\n")
+        var lines = blockSubstring.components(separatedBy: "\n")
+        let trailingEmpty: Bool
+        if endsWithNewline, let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty = true
+        } else {
+            trailingEmpty = false
+        }
+
+        // Returns the prefix length (always 6) if the line starts with a GFM
+        // task-list prefix, nil otherwise. Single-line scan — cheaper than
+        // running NSRegularExpression per line.
+        func checklistPrefixLen(of line: String) -> Int? {
+            let ns = line as NSString
+            guard ns.length >= 6 else { return nil }
+            // `- [` → first 3 chars
+            if ns.character(at: 0) != 0x2D /* - */ { return nil }
+            if ns.character(at: 1) != 0x20 /* space */ { return nil }
+            if ns.character(at: 2) != 0x5B /* [ */ { return nil }
+            let state = ns.character(at: 3)
+            // space, x, or X
+            guard state == 0x20 || state == 0x78 || state == 0x58 else { return nil }
+            if ns.character(at: 4) != 0x5D /* ] */ { return nil }
+            if ns.character(at: 5) != 0x20 /* space */ { return nil }
+            return 6
+        }
+
+        let nonEmptyLines = lines.filter { !$0.isEmpty }
+        let allPrefixed = !nonEmptyLines.isEmpty
+            && nonEmptyLines.allSatisfy { checklistPrefixLen(of: $0) != nil }
+
+        let transformed: [String]
+        if allPrefixed {
+            transformed = lines.map { line -> String in
+                if let p = checklistPrefixLen(of: line) {
+                    return (line as NSString).substring(from: p)
+                }
+                return line
+            }
+        } else {
+            // Add mode: `- [ ] ` prepended to every line, including empties.
+            transformed = lines.map { "- [ ] " + $0 }
+        }
+
+        var newBlock = transformed.joined(separator: "\n")
+        if trailingEmpty {
+            newBlock += "\n"
+        }
+
+        let newBody = nsBody.replacingCharacters(in: blockRange, with: newBlock)
+        let newSelection = NSRange(
+            location: blockRange.location,
+            length: (newBlock as NSString).length
+        )
+        return (newBody, newSelection)
+    }
+
+    /// Applies a checklist toggle directly on an NSTextView. Mirrors
+    /// `performBlockQuote` exactly — same edit-sandwich pattern, same caret
+    /// restore semantics.
+    static func performChecklist(in textView: NSTextView) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (fullNewBody, _) = applyChecklist(body: body, range: range)
+
+        let nsBody = body as NSString
+        let blockRange = nsBody.lineRange(for: range)
+
+        let deltaLength = (fullNewBody as NSString).length - nsBody.length
+        let newBlockLength = blockRange.length + deltaLength
+        let newBlock = (fullNewBody as NSString).substring(
+            with: NSRange(location: blockRange.location, length: newBlockLength)
+        )
+
+        guard textView.shouldChangeText(in: blockRange, replacementString: newBlock) else { return }
+        textView.replaceCharacters(in: blockRange, with: newBlock)
+        textView.didChangeText()
+
+        // Caret restore: empty selection + single-line result → caret AFTER
+        // the new `- [ ] ` prefix (or at line start if stripped). Prefix is
+        // always 6 chars when present.
+        if range.length == 0, !newBlock.contains("\n") {
+            let caretOffset = deltaLength > 0 ? 6 : 0
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location + max(0, caretOffset), length: 0)
+            )
+        } else {
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location, length: (newBlock as NSString).length)
+            )
+        }
+    }
+
+    /// Click-to-toggle: if `markerCharIndex` lands on the `-` of a task-list
+    /// line, flip the state char (` ` ↔ `x`) at offset +3 and trigger a
+    /// reparse via the edit sandwich. Returns true when a toggle happened
+    /// (caller should NOT fall through to the default mouseDown caret-move).
+    static func toggleChecklistState(at markerCharIndex: Int, in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        guard markerCharIndex >= 0, markerCharIndex < nsBody.length else { return false }
+
+        // Constrain to the line containing the click — checklist prefixes
+        // always start at line begin, so the dash must sit at lineStart.
+        let lineRange = nsBody.lineRange(for: NSRange(location: markerCharIndex, length: 0))
+        guard markerCharIndex == lineRange.location else { return false }
+
+        // Verify the line really has the task-list prefix (6 chars min).
+        guard lineRange.length >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D /* - */,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B /* [ */,
+              prefixNS.character(at: 4) == 0x5D /* ] */,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        let stateChar = prefixNS.character(at: 3)
+        let replacement: String
+        switch stateChar {
+        case 0x20: replacement = "x"
+        case 0x78, 0x58: replacement = " "
+        default: return false
+        }
+
+        let stateRange = NSRange(location: lineRange.location + 3, length: 1)
+        guard textView.shouldChangeText(in: stateRange, replacementString: replacement) else { return false }
+        textView.replaceCharacters(in: stateRange, with: replacement)
+        textView.didChangeText()
+        return true
+    }
+
+    /// Enter continuation: when Enter is pressed on a task-list line, either
+    /// continue the list (`\n- [ ] `) or exit it (strip the empty prefix).
+    /// Returns true when the helper handled the Enter (caller should NOT
+    /// fall through to the default `insertNewline:` behavior).
+    static func handleChecklistReturn(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        // Only fire on caret (no selection) — a non-empty selection should
+        // delete and insert a newline, matching default behavior.
+        guard selection.length == 0 else { return false }
+
+        let lineRange = nsBody.lineRange(for: selection)
+        // Strip trailing newline for content inspection.
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A /* \n */ || lastChar == 0x0D /* \r */ {
+                lineEnd -= 1
+            }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B,
+              (prefixNS.character(at: 3) == 0x20
+                || prefixNS.character(at: 3) == 0x78
+                || prefixNS.character(at: 3) == 0x58),
+              prefixNS.character(at: 4) == 0x5D,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        // Empty-checklist-line exit: line is exactly the 6-char prefix and
+        // caret is at the end of it. Strip the prefix and let the user fall
+        // out of the list with the caret at line start.
+        if lineLen == 6, selection.location == lineRange.location + 6 {
+            let stripRange = NSRange(location: lineRange.location, length: 6)
+            guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+            textView.replaceCharacters(in: stripRange, with: "")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        // Caret must be past the 6-char prefix to trigger continuation. A
+        // caret inside the prefix region (or at line start) means the user
+        // is editing the prefix itself or splitting before it — let the
+        // default newline insert behavior win.
+        guard selection.location >= lineRange.location + 6 else { return false }
+
+        // Continuation: insert `\n- [ ] ` at caret position. New line starts
+        // unchecked even if the source line was checked — Apple Notes parity.
+        let insertion = "\n- [ ] "
+        guard textView.shouldChangeText(in: selection, replacementString: insertion) else { return false }
+        textView.replaceCharacters(in: selection, with: insertion)
+        textView.didChangeText()
+        let newCaret = selection.location + (insertion as NSString).length
+        textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+        return true
+    }
+
     /// Applies markdown wrap directly on an NSTextView using AppKit's edit
     /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
     /// This registers the change on the text view's own `undoManager`
@@ -1013,6 +1243,7 @@ private struct FormattingPopoverView: View {
     let applyHeading: (Int?) -> Void
     let applyNumberedList: () -> Void
     let applyBlockQuote: () -> Void
+    let applyChecklist: () -> Void
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
     let dismiss: () -> Void
@@ -1103,6 +1334,12 @@ private struct FormattingPopoverView: View {
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: false
                 ) { applyBlockQuote(); dismiss() }
+
+                ParagraphStyleRow(
+                    label: "◯  Checklist",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: false
+                ) { applyChecklist(); dismiss() }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 6)

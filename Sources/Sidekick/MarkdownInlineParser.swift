@@ -64,6 +64,23 @@ struct LinkMatch {
     let closeParenRange: NSRange      // ")", length 1
 }
 
+/// GFM task-list line prefix: `- [ ] ` (unchecked) or `- [x] ` (checked).
+/// Total prefix length is always 6 UTF-16 units (dash + space + `[` +
+/// state char + `]` + trailing space). The trailing space is intentionally
+/// left visible so the rendered result is `○ item` (with breathing room
+/// after the substituted glyph), not the tight `○item`.
+struct ChecklistMatch {
+    /// The `-` char at line start. Length 1. Glyph-substituted to ○/●.
+    let markerRange: NSRange
+    /// ` [ ]` or ` [x]` — the 4 chars between dash and trailing space.
+    /// Fully hidden via `.sidekickHiddenMarker`.
+    let hiddenRange: NSRange
+    /// Line content after the `- [ ] ` / `- [x] ` prefix, excluding any
+    /// trailing newline. Length 0 when the line is exactly the prefix.
+    let contentRange: NSRange
+    let isChecked: Bool
+}
+
 struct TableMatch {
     /// Header line content (excluding trailing newline). Always non-empty.
     let headerRange: NSRange
@@ -107,8 +124,16 @@ enum MarkdownInlineParser {
         pattern: "^(#{1,6}) (.*)$",
         options: []
     )
+    // Bullet pattern excludes task-list lines via negative lookahead: a line
+    // starting with `- [ ] ` or `- [x] ` / `- [X] ` is a checklist, not a
+    // plain bullet, so the dash must NOT be tagged with `.sidekickBulletMarker`
+    // (would clash with `.sidekickChecklistMarker`).
     private static let bulletRegex = try! NSRegularExpression(
-        pattern: "^(- |\\* )",
+        pattern: "^(- (?!\\[[ xX]\\] )|\\* )",
+        options: []
+    )
+    private static let checklistRegex = try! NSRegularExpression(
+        pattern: "^- \\[([ xX])\\] ",
         options: []
     )
     private static let fenceRegex = try! NSRegularExpression(
@@ -382,6 +407,82 @@ enum MarkdownInlineParser {
                 // Prefix is always 2 UTF-16 units at line start
                 let prefixRange = NSRange(location: lineRange.location, length: 2)
                 results.append(prefixRange)
+            }
+
+            lineStart = lineEnd
+            if lineStart == lineRange.location {
+                break
+            }
+        }
+
+        return results
+    }
+
+    // MARK: Checklists (GFM task lists)
+
+    /// Returns matches for all `- [ ] ` / `- [x] ` task-list prefixes in `string`.
+    ///
+    /// - Scans line-by-line; only matches at line start (no indentation handling
+    ///   yet — keeping scope tight per the feature spec).
+    /// - The dash gets `markerRange` (length 1, glyph-substituted at layout time).
+    /// - The 4 chars after the dash (` [ ]` / ` [x]`) become `hiddenRange`.
+    /// - Trailing space (1 char) intentionally stays VISIBLE — gives the rendered
+    ///   `◯ ` / `◉ ` glyph breathing room before the content text.
+    /// - `isChecked` is true when the state char is `x` or `X`.
+    static func findChecklistPrefixes(in string: String) -> [ChecklistMatch] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        var results: [ChecklistMatch] = []
+        var lineStart = 0
+
+        while lineStart < fullLength {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            let lineEnd = lineRange.location + lineRange.length
+
+            let hasTrailingNewline: Bool
+            if lineRange.length > 0 {
+                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
+                let lastChar = ns.substring(with: lastCharRange)
+                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
+            } else {
+                hasTrailingNewline = false
+            }
+
+            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
+            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
+            let lineNS = lineText as NSString
+            let lineFullRange = NSRange(location: 0, length: lineNS.length)
+
+            if let m = Self.checklistRegex.firstMatch(in: lineText, range: lineFullRange) {
+                // Group 1 is the state char (` `, `x`, or `X`).
+                let stateGroup = m.range(at: 1)
+                guard stateGroup.location != NSNotFound, stateGroup.length == 1 else {
+                    lineStart = lineEnd
+                    if lineStart == lineRange.location { break }
+                    continue
+                }
+                let stateChar = lineNS.substring(with: stateGroup).lowercased()
+                let isChecked = (stateChar == "x")
+
+                let base = lineRange.location
+                let markerRange = NSRange(location: base, length: 1)        // `-`
+                let hiddenRange = NSRange(location: base + 1, length: 4)    // ` [ ]` or ` [x]`
+                // Content starts after the trailing space (6 chars total prefix).
+                // Total prefix is always 6; line content range is the rest of the
+                // line (excluding the trailing newline if present).
+                let contentStart = base + 6
+                let contentEnd = lineRange.location + matchLength
+                let contentLen = max(0, contentEnd - contentStart)
+                let contentRange = NSRange(location: contentStart, length: contentLen)
+
+                results.append(ChecklistMatch(
+                    markerRange: markerRange,
+                    hiddenRange: hiddenRange,
+                    contentRange: contentRange,
+                    isChecked: isChecked
+                ))
             }
 
             lineStart = lineEnd

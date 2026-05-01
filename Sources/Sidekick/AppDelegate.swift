@@ -226,6 +226,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         blockQuoteItem.target = self
         formatMenu.addItem(blockQuoteItem)
 
+        let checklistItem = NSMenuItem(
+            title: "Checklist",
+            action: #selector(formatChecklist(_:)),
+            keyEquivalent: "l"
+        )
+        // ⌘⇧L — letter key, but set the explicit modifier mask so the
+        // shortcut requires Shift (without it, plain "l" would auto-imply
+        // ⌘L which AppKit reserves for "Show Last Search" in some contexts).
+        checklistItem.keyEquivalentModifierMask = [.command, .shift]
+        checklistItem.target = self
+        formatMenu.addItem(checklistItem)
+
         formatMenu.addItem(NSMenuItem.separator())
 
         // Heading levels — ⌘⌥1/2/3 apply or toggle-off the corresponding
@@ -565,6 +577,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FormattingToolbarView.performBlockQuote(in: tv)
     }
 
+    /// Format > Checklist (⌘⇧L). Apple Notes parity. Toggles a GFM
+    /// task-list (`- [ ] `) prefix on the line(s) containing the selection.
+    @objc func formatChecklist(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performChecklist(in: tv)
+    }
+
     /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
     /// which reads CFBundleShortVersionString + CFBundleVersion from
     /// Info.plist (build-and-run.sh:38-67 already writes both keys).
@@ -610,6 +630,7 @@ extension AppDelegate: NSUserInterfaceValidations {
              #selector(formatBulletedList(_:)),
              #selector(formatNumberedList(_:)),
              #selector(formatBlockQuote(_:)),
+             #selector(formatChecklist(_:)),
              #selector(formatHeading1(_:)),
              #selector(formatHeading2(_:)),
              #selector(formatHeading3(_:)),
