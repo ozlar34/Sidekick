@@ -84,15 +84,17 @@ final class NoteStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(store2.notes.count, 1)
     }
 
-    func testRenameOnHeadingChange() async throws {
+    func testRenameOnTitleChange() async throws {
+        // Post-2026-05-01 title-shift: filename slug is driven by the explicit
+        // `title` field, not the body's first heading.
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         let note = try await store.create()
         let originalFilename = note.filename
 
-        try await store.update(note.id, title: "", body: "# Hello World\ncontent")
+        try await store.update(note.id, title: "Hello World", body: "any body content")
 
-        // New filename should be slug of heading.
+        // New filename should be slug of title.
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: tmp.url.appendingPathComponent("hello-world.md").path
@@ -106,6 +108,34 @@ final class NoteStoreIntegrationTests: XCTestCase {
             "Original untitled-* file should be gone after rename"
         )
         XCTAssertEqual(store.notes.first?.filename, "hello-world.md")
+    }
+
+    /// Regression: changing only the body must NOT rename the file. Pre-shift,
+    /// the body's first `# Heading` drove the slug; post-shift, only `title`
+    /// does. A body-only edit is now a pure content write.
+    func testBodyHeadingChange_doesNotRename() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        let note = try await store.create()
+        let originalFilename = note.filename
+
+        try await store.update(note.id, title: "", body: "# Hello World\ncontent")
+
+        // Filename must NOT have changed — title is still empty.
+        XCTAssertEqual(store.notes.first?.filename, originalFilename,
+                       "Body heading must not rename the file post-title-shift")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: tmp.url.appendingPathComponent("hello-world.md").path
+            ),
+            "Body-driven slug file must not be created"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: tmp.url.appendingPathComponent(originalFilename).path
+            ),
+            "Original untitled-* file must still exist"
+        )
     }
 
     // MARK: - Watcher integration tests (plan 02-02)
