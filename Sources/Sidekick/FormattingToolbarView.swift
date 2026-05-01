@@ -815,6 +815,130 @@ struct FormattingToolbarView: View {
         return true
     }
 
+    /// Enter continuation for bulleted-list lines (`- ` or `* `). Mirrors
+    /// `handleChecklistReturn`: continue with `\n- ` (or `\n* `, preserving the
+    /// original marker char) on a non-empty line; strip the prefix and exit
+    /// when Enter is pressed on an otherwise-empty bullet line. Returns true
+    /// when handled — caller (the editor coordinator) must NOT fall through
+    /// to the default `insertNewline:` in that case.
+    static func handleBulletReturn(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D {
+                lineEnd -= 1
+            }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 2 else { return false }
+        let first = nsBody.character(at: lineRange.location)
+        let second = nsBody.character(at: lineRange.location + 1)
+        // Bullet prefix is `- ` or `* `, and must NOT be a checklist line
+        // (checklist handling owns those — `- [ ] foo` etc.).
+        guard (first == 0x2D /* - */ || first == 0x2A /* * */),
+              second == 0x20 else { return false }
+        if first == 0x2D, lineLen >= 6 {
+            let third = nsBody.character(at: lineRange.location + 2)
+            let fourth = nsBody.character(at: lineRange.location + 3)
+            let fifth = nsBody.character(at: lineRange.location + 4)
+            if third == 0x5B /* [ */,
+               (fourth == 0x20 || fourth == 0x78 || fourth == 0x58),
+               fifth == 0x5D /* ] */ {
+                return false  // checklist — defer to handleChecklistReturn
+            }
+        }
+
+        // Empty bullet line + caret at end of prefix → strip and exit.
+        if lineLen == 2, selection.location == lineRange.location + 2 {
+            let stripRange = NSRange(location: lineRange.location, length: 2)
+            guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+            textView.replaceCharacters(in: stripRange, with: "")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        // Caret must sit past the prefix to trigger continuation.
+        guard selection.location >= lineRange.location + 2 else { return false }
+
+        let markerChar: String = first == 0x2D ? "-" : "*"
+        let insertion = "\n\(markerChar) "
+        guard textView.shouldChangeText(in: selection, replacementString: insertion) else { return false }
+        textView.replaceCharacters(in: selection, with: insertion)
+        textView.didChangeText()
+        let newCaret = selection.location + (insertion as NSString).length
+        textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+        return true
+    }
+
+    /// Enter continuation for numbered-list lines (`<digits>+. `). Mirrors
+    /// `handleBulletReturn`: continue with `\n<n+1>. ` on a non-empty line;
+    /// strip the prefix and exit when Enter is pressed on an otherwise-empty
+    /// numbered line. Subsequent lines are NOT renumbered — the user can
+    /// re-toggle the list via the toolbar to clean up numbering if needed.
+    static func handleNumberedReturn(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D {
+                lineEnd -= 1
+            }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 3 else { return false }
+
+        // Scan leading digits.
+        var digitCount = 0
+        while digitCount < lineLen {
+            let c = nsBody.character(at: lineRange.location + digitCount)
+            guard c >= 0x30 /* 0 */, c <= 0x39 /* 9 */ else { break }
+            digitCount += 1
+        }
+        guard digitCount > 0,
+              lineLen >= digitCount + 2,
+              nsBody.character(at: lineRange.location + digitCount) == 0x2E /* . */,
+              nsBody.character(at: lineRange.location + digitCount + 1) == 0x20 else {
+            return false
+        }
+        let prefixLen = digitCount + 2
+        let digitsRange = NSRange(location: lineRange.location, length: digitCount)
+        let digits = nsBody.substring(with: digitsRange)
+        let currentNumber = Int(digits) ?? 0
+
+        // Empty numbered line + caret at end of prefix → strip and exit.
+        if lineLen == prefixLen, selection.location == lineRange.location + prefixLen {
+            let stripRange = NSRange(location: lineRange.location, length: prefixLen)
+            guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+            textView.replaceCharacters(in: stripRange, with: "")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        guard selection.location >= lineRange.location + prefixLen else { return false }
+
+        let nextNumber = currentNumber + 1
+        let insertion = "\n\(nextNumber). "
+        guard textView.shouldChangeText(in: selection, replacementString: insertion) else { return false }
+        textView.replaceCharacters(in: selection, with: insertion)
+        textView.didChangeText()
+        let newCaret = selection.location + (insertion as NSString).length
+        textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+        return true
+    }
+
     /// Applies markdown wrap directly on an NSTextView using AppKit's edit
     /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
     /// This registers the change on the text view's own `undoManager`

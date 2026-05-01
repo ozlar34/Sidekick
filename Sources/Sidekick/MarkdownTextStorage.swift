@@ -64,6 +64,21 @@ final class MarkdownTextStorage: NSTextStorage {
     /// `textView.defaultParagraphStyle` — the latter is unreliable in TextKit 1
     /// once storage starts setting its own paragraph styles anywhere, so we
     /// enforce the rhythm at the storage layer.
+    /// Paragraph style applied to lines beginning with `> ` so the rendered
+    /// quote sits indented from the body margin (Apple Notes parity). Both
+    /// firstLineHeadIndent and headIndent are set to the same value because
+    /// quote lines never wrap into a hanging indent — the marker is hidden
+    /// and the content reads as a single block of indented italic text.
+    private static let blockQuoteParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = 18
+        style.headIndent = 18
+        style.minimumLineHeight = 18
+        style.maximumLineHeight = 18
+        style.paragraphSpacing = 1
+        return style
+    }()
+
     static let bodyParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
         // See HybridEditorView.makeNSView for why this is absolute (min==max)
@@ -177,6 +192,7 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyHeadings(in: substring, offset: base)
             try applyChecklists(in: substring, offset: base)
             try applyBullets(in: substring, offset: base)
+            try applyBlockQuotes(in: substring, offset: base)
             try applyTables(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
             try applyItalic(in: substring, offset: base)
@@ -490,6 +506,63 @@ final class MarkdownTextStorage: NSTextStorage {
                                          value: NSColor.tertiaryLabelColor,
                                          range: content)
                 }
+            }
+        }
+    }
+
+    /// Apply blockquote styling: hide the `> ` line prefix, indent the line via
+    /// `blockQuoteParagraphStyle`, and tint the content secondary + italic so
+    /// the quote reads visually distinct from body text. Mirrors `applyBullets`
+    /// shape — line-prefix scan, marker hide, paragraph-style stamp on the
+    /// containing line. Round-trip stays byte-identical (`> ` is hidden, not
+    /// removed). Runs after bullets so a bulleted blockquote (`> - foo`) still
+    /// gets its bullet glyph; quote indent stacks with the bullet's own indent.
+    private func applyBlockQuotes(in substring: String, offset: Int) throws {
+        let prefixes = MarkdownInlineParser.findBlockQuotePrefixes(in: substring)
+        for prefixRange in prefixes {
+            let shifted = shift(prefixRange, by: offset)
+            guard shifted.length == 2,
+                  shifted.location >= 0,
+                  shifted.location + shifted.length <= backing.length else { continue }
+
+            // Hide the `> ` chars via the standard hidden-marker path.
+            backing.addAttribute(.sidekickHiddenMarker, value: true, range: shifted)
+
+            // Stamp the quote paragraph style on the whole line so the indent
+            // applies to the visible content (the hidden `> ` chars carry it
+            // too, but they collapse to zero width so the visual indent comes
+            // entirely from headIndent / firstLineHeadIndent).
+            let lineRange = (backing.string as NSString).lineRange(for: shifted)
+            backing.addAttribute(.paragraphStyle,
+                                 value: Self.blockQuoteParagraphStyle,
+                                 range: lineRange)
+
+            // Style the visible content (everything after `> ` on this line,
+            // excluding the trailing newline) with secondary color + italic.
+            let contentStart = shifted.location + shifted.length
+            let lineEnd = lineRange.location + lineRange.length
+            var contentEnd = lineEnd
+            if contentEnd > contentStart {
+                let lastChar = (backing.string as NSString).character(at: contentEnd - 1)
+                if lastChar == 0x0A /* \n */ || lastChar == 0x0D /* \r */ {
+                    contentEnd -= 1
+                }
+            }
+            let contentLen = max(0, contentEnd - contentStart)
+            guard contentLen > 0 else { continue }
+            let contentRange = NSRange(location: contentStart, length: contentLen)
+
+            backing.addAttribute(.foregroundColor,
+                                 value: NSColor.secondaryLabelColor,
+                                 range: contentRange)
+
+            // Italic on top of whatever font already lives on the content
+            // (preserves bold/heading/inline-code overrides set by other
+            // parsers — italic just augments the existing trait).
+            backing.enumerateAttribute(.font, in: contentRange, options: []) { value, range, _ in
+                let base = (value as? NSFont) ?? NSFont.systemFont(ofSize: 15, weight: .regular)
+                let italic = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+                backing.addAttribute(.font, value: italic, range: range)
             }
         }
     }

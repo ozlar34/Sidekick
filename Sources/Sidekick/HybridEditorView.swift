@@ -342,14 +342,20 @@ struct HybridEditorView: NSViewRepresentable {
             tv.typingAttributes = attrs
         }
 
-        /// Enter continuation for GFM task-list lines. Pressed Enter on
-        /// `- [ ] task` continues the list (`\n- [ ] `); pressed Enter on
-        /// an empty `- [ ] ` line strips the prefix and exits the list.
-        /// Other `doCommandBy` selectors (insert tab, delete forward, etc.)
-        /// fall through to NSTextView's default behavior.
+        /// Enter continuation for list-style lines. Order matters: checklist
+        /// is a superset of the bullet prefix (`- [ ] foo` starts with `- `),
+        /// so the checklist handler runs first and only returns true when the
+        /// line really is a task-list line. Bullet and numbered handlers
+        /// follow. Each returns true when it handled the Enter — caller stops
+        /// the default `insertNewline:` from firing in that case. Other
+        /// `doCommandBy` selectors (insert tab, delete forward, etc.) fall
+        /// through to NSTextView's default behavior.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                return FormattingToolbarView.handleChecklistReturn(in: textView)
+                if FormattingToolbarView.handleChecklistReturn(in: textView) { return true }
+                if FormattingToolbarView.handleBulletReturn(in: textView) { return true }
+                if FormattingToolbarView.handleNumberedReturn(in: textView) { return true }
+                return false
             }
             return false
         }

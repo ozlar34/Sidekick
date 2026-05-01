@@ -136,6 +136,10 @@ enum MarkdownInlineParser {
         pattern: "^- \\[([ xX])\\] ",
         options: []
     )
+    private static let blockQuoteRegex = try! NSRegularExpression(
+        pattern: "^> ",
+        options: []
+    )
     private static let fenceRegex = try! NSRegularExpression(
         pattern: "^```[a-zA-Z0-9]*$",
         options: []
@@ -405,6 +409,53 @@ enum MarkdownInlineParser {
             let bulletMatches = Self.bulletRegex.matches(in: lineText, range: lineFullRange)
             if bulletMatches.first != nil {
                 // Prefix is always 2 UTF-16 units at line start
+                let prefixRange = NSRange(location: lineRange.location, length: 2)
+                results.append(prefixRange)
+            }
+
+            lineStart = lineEnd
+            if lineStart == lineRange.location {
+                break
+            }
+        }
+
+        return results
+    }
+
+    // MARK: Blockquotes
+
+    /// Returns prefix NSRanges for all `> ` blockquote markers in `string`.
+    ///
+    /// - Scans line-by-line; only matches at line start.
+    /// - Each returned NSRange has length 2 (the `>` + space, UTF-16 units).
+    /// - `>foo` (no trailing space) does NOT match.
+    static func findBlockQuotePrefixes(in string: String) -> [NSRange] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        var results: [NSRange] = []
+        var lineStart = 0
+
+        while lineStart < fullLength {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            let lineEnd = lineRange.location + lineRange.length
+
+            let hasTrailingNewline: Bool
+            if lineRange.length > 0 {
+                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
+                let lastChar = ns.substring(with: lastCharRange)
+                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
+            } else {
+                hasTrailingNewline = false
+            }
+
+            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
+            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
+            let lineNS = lineText as NSString
+            let lineFullRange = NSRange(location: 0, length: lineNS.length)
+
+            if Self.blockQuoteRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
                 let prefixRange = NSRange(location: lineRange.location, length: 2)
                 results.append(prefixRange)
             }
