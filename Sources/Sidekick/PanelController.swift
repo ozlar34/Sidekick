@@ -22,7 +22,6 @@ final class PanelController {
     var store: NoteStore?
     let panelState = PanelState()
     private var escMonitor: Any?
-    private var outsideClickMonitor: Any?
 
     var panelWidth: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
@@ -206,7 +205,7 @@ final class PanelController {
         })
     }
 
-    // MARK: - Dismiss handling (panel-scoped Escape + global outside-click)
+    // MARK: - Dismiss handling (panel-scoped Escape only)
 
     private func installDismissHandlers() {
         // Panel-scoped Escape — unchanged from prior installEscapeHandler().
@@ -221,31 +220,12 @@ final class PanelController {
                 return event
             }
         }
-
-        // G-01: click-outside dismissal. Global monitor only sees events
-        // destined for OTHER apps/desktop — any mouse-down it observes is
-        // by definition outside the panel, so no inside-click filtering is
-        // required. SidekickPanel.hidesOnDeactivate remains false on purpose
-        // (HUD UX survives brief clicks into another app to copy text); the
-        // explicit monitor is the correct dismissal path for .nonactivatingPanel
-        // + .accessory activation policy.
-        if outsideClickMonitor == nil {
-            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]
-            ) { [weak self] _ in
-                self?.slideOut()
-            }
-        }
     }
 
     private func removeDismissHandlers() {
         if let m = escMonitor {
             NSEvent.removeMonitor(m)
             escMonitor = nil
-        }
-        if let m = outsideClickMonitor {
-            NSEvent.removeMonitor(m)
-            outsideClickMonitor = nil
         }
     }
 }
