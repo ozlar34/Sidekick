@@ -2,13 +2,9 @@ import XCTest
 @testable import Sidekick
 
 final class NoteRowFormattingTests: XCTestCase {
-    func testTitleFromHeading() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "# Hello\nbody"), "Hello")
-    }
-    func testTitleFallsBackToUntitled() {
-        // G-04: plain text is now derived from body (not "Untitled"); only empty/whitespace falls back.
-        XCTAssertEqual(NoteRowFormatting.title(for: "no heading body"), "no heading body")
-    }
+    // NoteRowFormatting.title(for:) was removed in the 2026-05-01 title-field
+    // shift — title now lives on Note.title directly. Tests that exercised
+    // the old derivation chain were dropped along with the API.
     func testPreviewFirstNonHeadingLine() {
         XCTAssertEqual(NoteRowFormatting.preview(for: "# Heading\nfirst body line\nsecond"), "first body line")
     }
@@ -41,49 +37,6 @@ final class NoteRowFormattingTests: XCTestCase {
     }
     func testPreviewNilForEmpty() {
         XCTAssertNil(NoteRowFormatting.preview(for: ""))
-    }
-
-    // MARK: - Title derivation chain (G-04)
-
-    func test_title_plainFirstLine_returnsThatLine() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "Hello world\nmore text"), "Hello world")
-    }
-
-    func test_title_leadingH1_returnsHeading() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "# My Note\nbody"), "My Note")
-    }
-
-    func test_title_leadingH2_returnsHeading() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "## Subsection\nbody"), "Subsection")
-    }
-
-    func test_title_bodyStartsWithBullet_stripsBulletPrefix() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "- Item one\n- Item two"), "Item one")
-    }
-
-    func test_title_emptyBody_returnsUntitled() {
-        XCTAssertEqual(NoteRowFormatting.title(for: ""), "Untitled")
-    }
-
-    func test_title_allWhitespaceBody_returnsUntitled() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "   \n\n\t\n   "), "Untitled")
-    }
-
-    // When no heading exists, title is the first meaningful line and preview
-    // must be the SECOND meaningful line — never the same line as the title.
-    func test_noHeading_previewIsSecondMeaningfulLine() {
-        let body = "- Shared line\nsecond line"
-        XCTAssertEqual(NoteRowFormatting.title(for: body), "Shared line")
-        XCTAssertEqual(NoteRowFormatting.preview(for: body), "second line")
-    }
-
-    func test_noHeading_singleLine_previewIsNil() {
-        XCTAssertEqual(NoteRowFormatting.title(for: "only line"), "only line")
-        XCTAssertNil(NoteRowFormatting.preview(for: "only line"))
-    }
-
-    func test_noHeading_blankSecondLine_previewIsNil() {
-        XCTAssertNil(NoteRowFormatting.preview(for: "first line\n   \n"))
     }
 
     // MARK: - formattedModifiedTime

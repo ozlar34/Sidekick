@@ -20,7 +20,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         let note = try await store.create()
-        try await store.update(note.id, body: "# Hello\nsome content")
+        try await store.update(note.id, title: "", body: "# Hello\nsome content")
 
         let contents = try FileManager.default.contentsOfDirectory(
             at: tmp.url,
@@ -90,7 +90,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let note = try await store.create()
         let originalFilename = note.filename
 
-        try await store.update(note.id, body: "# Hello World\ncontent")
+        try await store.update(note.id, title: "", body: "# Hello World\ncontent")
 
         // New filename should be slug of heading.
         XCTAssertTrue(
@@ -265,7 +265,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         let store = try NoteStore(folder: tmp.url)
         await store.reload()
         let note = try await store.create()
-        try await store.update(note.id, body: "# v1")
+        try await store.update(note.id, title: "", body: "# v1")
         // Get filename after potential rename from heading
         guard let entry = store.notes.first(where: { $0.id == note.id }) else {
             return XCTFail("Note not found in store")
