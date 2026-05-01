@@ -77,8 +77,8 @@ final class MenuStructureTests: XCTestCase {
         _ = install()
         let formatSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "Format" })?.submenu
         XCTAssertNotNil(formatSubmenu, "Format submenu must exist (MENU-02)")
-        XCTAssertEqual(formatSubmenu?.items.count, 14,
-                       "Format has 14 items: Bold, Italic, Underline, Strikethrough, Inline Code, Link, Bulleted List, Numbered List, Block Quote, separator, Heading 1, Heading 2, Heading 3, Body")
+        XCTAssertEqual(formatSubmenu?.items.count, 15,
+                       "Format has 15 items: Bold, Italic, Underline, Strikethrough, Inline Code, Link, Bulleted List, Numbered List, Block Quote, Checklist, separator, Heading 1, Heading 2, Heading 3, Body")
 
         let byTitle: (String) -> NSMenuItem? = { title in
             formatSubmenu?.items.first { $0.title == title }
@@ -134,6 +134,12 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertNotNil(blockQuote, "Block Quote menu item must exist")
         XCTAssertEqual(blockQuote?.keyEquivalent, "9", "⌘⇧9")
         XCTAssertEqual(blockQuote?.keyEquivalentModifierMask, [.command, .shift])
+
+        // Checklist — ⌘⇧L (explicit Shift to avoid AppKit's reserved ⌘L).
+        let checklist = byTitle("Checklist")
+        XCTAssertNotNil(checklist, "Checklist menu item must exist")
+        XCTAssertEqual(checklist?.keyEquivalent, "l", "⌘⇧L (lowercase l + explicit Shift)")
+        XCTAssertEqual(checklist?.keyEquivalentModifierMask, [.command, .shift])
 
         // Headings — ⌘⌥1/2/3 + ⌘⌥0 for Body. Numbers are non-letter keys
         // so the modifier mask must be set explicitly (same pattern as ⌘⌥C).
