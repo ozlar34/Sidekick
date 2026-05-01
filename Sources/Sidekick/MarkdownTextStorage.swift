@@ -36,33 +36,25 @@ final class MarkdownTextStorage: NSTextStorage {
     /// edits elsewhere.
     static let h1ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 16
-        // Absolute line-height clamp — see HybridEditorView.makeNSView for
-        // the rationale (caret height tracks layout fragment height on
-        // macOS 14+ via NSTextInsertionIndicator). 36pt over 28pt H1 gives
-        // the title visible breathing room.
-        style.minimumLineHeight = 36
-        style.maximumLineHeight = 36
+        style.paragraphSpacing = 4
+        style.minimumLineHeight = 32
+        style.maximumLineHeight = 32
         return style
     }()
 
-    /// Paragraph style for H2 — proportional line-height (28pt over 22pt
-    /// font) and paragraphSpacing for visual stepdown from H1.
     private static let h2ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 12
-        style.minimumLineHeight = 28
-        style.maximumLineHeight = 28
+        style.paragraphSpacing = 3
+        style.minimumLineHeight = 26
+        style.maximumLineHeight = 26
         return style
     }()
 
-    /// Paragraph style for H3-H6 — proportional line-height (24pt over 18pt
-    /// font) and modest paragraphSpacing.
     private static let h3ParagraphStyle: NSParagraphStyle = {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 10
-        style.minimumLineHeight = 24
-        style.maximumLineHeight = 24
+        style.paragraphSpacing = 2
+        style.minimumLineHeight = 22
+        style.maximumLineHeight = 22
         return style
     }()
 
@@ -83,7 +75,7 @@ final class MarkdownTextStorage: NSTextStorage {
         // without growing the line box.
         style.minimumLineHeight = 18
         style.maximumLineHeight = 18
-        style.paragraphSpacing = 8
+        style.paragraphSpacing = 1
         return style
     }()
 
@@ -277,32 +269,41 @@ final class MarkdownTextStorage: NSTextStorage {
 
     // MARK: - Per-construct attribute writers
 
-    /// Apply bold styling: SemiBold on content, .sidekickHiddenMarker on `**` markers.
+    /// Apply bold styling: rebuild the font at the existing size with .bold
+    /// weight, preserving heading size + any italic trait. NSFontManager
+    /// .convert(toHaveTrait: .boldFontMask) is a no-op on H2/H3 (already
+    /// semibold) and H1 (already bold), so we go through systemFont directly.
     private func applyBold(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findBoldRanges(in: substring)
         for m in matches {
             tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
-            backing.addAttribute(.font,
-                                 value: NSFont.systemFont(ofSize: 15, weight: .semibold),
-                                 range: content)
+            backing.enumerateAttribute(.font, in: content, options: []) { value, range, _ in
+                let base = (value as? NSFont) ?? NSFont.systemFont(ofSize: 15, weight: .regular)
+                let wasItalic = base.fontDescriptor.symbolicTraits.contains(.italic)
+                var bold = NSFont.systemFont(ofSize: base.pointSize, weight: .bold)
+                if wasItalic {
+                    bold = NSFontManager.shared.convert(bold, toHaveTrait: .italicFontMask)
+                }
+                backing.addAttribute(.font, value: bold, range: range)
+            }
         }
     }
 
-    /// Apply italic styling: italic on content, .sidekickHiddenMarker on `*`/`_` markers.
-    /// Resolves the italic cut via NSFontManager.convert(_:toHaveTrait:).
+    /// Apply italic styling: add the italic trait to whatever font already
+    /// lives on the content range, preserving heading size + bold trait.
     private func applyItalic(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findItalicRanges(in: substring)
         for m in matches {
             tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
             tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
             let content = shift(m.contentRange, by: offset)
-            let italic = NSFontManager.shared.convert(
-                NSFont.systemFont(ofSize: 15, weight: .regular),
-                toHaveTrait: .italicFontMask
-            )
-            backing.addAttribute(.font, value: italic, range: content)
+            backing.enumerateAttribute(.font, in: content, options: []) { value, range, _ in
+                let base = (value as? NSFont) ?? NSFont.systemFont(ofSize: 15, weight: .regular)
+                let italic = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+                backing.addAttribute(.font, value: italic, range: range)
+            }
         }
     }
 
@@ -398,7 +399,7 @@ final class MarkdownTextStorage: NSTextStorage {
             let content = shift(m.contentRange, by: offset)
             let font: NSFont
             switch m.level {
-            case 1:        font = NSFont.systemFont(ofSize: 28, weight: .bold)
+            case 1:        font = NSFont.systemFont(ofSize: 28, weight: .semibold)
             case 2:        font = NSFont.systemFont(ofSize: 22, weight: .semibold)
             case 3, 4, 5, 6: font = NSFont.systemFont(ofSize: 18, weight: .semibold)
             default:       font = NSFont.systemFont(ofSize: 15, weight: .regular)

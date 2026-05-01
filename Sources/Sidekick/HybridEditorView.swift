@@ -181,7 +181,7 @@ struct HybridEditorView: NSViewRepresentable {
         let defaultStyle = NSMutableParagraphStyle()
         defaultStyle.minimumLineHeight = 18
         defaultStyle.maximumLineHeight = 18
-        defaultStyle.paragraphSpacing = 8
+        defaultStyle.paragraphSpacing = 1
         textView.defaultParagraphStyle = defaultStyle
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark
         // appearance, matching the old TextEditor + SwiftUI .primary behavior.
