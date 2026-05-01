@@ -207,6 +207,7 @@ struct HybridEditorView: NSViewRepresentable {
         // already inside formatted text shows the correct active button.
         context.coordinator.updateActiveInlineKind(in: textView)
         context.coordinator.updateActiveHeadingLevel(in: textView)
+        context.coordinator.updateActiveLinePrefix(in: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -261,6 +262,10 @@ struct HybridEditorView: NSViewRepresentable {
             // Same reason for headings: typing/deleting a leading `#` flips
             // the line in/out of heading state without selection movement.
             updateActiveHeadingLevel(in: tv)
+            // Same reason for line prefixes: typing/deleting a `- ` prefix
+            // flips the line in/out of bullet/numbered/checklist/blockquote
+            // state without the selection moving.
+            updateActiveLinePrefix(in: tv)
         }
 
         /// Caret typing attributes are sticky after edits — when the user
@@ -274,6 +279,7 @@ struct HybridEditorView: NSViewRepresentable {
             updateCaretTypingAttributes(in: tv)
             updateActiveInlineKind(in: tv)
             updateActiveHeadingLevel(in: tv)
+            updateActiveLinePrefix(in: tv)
         }
 
         /// Recompute which inline pair (bold / italic / code) currently
@@ -305,6 +311,22 @@ struct HybridEditorView: NSViewRepresentable {
         /// `^#{1,6} ` prefix — cheaper than re-running the full parser
         /// for what is purely a UI hint. Coalesces identical writes for
         /// the same reason as `updateActiveInlineKind`.
+        /// Recompute the line-prefix block format (bullet / numbered /
+        /// checklist / blockquote) of the line containing the caret and
+        /// publish to the controller. Coalesces identical writes for the
+        /// same reason as `updateActiveInlineKind`.
+        func updateActiveLinePrefix(in tv: NSTextView) {
+            let prefix = FormattingToolbarView.activeLinePrefix(
+                body: tv.string,
+                selection: tv.selectedRange()
+            )
+            MainActor.assumeIsolated {
+                if parent.controller.activeLinePrefix != prefix {
+                    parent.controller.activeLinePrefix = prefix
+                }
+            }
+        }
+
         func updateActiveHeadingLevel(in tv: NSTextView) {
             let nsBody = tv.string as NSString
             let selection = tv.selectedRange()

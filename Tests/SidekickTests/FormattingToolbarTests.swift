@@ -620,4 +620,92 @@ final class FormattingToolbarTests: XCTestCase {
         )
         XCTAssertEqual(newBody, "### deep", "H4 → H3 swaps cleanly (existing prefix stripped before new added)")
     }
+
+    // MARK: - F-03 — activeLinePrefix classifier
+
+    func test_activeLinePrefix_bulletLine() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "- item",
+            selection: NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(prefix, .bullet)
+    }
+
+    func test_activeLinePrefix_starBulletLine() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "* item",
+            selection: NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(prefix, .bullet, "Asterisk-bullet recognized as bullet")
+    }
+
+    func test_activeLinePrefix_numberedLine() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "1. item",
+            selection: NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(prefix, .numbered)
+    }
+
+    func test_activeLinePrefix_multiDigitNumberedLine() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "42. item",
+            selection: NSRange(location: 5, length: 0)
+        )
+        XCTAssertEqual(prefix, .numbered, "Multi-digit numeric prefix still classified as numbered")
+    }
+
+    func test_activeLinePrefix_uncheckedChecklist() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "- [ ] task",
+            selection: NSRange(location: 7, length: 0)
+        )
+        XCTAssertEqual(prefix, .checklist, "Checklist wins over bullet (more specific match)")
+    }
+
+    func test_activeLinePrefix_checkedChecklist() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "- [x] task",
+            selection: NSRange(location: 7, length: 0)
+        )
+        XCTAssertEqual(prefix, .checklist)
+    }
+
+    func test_activeLinePrefix_blockquoteLine() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "> quoted",
+            selection: NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(prefix, .blockquote)
+    }
+
+    func test_activeLinePrefix_plainLine_returnsNil() {
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "plain text",
+            selection: NSRange(location: 4, length: 0)
+        )
+        XCTAssertNil(prefix)
+    }
+
+    func test_activeLinePrefix_classifiesEachLineIndependently() {
+        // Caret on line 2 (a numbered line) of a 3-line buffer; answer must
+        // be .numbered, not .bullet from line 1.
+        let body = "- bullet\n1. numbered\n> quote"
+        let line2Start = ("- bullet\n" as NSString).length
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: body,
+            selection: NSRange(location: line2Start + 4, length: 0)
+        )
+        XCTAssertEqual(prefix, .numbered)
+    }
+
+    func test_activeLinePrefix_caretAtLineEnd_stillClassifies() {
+        // Caret at the trailing newline boundary still resolves to the
+        // line it just left.
+        let prefix = FormattingToolbarView.activeLinePrefix(
+            body: "- item\n",
+            selection: NSRange(location: 6, length: 0)
+        )
+        XCTAssertEqual(prefix, .bullet)
+    }
 }

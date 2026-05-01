@@ -36,6 +36,12 @@ struct FormattingToolbarView: View {
     /// checkmark on Heading / Subheading / Body. Populated by EditorPaneView
     /// from HybridEditorController.activeHeadingLevel.
     var activeHeadingLevel: Int? = nil
+    /// Line-prefix block format (bullet / numbered / checklist / blockquote)
+    /// of the line containing the caret, or nil for plain lines. Drives the
+    /// popover's active-state highlight on the four list-shape rows + the
+    /// standalone Checklist button. Populated by EditorPaneView from
+    /// HybridEditorController.activeLinePrefix.
+    var activeLinePrefix: LinePrefix? = nil
 
     /// Apple Notes-style: a single "Aa" trigger collapses every formatting
     /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
@@ -58,6 +64,7 @@ struct FormattingToolbarView: View {
                         applyChecklist: applyChecklist,
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
+                        activeLinePrefix: activeLinePrefix,
                         dismiss: { popoverShown = false }
                     )
                 }
@@ -69,7 +76,7 @@ struct FormattingToolbarView: View {
                 systemName: "checklist",
                 tooltip: "Checklist (⌘⇧L)",
                 accessibilityLabel: "Checklist",
-                isActive: false
+                isActive: activeLinePrefix == .checklist
             ) { applyChecklist() }
 
             Spacer()
@@ -193,6 +200,71 @@ struct FormattingToolbarView: View {
     /// and underline are orthogonal — they participate in toggle-off but
     /// stack rather than swap when the requested kind differs.
     internal enum InlineKind { case bold, italic, code, strikethrough, underline }
+
+    /// Line-prefix block format of the caret's line. Drives the popover
+    /// active-state highlight for the four list-shape rows. Mutually
+    /// exclusive — a line is either bulleted, numbered, a checklist, a
+    /// blockquote, or none of these. Headings are NOT included here; they
+    /// have their own publisher (`activeHeadingLevel`).
+    internal enum LinePrefix { case bullet, numbered, checklist, blockquote }
+
+    /// Classify the line containing the caret. Single-line scan over the
+    /// recognized prefixes — cheaper than re-running the full parser for
+    /// what is purely a UI hint. Mirrors the `updateActiveHeadingLevel`
+    /// pattern in HybridEditorView.Coordinator.
+    ///
+    /// Order matters: checklist (`- [ ] ` / `- [x] `) is detected before
+    /// bullet (`- `), since the checklist prefix begins with a bullet
+    /// prefix and the more-specific match wins.
+    internal static func activeLinePrefix(body: String, selection: NSRange) -> LinePrefix? {
+        let nsBody = body as NSString
+        guard selection.location >= 0,
+              selection.location <= nsBody.length else { return nil }
+        let probe = NSRange(location: min(selection.location, nsBody.length), length: 0)
+        let lineRange = nsBody.lineRange(for: probe)
+        let line = nsBody.substring(with: lineRange) as NSString
+
+        // Checklist: `- [ ] ` or `- [x] ` / `- [X] `
+        if line.length >= 6,
+           line.character(at: 0) == 0x2D,   // '-'
+           line.character(at: 1) == 0x20,   // ' '
+           line.character(at: 2) == 0x5B,   // '['
+           line.character(at: 4) == 0x5D,   // ']'
+           line.character(at: 5) == 0x20 {  // ' '
+            let state = line.character(at: 3)
+            if state == 0x20 || state == 0x78 || state == 0x58 {
+                return .checklist
+            }
+        }
+
+        // Bullet: `- ` or `* `
+        if line.length >= 2,
+           (line.character(at: 0) == 0x2D || line.character(at: 0) == 0x2A),
+           line.character(at: 1) == 0x20 {
+            return .bullet
+        }
+
+        // Numbered: `<digits>+. `
+        var i = 0
+        while i < line.length, line.character(at: i) >= 0x30, line.character(at: i) <= 0x39 {
+            i += 1
+        }
+        if i > 0,
+           i + 1 < line.length,
+           line.character(at: i) == 0x2E,       // '.'
+           line.character(at: i + 1) == 0x20 {  // ' '
+            return .numbered
+        }
+
+        // Blockquote: `> `
+        if line.length >= 2,
+           line.character(at: 0) == 0x3E,   // '>'
+           line.character(at: 1) == 0x20 {
+            return .blockquote
+        }
+
+        return nil
+    }
 
     /// Returns the inline kind whose pair currently encloses the selection
     /// (caret or range), or nil if the selection sits in plain text. Thin
@@ -1395,6 +1467,7 @@ private struct FormattingPopoverView: View {
     let applyChecklist: () -> Void
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
+    let activeLinePrefix: FormattingToolbarView.LinePrefix?
     let dismiss: () -> Void
 
     var body: some View {
@@ -1469,25 +1542,25 @@ private struct FormattingPopoverView: View {
                 ParagraphStyleRow(
                     label: "•  Bulleted List",
                     labelFont: .system(size: 13, weight: .regular),
-                    isActive: false
+                    isActive: activeLinePrefix == .bullet
                 ) { applyLinePrefix(); dismiss() }
 
                 ParagraphStyleRow(
                     label: "1.  Numbered List",
                     labelFont: .system(size: 13, weight: .regular),
-                    isActive: false
+                    isActive: activeLinePrefix == .numbered
                 ) { applyNumberedList(); dismiss() }
 
                 ParagraphStyleRow(
                     label: "❘  Block Quote",
                     labelFont: .system(size: 13, weight: .regular),
-                    isActive: false
+                    isActive: activeLinePrefix == .blockquote
                 ) { applyBlockQuote(); dismiss() }
 
                 ParagraphStyleRow(
                     label: "◯  Checklist",
                     labelFont: .system(size: 13, weight: .regular),
-                    isActive: false
+                    isActive: activeLinePrefix == .checklist
                 ) { applyChecklist(); dismiss() }
             }
             .padding(.horizontal, 6)

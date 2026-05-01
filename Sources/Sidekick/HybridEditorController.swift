@@ -45,4 +45,12 @@ final class HybridEditorController: ObservableObject {
     /// Same coalesced-write discipline as `activeInlineKind` to avoid
     /// re-rendering on identical updates.
     @Published var activeHeadingLevel: Int?
+
+    /// Line-prefix block format (bullet / numbered / checklist /
+    /// blockquote) of the line containing the caret, or nil when the
+    /// line has no recognized line prefix. Drives the popover's active-
+    /// state highlight on its four list-shape rows so the user can see
+    /// when the current line is already in a given format. Coalesced
+    /// writes for the same reason as the other publishers.
+    @Published var activeLinePrefix: FormattingToolbarView.LinePrefix?
 }

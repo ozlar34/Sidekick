@@ -82,7 +82,8 @@ struct EditorPaneView: View {
                     applyBlockQuote: applyBlockQuote,
                     applyChecklist: applyChecklist,
                     activeInlineKind: editorController.activeInlineKind,
-                    activeHeadingLevel: editorController.activeHeadingLevel
+                    activeHeadingLevel: editorController.activeHeadingLevel,
+                    activeLinePrefix: editorController.activeLinePrefix
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
