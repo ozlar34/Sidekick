@@ -111,6 +111,25 @@ struct FormattingToolbarView: View {
         let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
         let safeRange = NSRange(location: safeLocation, length: safeLength)
 
+        // F-05: wrap inside a fenced code block is inert. Markdown markers
+        // inside `\`\`\`` content render as literal characters, so dropping
+        // `**` or `~~` into a code block both fails to format the visual
+        // text AND corrupts the code itself. If the selection sits fully
+        // inside a fenced block's content range, return the body unchanged.
+        // Selections that straddle the fence boundary are rare and undefined
+        // under CommonMark; treat the same way.
+        for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+            let fenceContent = fence.contentRange
+            let selEnd = safeLocation + safeLength
+            let startInside = safeLocation >= fenceContent.location
+                && safeLocation <= fenceContent.location + fenceContent.length
+            let endInside = selEnd >= fenceContent.location
+                && selEnd <= fenceContent.location + fenceContent.length
+            if startInside || endInside {
+                return (body, safeLocation)
+            }
+        }
+
         // MARK: Universal toggle-off / swap
         // The hybrid editor hides `**`/`*`/`` ` `` glyphs as zero-width, so the
         // caret/selection can land in subtly different byte positions for the

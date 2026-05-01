@@ -708,4 +708,53 @@ final class FormattingToolbarTests: XCTestCase {
         )
         XCTAssertEqual(prefix, .bullet)
     }
+
+    // MARK: - F-05 — wrap inside fenced code block is no-op
+
+    func test_applyMarkdownWrap_insideFencedBlock_caretOnly_isNoOp() {
+        // Body: "```\nfoo\n```\n" — caret mid-content (offset 5, between f/o/o).
+        // ⌘B inside the fence must NOT mutate bytes.
+        let body = "```\nfoo\n```\n"
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: body,
+            range: NSRange(location: 5, length: 0)
+        )
+        XCTAssertEqual(result.newBody, body, "Wrap inside fenced block must be inert")
+        XCTAssertEqual(result.cursorLocation, 5, "Cursor unchanged inside fenced block")
+    }
+
+    func test_applyMarkdownWrap_insideFencedBlock_selection_isNoOp() {
+        // Selection covers "foo" (offset 4..7) inside the fence.
+        let body = "```\nfoo\n```\n"
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: body,
+            range: NSRange(location: 4, length: 3)
+        )
+        XCTAssertEqual(result.newBody, body, "Wrap on selection inside fenced block must be inert")
+    }
+
+    func test_applyMarkdownWrap_outsideFencedBlock_unaffected() {
+        // Body has a fence, selection is in surrounding prose. Wrap proceeds.
+        let body = "before\n```\ncode\n```\nafter"
+        let beforeStart = 0
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: body,
+            range: NSRange(location: beforeStart, length: 6)  // "before"
+        )
+        XCTAssertEqual(result.newBody, "**before**\n```\ncode\n```\nafter",
+                       "Wrap outside the fence works as usual")
+    }
+
+    func test_applyMarkdownWrap_strikeInsideFencedBlock_isNoOp() {
+        let body = "```\nfoo\n```\n"
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "~~", suffix: "~~",
+            body: body,
+            range: NSRange(location: 5, length: 0)
+        )
+        XCTAssertEqual(result.newBody, body, "Strikethrough wrap also inert inside fence")
+    }
 }
