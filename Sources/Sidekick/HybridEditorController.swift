@@ -53,4 +53,11 @@ final class HybridEditorController: ObservableObject {
     /// when the current line is already in a given format. Coalesced
     /// writes for the same reason as the other publishers.
     @Published var activeLinePrefix: FormattingToolbarView.LinePrefix?
+
+    /// Fired when the user presses Shift-Tab with the caret at body
+    /// offset 0 — counterpart to title→body Tab. EditorPaneView wires
+    /// this to flip SwiftUI focus back to the title field. nil means
+    /// the body editor swallows Shift-Tab (default NSTextView behavior:
+    /// insert backtab character or no-op).
+    var onShiftTabAtBodyStart: (() -> Void)?
 }

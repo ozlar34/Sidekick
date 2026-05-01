@@ -119,6 +119,9 @@ struct EditorPaneView: View {
             localTitle = note.title
             localBody = note.body
             seedFocusForCurrentNote()
+            // Wire Shift-Tab @ body offset 0 → return focus to title.
+            // Counterpart to title→body Tab in the title TextField above.
+            editorController.onShiftTabAtBodyStart = { focus = .title }
         }
         .onChange(of: note.id) { _, _ in
             localTitle = note.title

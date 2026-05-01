@@ -379,6 +379,17 @@ struct HybridEditorView: NSViewRepresentable {
                 if FormattingToolbarView.handleNumberedReturn(in: textView) { return true }
                 return false
             }
+            // Shift-Tab at body offset 0 → return focus to the title field
+            // (counterpart to title→body Tab in EditorPaneView). Anywhere else
+            // in the body, fall through to NSTextView's default backtab.
+            if commandSelector == #selector(NSResponder.insertBacktab(_:)),
+               textView.selectedRange().location == 0,
+               textView.selectedRange().length == 0 {
+                if let callback = parent.controller.onShiftTabAtBodyStart {
+                    callback()
+                    return true
+                }
+            }
             return false
         }
 
