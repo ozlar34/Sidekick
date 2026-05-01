@@ -37,4 +37,12 @@ final class HybridEditorController: ObservableObject {
     /// highlight. Coordinator only writes when the value actually differs,
     /// so unrelated keystrokes do not fire SwiftUI re-renders.
     @Published var activeInlineKind: FormattingToolbarView.InlineKind?
+
+    /// Heading level (1…3) of the line containing the caret, or nil when
+    /// the line has no `^#{1,6} ` prefix. Display-capped at 3 — H4–H6
+    /// lines (rare) report as 3 because the toolbar dropdown only offers
+    /// Heading 1–3. The underlying `####…` text is preserved on save.
+    /// Same coalesced-write discipline as `activeInlineKind` to avoid
+    /// re-rendering on identical updates.
+    @Published var activeHeadingLevel: Int?
 }

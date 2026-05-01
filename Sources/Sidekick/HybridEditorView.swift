@@ -166,6 +166,7 @@ struct HybridEditorView: NSViewRepresentable {
         // initial caret position so a freshly-mounted note with the caret
         // already inside formatted text shows the correct active button.
         context.coordinator.updateActiveInlineKind(in: textView)
+        context.coordinator.updateActiveHeadingLevel(in: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -217,6 +218,9 @@ struct HybridEditorView: NSViewRepresentable {
             // without the selection itself moving (e.g. typing the closing
             // `*` of an italic pair around the caret). Refresh here too.
             updateActiveInlineKind(in: tv)
+            // Same reason for headings: typing/deleting a leading `#` flips
+            // the line in/out of heading state without selection movement.
+            updateActiveHeadingLevel(in: tv)
         }
 
         /// Caret typing attributes are sticky after edits — when the user
@@ -229,6 +233,7 @@ struct HybridEditorView: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             updateCaretTypingAttributes(in: tv)
             updateActiveInlineKind(in: tv)
+            updateActiveHeadingLevel(in: tv)
         }
 
         /// Recompute which inline pair (bold / italic / code) currently
@@ -251,6 +256,37 @@ struct HybridEditorView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 if parent.controller.activeInlineKind != kind {
                     parent.controller.activeInlineKind = kind
+                }
+            }
+        }
+
+        /// Recompute the heading level of the line containing the caret
+        /// and publish it to the controller. Single-line scan over the
+        /// `^#{1,6} ` prefix — cheaper than re-running the full parser
+        /// for what is purely a UI hint. Coalesces identical writes for
+        /// the same reason as `updateActiveInlineKind`.
+        func updateActiveHeadingLevel(in tv: NSTextView) {
+            let nsBody = tv.string as NSString
+            let selection = tv.selectedRange()
+            let probe = NSRange(location: min(selection.location, nsBody.length), length: 0)
+            let lineRange = nsBody.lineRange(for: probe)
+            let lineNS = nsBody.substring(with: lineRange) as NSString
+
+            var hashes = 0
+            while hashes < lineNS.length, lineNS.character(at: hashes) == 0x23 {
+                hashes += 1
+            }
+            let level: Int?
+            if hashes >= 1, hashes <= 6,
+               hashes < lineNS.length, lineNS.character(at: hashes) == 0x20 {
+                // Cap display at 3 — toolbar dropdown only offers H1–H3.
+                level = min(hashes, 3)
+            } else {
+                level = nil
+            }
+            MainActor.assumeIsolated {
+                if parent.controller.activeHeadingLevel != level {
+                    parent.controller.activeHeadingLevel = level
                 }
             }
         }

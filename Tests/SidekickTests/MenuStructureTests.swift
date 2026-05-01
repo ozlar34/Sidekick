@@ -77,8 +77,8 @@ final class MenuStructureTests: XCTestCase {
         _ = install()
         let formatSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "Format" })?.submenu
         XCTAssertNotNil(formatSubmenu, "Format submenu must exist (MENU-02)")
-        XCTAssertEqual(formatSubmenu?.items.count, 5,
-                       "Format has exactly 5 items: Bold, Italic, Inline Code, Link, Bulleted List")
+        XCTAssertEqual(formatSubmenu?.items.count, 10,
+                       "Format has 10 items: Bold, Italic, Inline Code, Link, Bulleted List, separator, Heading 1, Heading 2, Heading 3, Body")
 
         let byTitle: (String) -> NSMenuItem? = { title in
             formatSubmenu?.items.first { $0.title == title }
@@ -109,6 +109,32 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(bulleted?.keyEquivalent, "8", "⌘⇧8")
         XCTAssertEqual(bulleted?.keyEquivalentModifierMask, [.command, .shift],
                        "Bulleted List modifier mask is explicit [.command, .shift] (non-letter key needs explicit Shift)")
+
+        // Headings — ⌘⌥1/2/3 + ⌘⌥0 for Body. Numbers are non-letter keys
+        // so the modifier mask must be set explicitly (same pattern as ⌘⌥C).
+        // A separator sits between Bulleted List and Heading 1.
+        let separatorIndex = formatSubmenu?.items.firstIndex(where: { $0.isSeparatorItem })
+        XCTAssertNotNil(separatorIndex, "Separator must exist between inline tools and headings")
+
+        let h1 = byTitle("Heading 1")
+        XCTAssertEqual(h1?.keyEquivalent, "1", "⌘⌥1")
+        XCTAssertEqual(h1?.keyEquivalentModifierMask, [.command, .option],
+                       "Heading 1 modifier mask is explicit [.command, .option]")
+
+        let h2 = byTitle("Heading 2")
+        XCTAssertEqual(h2?.keyEquivalent, "2", "⌘⌥2")
+        XCTAssertEqual(h2?.keyEquivalentModifierMask, [.command, .option],
+                       "Heading 2 modifier mask is explicit [.command, .option]")
+
+        let h3 = byTitle("Heading 3")
+        XCTAssertEqual(h3?.keyEquivalent, "3", "⌘⌥3")
+        XCTAssertEqual(h3?.keyEquivalentModifierMask, [.command, .option],
+                       "Heading 3 modifier mask is explicit [.command, .option]")
+
+        let body = byTitle("Body")
+        XCTAssertEqual(body?.keyEquivalent, "0", "⌘⌥0")
+        XCTAssertEqual(body?.keyEquivalentModifierMask, [.command, .option],
+                       "Body modifier mask is explicit [.command, .option]")
     }
 
     // MARK: - D-M-06 — Note submenu (MENU-04)

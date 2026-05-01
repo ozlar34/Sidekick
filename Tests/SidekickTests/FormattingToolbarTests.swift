@@ -410,4 +410,122 @@ final class FormattingToolbarTests: XCTestCase {
         )
         XCTAssertNil(kind)
     }
+
+    // MARK: - applyHeadingLevel (heading dropdown)
+    //
+    // Heading dropdown spec:
+    //   • level=1..3 on plain line  → prepend "# ", "## ", or "### ".
+    //   • level=N on line already at level N → strip (toggle off, mirrors bullet).
+    //   • level=N on line at different level → swap prefix (level change).
+    //   • level=nil on heading line → strip (force Body).
+    //   • level=nil on plain line → no-op.
+    //   • Multi-line: same rules applied per line as a block.
+
+    func test_applyHeadingLevel_emptySelectionPlainLine_appliesH1() {
+        let (newBody, newSelection) = FormattingToolbarView.applyHeadingLevel(
+            body: "hello",
+            range: NSRange(location: 3, length: 0),
+            level: 1
+        )
+        XCTAssertEqual(newBody, "# hello")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 7))
+    }
+
+    func test_applyHeadingLevel_emptySelectionH2Line_levelTwo_togglesOffToBody() {
+        // Caret on "## foo" line, picking Heading 2 → strip back to body.
+        let (newBody, newSelection) = FormattingToolbarView.applyHeadingLevel(
+            body: "## foo",
+            range: NSRange(location: 4, length: 0),
+            level: 2
+        )
+        XCTAssertEqual(newBody, "foo", "Re-pick same level → toggle off (mirrors bullet)")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 3))
+    }
+
+    func test_applyHeadingLevel_h1Line_levelTwo_swapsPrefix() {
+        // Caret on "# foo" line, picking Heading 2 → swap to "## foo".
+        let (newBody, newSelection) = FormattingToolbarView.applyHeadingLevel(
+            body: "# foo",
+            range: NSRange(location: 3, length: 0),
+            level: 2
+        )
+        XCTAssertEqual(newBody, "## foo", "Different level → swap, not toggle")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 6))
+    }
+
+    func test_applyHeadingLevel_multiLineMixed_appliesH3ToAll() {
+        // Mixed: plain, H1, H2 → all become H3 (not toggle, prefix swaps per line).
+        // "plain\n# h1\n## h2" → 5 + 1 + 4 + 1 + 5 = 16 UTF-16 units.
+        let (newBody, _) = FormattingToolbarView.applyHeadingLevel(
+            body: "plain\n# h1\n## h2",
+            range: NSRange(location: 0, length: 16),
+            level: 3
+        )
+        XCTAssertEqual(newBody, "### plain\n### h1\n### h2",
+                       "Mixed levels → all swapped to requested level")
+    }
+
+    func test_applyHeadingLevel_multiLineAllH2_levelTwo_togglesOff() {
+        // All non-empty lines at H2 → picking H2 strips them all.
+        // "## a\n## b\n## c" = 4 + 1 + 4 + 1 + 4 = 14 UTF-16 units.
+        let (newBody, _) = FormattingToolbarView.applyHeadingLevel(
+            body: "## a\n## b\n## c",
+            range: NSRange(location: 0, length: 14),
+            level: 2
+        )
+        XCTAssertEqual(newBody, "a\nb\nc", "All-same-level → toggle off whole block")
+    }
+
+    func test_applyHeadingLevel_levelNil_onHeadingLine_stripsToBody() {
+        let (newBody, newSelection) = FormattingToolbarView.applyHeadingLevel(
+            body: "### foo",
+            range: NSRange(location: 4, length: 0),
+            level: nil
+        )
+        XCTAssertEqual(newBody, "foo", "Body action strips heading prefix")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 3))
+    }
+
+    func test_applyHeadingLevel_levelNil_onPlainLine_isNoOp() {
+        let body = "already plain"
+        let (newBody, _) = FormattingToolbarView.applyHeadingLevel(
+            body: body,
+            range: NSRange(location: 5, length: 0),
+            level: nil
+        )
+        XCTAssertEqual(newBody, body, "Body action on plain line leaves the line unchanged")
+    }
+
+    func test_applyHeadingLevel_emptyBody_levelOne_producesPrefixOnly() {
+        let (newBody, newSelection) = FormattingToolbarView.applyHeadingLevel(
+            body: "",
+            range: NSRange(location: 0, length: 0),
+            level: 1
+        )
+        XCTAssertEqual(newBody, "# ", "Empty body + H1 → just the prefix")
+        XCTAssertEqual(newSelection, NSRange(location: 0, length: 2))
+    }
+
+    func test_applyHeadingLevel_midBodySelection_preservesSurroundingLines() {
+        // Body: "intro\nfoo\nbar\noutro" → 5+1+3+1+3+1+5 = 19 units.
+        // Selection covers "foo\nbar" at loc=6 len=7.
+        let (newBody, _) = FormattingToolbarView.applyHeadingLevel(
+            body: "intro\nfoo\nbar\noutro",
+            range: NSRange(location: 6, length: 7),
+            level: 2
+        )
+        XCTAssertEqual(newBody, "intro\n## foo\n## bar\noutro",
+                       "Only the foo/bar block is transformed; intro/outro lines untouched")
+    }
+
+    func test_applyHeadingLevel_h4Line_levelThree_swapsToH3() {
+        // H4 line (above the dropdown's offered range). Picking H3 should
+        // swap the prefix to H3 — not stack hashes, not strip.
+        let (newBody, _) = FormattingToolbarView.applyHeadingLevel(
+            body: "#### deep",
+            range: NSRange(location: 5, length: 0),
+            level: 3
+        )
+        XCTAssertEqual(newBody, "### deep", "H4 → H3 swaps cleanly (existing prefix stripped before new added)")
+    }
 }

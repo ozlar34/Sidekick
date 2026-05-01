@@ -74,7 +74,9 @@ struct EditorPaneView: View {
             FormattingToolbarView(
                 wrapSelection: wrapSelection,
                 applyLinePrefix: applyLinePrefix,
-                activeInlineKind: editorController.activeInlineKind
+                applyHeading: applyHeadingLevel,
+                activeInlineKind: editorController.activeInlineKind,
+                activeHeadingLevel: editorController.activeHeadingLevel
             )
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -207,6 +209,15 @@ struct EditorPaneView: View {
     private func applyLinePrefix() {
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performLinePrefix(in: tv)
+    }
+
+    /// Toolbar-dropdown bridge for the heading-level picker. `level` is
+    /// `nil` for Body or `1…3` for the heading levels offered by the
+    /// dropdown. Toggle-off (re-pick same level → strip) is handled
+    /// inside `applyHeadingLevel` / `performHeadingLevel`.
+    private func applyHeadingLevel(level: Int?) {
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performHeadingLevel(in: tv, level: level)
     }
 
 }

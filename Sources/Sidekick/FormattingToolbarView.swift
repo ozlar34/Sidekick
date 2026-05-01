@@ -8,12 +8,23 @@ import SwiftUI
 struct FormattingToolbarView: View {
     let wrapSelection: (String, String) -> Void
     let applyLinePrefix: () -> Void
+    /// Apply a heading level (or strip back to body) on the line(s)
+    /// containing the selection. `nil` = Body. Defaults to a no-op so
+    /// existing call sites (tests, previews) compile without change.
+    /// Named distinctly from the static `applyHeadingLevel(body:range:level:)`
+    /// (mirrors `applyLinePrefix` vs `applyBulletedList`).
+    var applyHeading: (Int?) -> Void = { _ in }
     /// Set when the caret is inside a bold / italic / code span. Drives the
     /// active-state highlight on the corresponding button. Defaults to nil so
     /// existing call sites (tests, previews, menu-only invocations) compile
     /// without change. Populated by EditorPaneView from
     /// HybridEditorController.activeInlineKind.
     var activeInlineKind: InlineKind? = nil
+    /// Heading level (1–3) of the line containing the caret, or nil if the
+    /// caret is on a non-heading line. Drives the dropdown's label and the
+    /// active-row indicator. Populated by EditorPaneView from
+    /// HybridEditorController.activeHeadingLevel.
+    var activeHeadingLevel: Int? = nil
 
     var body: some View {
         HStack(spacing: 2) {
@@ -44,6 +55,11 @@ struct FormattingToolbarView: View {
                 accessibilityLabel: "Link",
                 isActive: false
             ) { wrapSelection("[", "]()") }
+
+            HeadingMenu(
+                activeLevel: activeHeadingLevel,
+                apply: applyHeading
+            )
 
             FormatButton(
                 systemName: "list.bullet",
@@ -335,6 +351,111 @@ struct FormattingToolbarView: View {
         return (newBody, newSelection)
     }
 
+    /// Pure string transformation: applies, swaps, or strips a heading
+    /// prefix (`# `, `## `, `### `, …) on every line in the block containing
+    /// `range`. Mirrors `applyBulletedList`'s shape: line-block expansion,
+    /// per-line prefix manipulation, toggle-off on re-pick.
+    ///
+    /// - `level`: `nil` → strip any heading prefix from every line (force
+    ///   Body). `1…6` → apply that heading level to every line.
+    /// - **Toggle rule**: if `level != nil` AND every non-empty line in the
+    ///   expanded block already has exactly that level, the call is treated
+    ///   as `level = nil` (strip → Body). This mirrors the bullet toggle
+    ///   convention and lets ⌘⌥2 on an H2 line strip back to body.
+    /// - Existing heading prefixes are stripped before the new prefix is
+    ///   prepended, so applying H1 to an H2 line produces an H1 line (level
+    ///   swap, not stacked hashes).
+    /// - Empty lines: when applying a level, an empty line still gets the
+    ///   prefix (consistent with bullet behaviour — an empty heading line
+    ///   `"## "` is a real thing). When stripping, empty lines stay empty.
+    ///
+    /// Returns `newBody` and `newSelection` (NSRange) covering the
+    /// transformed line block. Callers re-select the block so a follow-up
+    /// shortcut press can toggle it off cleanly.
+    internal static func applyHeadingLevel(
+        body: String,
+        range: NSRange,
+        level: Int?
+    ) -> (newBody: String, newSelection: NSRange) {
+        let nsBody = body as NSString
+
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+
+        let requestedLevel: Int?
+        if let lvl = level, lvl >= 1, lvl <= 6 {
+            requestedLevel = lvl
+        } else {
+            requestedLevel = nil
+        }
+
+        let blockRange = nsBody.lineRange(for: safeRange)
+        let blockSubstring = nsBody.substring(with: blockRange)
+        let endsWithNewline = blockSubstring.hasSuffix("\n")
+        var lines = blockSubstring.components(separatedBy: "\n")
+        let trailingEmpty: Bool
+        if endsWithNewline, let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty = true
+        } else {
+            trailingEmpty = false
+        }
+
+        // Returns (level, prefixLength) for a line whose first chars are
+        // 1–6 `#` followed by a single space; nil otherwise. Single-line
+        // scan is cheaper than re-running the full parser per line.
+        func headingPrefix(of line: String) -> (level: Int, prefixLen: Int)? {
+            let ns = line as NSString
+            var hashes = 0
+            while hashes < ns.length, ns.character(at: hashes) == 0x23 /* # */ {
+                hashes += 1
+            }
+            guard hashes >= 1, hashes <= 6,
+                  hashes < ns.length, ns.character(at: hashes) == 0x20 /* space */
+            else { return nil }
+            return (hashes, hashes + 1)
+        }
+
+        // Toggle detection — only triggers when the caller specified a level.
+        let nonEmptyLines = lines.filter { !$0.isEmpty }
+        let effectiveLevel: Int?
+        if let lvl = requestedLevel,
+           !nonEmptyLines.isEmpty,
+           nonEmptyLines.allSatisfy({ headingPrefix(of: $0)?.level == lvl }) {
+            effectiveLevel = nil
+        } else {
+            effectiveLevel = requestedLevel
+        }
+
+        let newPrefix: String = effectiveLevel.map { String(repeating: "#", count: $0) + " " } ?? ""
+
+        let transformed: [String] = lines.map { line in
+            let stripped: String
+            if let h = headingPrefix(of: line) {
+                stripped = (line as NSString).substring(from: h.prefixLen)
+            } else {
+                stripped = line
+            }
+            if effectiveLevel == nil {
+                return stripped
+            }
+            return newPrefix + stripped
+        }
+
+        var newBlock = transformed.joined(separator: "\n")
+        if trailingEmpty {
+            newBlock += "\n"
+        }
+
+        let newBody = nsBody.replacingCharacters(in: blockRange, with: newBlock)
+        let newSelection = NSRange(
+            location: blockRange.location,
+            length: (newBlock as NSString).length
+        )
+        return (newBody, newSelection)
+    }
+
     /// Applies markdown wrap directly on an NSTextView using AppKit's edit
     /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
     /// This registers the change on the text view's own `undoManager`
@@ -510,6 +631,60 @@ struct FormattingToolbarView: View {
             )
         }
     }
+
+    /// Applies a heading-level toggle directly on an NSTextView. Mirrors
+    /// `performLinePrefix` (D-R-03): same edit-sandwich pattern, same
+    /// caret/selection restore semantics.
+    ///
+    /// Called from two paths:
+    ///   1. `EditorPaneView.applyHeadingLevel(level:)` — toolbar dropdown.
+    ///   2. `AppDelegate.formatHeading{1,2,3,Body}(_:)` — Format menu shortcuts.
+    static func performHeadingLevel(in textView: NSTextView, level: Int?) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (fullNewBody, _) = applyHeadingLevel(body: body, range: range, level: level)
+
+        let nsBody = body as NSString
+        let blockRange = nsBody.lineRange(for: range)
+
+        let deltaLength = (fullNewBody as NSString).length - nsBody.length
+        let newBlockLength = blockRange.length + deltaLength
+        let newBlock = (fullNewBody as NSString).substring(
+            with: NSRange(location: blockRange.location, length: newBlockLength)
+        )
+
+        guard textView.shouldChangeText(in: blockRange, replacementString: newBlock) else { return }
+        textView.replaceCharacters(in: blockRange, with: newBlock)
+        textView.didChangeText()
+
+        // Caret restore mirrors performLinePrefix:
+        //   - Empty selection AND single-line result → caret AFTER the new
+        //     heading prefix (or at line start if the level was stripped).
+        //     Compute the new prefix length by scanning leading hashes on
+        //     the new line — handles add (+N), strip (-N), and swap (Δ).
+        //   - Otherwise → re-select the full transformed block.
+        if range.length == 0, !newBlock.contains("\n") {
+            let ns = newBlock as NSString
+            var hashes = 0
+            while hashes < ns.length, ns.character(at: hashes) == 0x23 {
+                hashes += 1
+            }
+            let prefixLen: Int
+            if hashes >= 1, hashes <= 6,
+               hashes < ns.length, ns.character(at: hashes) == 0x20 {
+                prefixLen = hashes + 1
+            } else {
+                prefixLen = 0
+            }
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location + prefixLen, length: 0)
+            )
+        } else {
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location, length: (newBlock as NSString).length)
+            )
+        }
+    }
 }
 
 /// Single toolbar button — 28×28 hit target with rounded-rect background that
@@ -545,6 +720,83 @@ private struct FormatButton: View {
 
     private var backgroundColor: Color {
         if isActive { return Color.accentColor.opacity(0.18) }
+        if isHovered { return Color.primary.opacity(0.07) }
+        return .clear
+    }
+}
+
+/// Heading-level dropdown — paragraph-style picker styled to sit beside
+/// the rest of the formatting toolbar. Label tracks the heading level at
+/// the caret ("Body" / "Heading 1" / …). Each menu row renders at a
+/// clamped scale of its real heading size so the previews communicate
+/// what the user will get.
+///
+/// Active-row indicator: the toolbar label IS the active indicator (it
+/// flips to the current level). Menu rows are deliberately checkmark-free
+/// to keep the styled-preview rows visually clean. Toggle-off works
+/// because every row is a Button that always fires `apply` on click,
+/// regardless of current selection (a Picker would dedupe identical
+/// values and break the toggle-off-via-menu path).
+private struct HeadingMenu: View {
+    let activeLevel: Int?
+    let apply: (Int?) -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Menu {
+            Button(action: { apply(nil) }) {
+                Text("Body")
+                    .font(.system(size: 13, weight: .regular))
+            }
+            Button(action: { apply(1) }) {
+                Text("Heading 1")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            Button(action: { apply(2) }) {
+                Text("Heading 2")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+            Button(action: { apply(3) }) {
+                Text("Heading 3")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.primary)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(backgroundColor)
+                    .animation(.easeOut(duration: 0.12), value: isHovered)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Heading style")
+        .accessibilityLabel("Heading style")
+        .onHover { isHovered = $0 }
+    }
+
+    private var label: String {
+        switch activeLevel {
+        case 1: return "Heading 1"
+        case 2: return "Heading 2"
+        case 3, 4, 5, 6: return "Heading 3"
+        default: return "Body"
+        }
+    }
+
+    private var backgroundColor: Color {
         if isHovered { return Color.primary.opacity(0.07) }
         return .clear
     }

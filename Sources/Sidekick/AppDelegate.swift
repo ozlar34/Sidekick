@@ -188,6 +188,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bulletedListItem.target = self
         formatMenu.addItem(bulletedListItem)
 
+        formatMenu.addItem(NSMenuItem.separator())
+
+        // Heading levels — ⌘⌥1/2/3 apply or toggle-off the corresponding
+        // level; ⌘⌥0 forces Body. Numbers are non-letter keys so the
+        // modifier mask must be set explicitly (same pattern as ⌘⌥C).
+        let heading1Item = NSMenuItem(
+            title: "Heading 1",
+            action: #selector(formatHeading1(_:)),
+            keyEquivalent: "1"
+        )
+        heading1Item.keyEquivalentModifierMask = [.command, .option]
+        heading1Item.target = self
+        formatMenu.addItem(heading1Item)
+
+        let heading2Item = NSMenuItem(
+            title: "Heading 2",
+            action: #selector(formatHeading2(_:)),
+            keyEquivalent: "2"
+        )
+        heading2Item.keyEquivalentModifierMask = [.command, .option]
+        heading2Item.target = self
+        formatMenu.addItem(heading2Item)
+
+        let heading3Item = NSMenuItem(
+            title: "Heading 3",
+            action: #selector(formatHeading3(_:)),
+            keyEquivalent: "3"
+        )
+        heading3Item.keyEquivalentModifierMask = [.command, .option]
+        heading3Item.target = self
+        formatMenu.addItem(heading3Item)
+
+        let bodyItem = NSMenuItem(
+            title: "Body",
+            action: #selector(formatHeadingBody(_:)),
+            keyEquivalent: "0"
+        )
+        bodyItem.keyEquivalentModifierMask = [.command, .option]
+        bodyItem.target = self
+        formatMenu.addItem(bodyItem)
+
         formatItem.submenu = formatMenu
         mainMenu.addItem(formatItem)
 
@@ -425,6 +466,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FormattingToolbarView.performLinePrefix(in: tv)
     }
 
+    /// Format > Heading 1/2/3 (⌘⌥1/2/3). Pressing the same shortcut while
+    /// the caret is already on a line of that level strips the prefix
+    /// back to body — handled by `performHeadingLevel`'s toggle rule.
+    @objc func formatHeading1(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performHeadingLevel(in: tv, level: 1)
+    }
+
+    @objc func formatHeading2(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performHeadingLevel(in: tv, level: 2)
+    }
+
+    @objc func formatHeading3(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performHeadingLevel(in: tv, level: 3)
+    }
+
+    /// Format > Body (⌘⌥0). Strips any heading prefix from the line(s)
+    /// containing the selection. No-op on already-plain lines.
+    @objc func formatHeadingBody(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performHeadingLevel(in: tv, level: nil)
+    }
+
     /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
     /// which reads CFBundleShortVersionString + CFBundleVersion from
     /// Info.plist (build-and-run.sh:38-67 already writes both keys).
@@ -465,7 +535,11 @@ extension AppDelegate: NSUserInterfaceValidations {
              #selector(formatItalic(_:)),
              #selector(formatInlineCode(_:)),
              #selector(formatLink(_:)),
-             #selector(formatBulletedList(_:)):
+             #selector(formatBulletedList(_:)),
+             #selector(formatHeading1(_:)),
+             #selector(formatHeading2(_:)),
+             #selector(formatHeading3(_:)),
+             #selector(formatHeadingBody(_:)):
             return editorFocused                                  // D-V-02
 
         case #selector(pinToggle(_:)):
