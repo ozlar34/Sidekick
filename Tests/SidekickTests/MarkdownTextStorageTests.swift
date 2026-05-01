@@ -255,58 +255,63 @@ final class MarkdownTextStorageTests: XCTestCase {
                        "Round-trip must preserve raw markdown byte-for-byte (STORAGE-01 for links)")
     }
 
-    // MARK: - First-line auto-H1 (regression from commit e1d815e / Phase 11)
+    // MARK: - First-line styling (post-2026-05-01 title-shift)
+    //
+    // The "first body line is auto-H1" convention was deleted when title became
+    // an explicit field on Note. First body line now renders at plain body 15pt.
 
-    func test_firstLine_plainProse_getsH1Font() {
-        // Plain first line with no markdown block marker → auto-H1 (14×1.5 bold).
+    func test_firstLine_plainProse_isPlainBodyFont() {
+        // No more auto-H1 — first body line is plain body 15pt (no bold).
         let storage = makeStorage("Shopping List\n\nmilk\neggs")
         let font = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         XCTAssertNotNil(font, "First line must have a font attribute")
-        XCTAssertEqual(Double(font?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01,
-                       "Plain first line renders at H1 size (14×1.5)")
-        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
-                      "Plain first line renders bold")
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 15, accuracy: 0.01,
+                       "Plain first line renders at body 15pt — no auto-H1")
+        XCTAssertFalse(font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
+                       "Plain first line is not bold")
     }
 
-    func test_firstLine_withHashPrefix_usesExplicitHeadingStyle_notAutoH1() {
-        // `#` / `##` etc. hand off to the heading parser — auto-H1 must not clobber.
+    func test_explicitH2_contentAt22pt() {
+        // Explicit `## ` heading content renders at H2 (22pt semibold).
         let storage = makeStorage("## Subtitle\n\nbody")
-        // Content range of `## Subtitle` starts after `## ` → index 3.
         let font = storage.attribute(.font, at: 3, effectiveRange: nil) as? NSFont
         XCTAssertNotNil(font)
-        XCTAssertEqual(Double(font?.pointSize ?? 0), 14 * 1.25, accuracy: 0.01,
-                       "Explicit ## heading keeps its H2 size — auto-H1 must not override")
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 22, accuracy: 0.01,
+                       "## heading content renders at H2 22pt")
     }
 
-    func test_firstLine_bulletPrefix_stayPlain_noAutoH1() {
-        // Bullets never auto-H1 (content is list-content, not a title).
+    func test_firstLine_bulletPrefix_contentAtBodySize() {
+        // First body line carrying a bullet renders at plain body size — no
+        // auto-heading promotion.
         let storage = makeStorage("- first item\nmore")
         let font = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
         XCTAssertNotNil(font)
-        XCTAssertEqual(Double(font?.pointSize ?? 0), 14, accuracy: 0.01,
-                       "Bullet first line stays at base 14pt")
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 15, accuracy: 0.01,
+                       "Bullet first-line content stays at body 15pt")
     }
 
-    func test_firstLine_whitespaceOnly_noAutoH1() {
-        // Whitespace-only first line → no styling applied.
+    func test_firstLine_whitespaceOnly_atBodySize() {
+        // Whitespace-only first line stays at body size — no styling applied.
         let storage = makeStorage("   \nhello")
         let font = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        XCTAssertEqual(Double(font?.pointSize ?? 14), 14, accuracy: 0.01,
-                       "Whitespace-only first line stays at base size")
+        XCTAssertEqual(Double(font?.pointSize ?? 0), 15, accuracy: 0.01,
+                       "Whitespace-only first line stays at body 15pt")
     }
 
-    func test_firstLine_survivesEditOnLaterLine() {
-        // Regression guard: editing paragraph 3 must not strip line 0's H1 style.
-        let storage = makeStorage("Title\n\npara 2\n\npara 3")
-        let fontBefore = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        XCTAssertEqual(Double(fontBefore?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01)
+    func test_explicitH1_survivesEditOnLaterLine() {
+        // Regression guard: editing paragraph 3 must not strip line 0's
+        // explicit `# Title` heading style.
+        let storage = makeStorage("# Title\n\npara 2\n\npara 3")
+        // Heading content at offset 2 (past `# `).
+        let fontBefore = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(Double(fontBefore?.pointSize ?? 0), 28, accuracy: 0.01,
+                       "Explicit H1 is 28pt before the edit")
 
-        // Edit at end of "para 3".
         storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: "X")
 
-        let fontAfter = storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        XCTAssertEqual(Double(fontAfter?.pointSize ?? 0), 14 * 1.5, accuracy: 0.01,
-                       "Edits on later lines must not drop first-line H1 style")
+        let fontAfter = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(Double(fontAfter?.pointSize ?? 0), 28, accuracy: 0.01,
+                       "Edits on later lines must not drop explicit H1 style")
     }
 
     // MARK: - SF Pro body font (aesthetic pass)
@@ -333,44 +338,40 @@ final class MarkdownTextStorageTests: XCTestCase {
                       "Inline code must remain monospaced")
     }
 
-    // MARK: - H1 paragraph spacing
-
-    func test_firstLine_autoH1_hasParagraphSpacing() {
-        let storage = makeStorage("Shopping List\nmilk")
-        let style = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertNotNil(style, "Auto-H1 first line must carry a paragraphStyle")
-        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
-                       "Auto-H1 paragraphSpacing should be 10pt below the title")
-    }
+    // MARK: - Heading paragraph spacing
+    //
+    // Live constants in MarkdownTextStorage.h{1,2,3}ParagraphStyle:
+    //   H1: paragraphSpacing = 4
+    //   H2: paragraphSpacing = 3
+    //   H3: paragraphSpacing = 2
 
     func test_explicitH1_hasParagraphSpacing() {
         let storage = makeStorage("# Title\nbody line")
         // Inspect the paragraph style at the heading content (index 2 — past `# `).
         let style = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertNotNil(style, "Explicit H1 must carry a paragraphStyle")
-        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
-                       "Explicit H1 paragraphSpacing should be 10pt")
+        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 4, accuracy: 0.01,
+                       "Explicit H1 paragraphSpacing is 4pt")
     }
 
-    func test_explicitH2_hasNoParagraphSpacing() {
-        // Guard: H2 is intentionally untouched in this pass.
+    func test_explicitH2_hasParagraphSpacing() {
         let storage = makeStorage("# H1 line\n## Sub\nbody")
         let h2Start = ("# H1 line\n" as NSString).length + 3  // past `## `
         let style = storage.attribute(.paragraphStyle, at: h2Start, effectiveRange: nil) as? NSParagraphStyle
-        // Either no style, or a style with zero paragraphSpacing — both acceptable.
-        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 0, accuracy: 0.01,
-                       "H2 must not pick up the H1-only paragraph spacing")
+        XCTAssertNotNil(style, "Explicit H2 must carry a paragraphStyle")
+        XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 3, accuracy: 0.01,
+                       "Explicit H2 paragraphSpacing is 3pt")
     }
 
-    func test_h1_paragraphSpacing_survivesEditOnLaterLine() {
-        let storage = makeStorage("Title\n\npara 2\n\npara 3")
-        let styleBefore = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertEqual(Double(styleBefore?.paragraphSpacing ?? 0), 10, accuracy: 0.01)
+    func test_explicitH1_paragraphSpacing_survivesEditOnLaterLine() {
+        let storage = makeStorage("# Title\n\npara 2\n\npara 3")
+        let styleBefore = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(Double(styleBefore?.paragraphSpacing ?? 0), 4, accuracy: 0.01)
 
         storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: "X")
 
-        let styleAfter = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertEqual(Double(styleAfter?.paragraphSpacing ?? 0), 10, accuracy: 0.01,
-                       "Edits on later lines must not drop first-line H1 paragraph spacing")
+        let styleAfter = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(Double(styleAfter?.paragraphSpacing ?? 0), 4, accuracy: 0.01,
+                       "Edits on later lines must not drop H1 paragraph spacing")
     }
 }
