@@ -77,8 +77,8 @@ final class MenuStructureTests: XCTestCase {
         _ = install()
         let formatSubmenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "Format" })?.submenu
         XCTAssertNotNil(formatSubmenu, "Format submenu must exist (MENU-02)")
-        XCTAssertEqual(formatSubmenu?.items.count, 10,
-                       "Format has 10 items: Bold, Italic, Inline Code, Link, Bulleted List, separator, Heading 1, Heading 2, Heading 3, Body")
+        XCTAssertEqual(formatSubmenu?.items.count, 14,
+                       "Format has 14 items: Bold, Italic, Underline, Strikethrough, Inline Code, Link, Bulleted List, Numbered List, Block Quote, separator, Heading 1, Heading 2, Heading 3, Body")
 
         let byTitle: (String) -> NSMenuItem? = { title in
             formatSubmenu?.items.first { $0.title == title }
@@ -101,6 +101,19 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(link?.keyEquivalent, "k", "⌘K")
         XCTAssertEqual(link?.keyEquivalentModifierMask, .command)
 
+        // Underline (Apple Notes parity) — ⌘U.
+        let underline = byTitle("Underline")
+        XCTAssertNotNil(underline, "Underline menu item must exist")
+        XCTAssertEqual(underline?.keyEquivalent, "u", "⌘U")
+        XCTAssertEqual(underline?.keyEquivalentModifierMask, .command)
+
+        // Strikethrough — ⌘⇧X with explicit [.command, .shift] modifier mask.
+        let strikethrough = byTitle("Strikethrough")
+        XCTAssertNotNil(strikethrough, "Strikethrough menu item must exist")
+        XCTAssertEqual(strikethrough?.keyEquivalent, "x", "⌘⇧X")
+        XCTAssertEqual(strikethrough?.keyEquivalentModifierMask, [.command, .shift],
+                       "Strikethrough modifier mask is explicit [.command, .shift]")
+
         // Bulleted List (quick/260419-hca) — ⌘⇧8 with explicit
         // [.command, .shift] modifier mask (non-letter key — uppercase
         // "8" does NOT auto-imply Shift; mirror Inline Code's explicit union).
@@ -109,6 +122,18 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(bulleted?.keyEquivalent, "8", "⌘⇧8")
         XCTAssertEqual(bulleted?.keyEquivalentModifierMask, [.command, .shift],
                        "Bulleted List modifier mask is explicit [.command, .shift] (non-letter key needs explicit Shift)")
+
+        // Numbered List — ⌘⇧7 (mirrors Bulleted's modifier-mask shape).
+        let numbered = byTitle("Numbered List")
+        XCTAssertNotNil(numbered, "Numbered List menu item must exist")
+        XCTAssertEqual(numbered?.keyEquivalent, "7", "⌘⇧7")
+        XCTAssertEqual(numbered?.keyEquivalentModifierMask, [.command, .shift])
+
+        // Block Quote — ⌘⇧9.
+        let blockQuote = byTitle("Block Quote")
+        XCTAssertNotNil(blockQuote, "Block Quote menu item must exist")
+        XCTAssertEqual(blockQuote?.keyEquivalent, "9", "⌘⇧9")
+        XCTAssertEqual(blockQuote?.keyEquivalentModifierMask, [.command, .shift])
 
         // Headings — ⌘⌥1/2/3 + ⌘⌥0 for Body. Numbers are non-letter keys
         // so the modifier mask must be set explicitly (same pattern as ⌘⌥C).

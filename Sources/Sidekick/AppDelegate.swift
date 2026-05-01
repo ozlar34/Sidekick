@@ -160,6 +160,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         italicItem.target = self
         formatMenu.addItem(italicItem)
 
+        let underlineItem = NSMenuItem(
+            title: "Underline",
+            action: #selector(formatUnderline(_:)),
+            keyEquivalent: "u"
+        )
+        underlineItem.target = self
+        formatMenu.addItem(underlineItem)
+
+        let strikethroughItem = NSMenuItem(
+            title: "Strikethrough",
+            action: #selector(formatStrikethrough(_:)),
+            keyEquivalent: "x"
+        )
+        // ⌘⇧X — letter keys would auto-imply Shift via uppercase, but we set
+        // explicit modifier mask to mirror non-letter shortcuts and stay
+        // robust if the keyEquivalent ever changes to a digit (D-S-02).
+        strikethroughItem.keyEquivalentModifierMask = [.command, .shift]
+        strikethroughItem.target = self
+        formatMenu.addItem(strikethroughItem)
+
         let inlineCodeItem = NSMenuItem(
             title: "Inline Code",
             action: #selector(formatInlineCode(_:)),
@@ -187,6 +207,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bulletedListItem.keyEquivalentModifierMask = [.command, .shift]
         bulletedListItem.target = self
         formatMenu.addItem(bulletedListItem)
+
+        let numberedListItem = NSMenuItem(
+            title: "Numbered List",
+            action: #selector(formatNumberedList(_:)),
+            keyEquivalent: "7"
+        )
+        numberedListItem.keyEquivalentModifierMask = [.command, .shift]
+        numberedListItem.target = self
+        formatMenu.addItem(numberedListItem)
+
+        let blockQuoteItem = NSMenuItem(
+            title: "Block Quote",
+            action: #selector(formatBlockQuote(_:)),
+            keyEquivalent: "9"
+        )
+        blockQuoteItem.keyEquivalentModifierMask = [.command, .shift]
+        blockQuoteItem.target = self
+        formatMenu.addItem(blockQuoteItem)
 
         formatMenu.addItem(NSMenuItem.separator())
 
@@ -495,6 +533,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FormattingToolbarView.performHeadingLevel(in: tv, level: nil)
     }
 
+    /// Format > Underline (⌘U). Markdown has no native underline syntax;
+    /// `<u>...</u>` HTML round-trips through HTML-aware renderers and is
+    /// the convention Apple Notes' Markdown export uses too.
+    @objc func formatUnderline(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "<u>", suffix: "</u>", in: tv)
+    }
+
+    /// Format > Strikethrough (⌘⇧X). GitHub-flavored markdown convention.
+    @objc func formatStrikethrough(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performWrap(prefix: "~~", suffix: "~~", in: tv)
+    }
+
+    /// Format > Numbered List (⌘⇧7). Sequential numbering across the
+    /// selected block; toggle-off when every non-empty line already has
+    /// a `<digits>. ` prefix.
+    @objc func formatNumberedList(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performNumberedList(in: tv)
+    }
+
+    /// Format > Block Quote (⌘⇧9). Mirrors bulleted-list shape with `> `.
+    @objc func formatBlockQuote(_ sender: Any?) {
+        guard let panel = panelController.panel,
+              let tv = findTextView(in: panel.contentView) else { return }
+        FormattingToolbarView.performBlockQuote(in: tv)
+    }
+
     /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
     /// which reads CFBundleShortVersionString + CFBundleVersion from
     /// Info.plist (build-and-run.sh:38-67 already writes both keys).
@@ -533,9 +603,13 @@ extension AppDelegate: NSUserInterfaceValidations {
 
         case #selector(formatBold(_:)),
              #selector(formatItalic(_:)),
+             #selector(formatUnderline(_:)),
+             #selector(formatStrikethrough(_:)),
              #selector(formatInlineCode(_:)),
              #selector(formatLink(_:)),
              #selector(formatBulletedList(_:)),
+             #selector(formatNumberedList(_:)),
+             #selector(formatBlockQuote(_:)),
              #selector(formatHeading1(_:)),
              #selector(formatHeading2(_:)),
              #selector(formatHeading3(_:)),

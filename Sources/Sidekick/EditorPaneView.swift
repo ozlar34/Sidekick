@@ -46,41 +46,49 @@ struct EditorPaneView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
-            // Title field — discrete, replaces the v1.2 first-line auto-H1.
-            // Padding aligns horizontally with the editor's textContainerInset
-            // (20pt h, HybridEditorView.swift) so the title and body text
-            // share a left edge.
-            TextField("Untitled", text: $localTitle)
-                .textFieldStyle(.plain)
-                .font(.system(size: 22, weight: .semibold))
-                .focused($focus, equals: .title)
-                .submitLabel(.next)
-                .onSubmit { focusBody() }
-                .onKeyPress(.tab) {
-                    focusBody()
-                    return .handled
-                }
-                .onChange(of: localTitle) { _, newValue in
-                    scheduleAutoSave(title: newValue, body: localBody)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 6)
-                .background(Color(.textBackgroundColor))
+            // Header chrome: title + formatting toolbar grouped on a slightly
+            // tinted surface (controlBackgroundColor) so they read as one
+            // input zone distinct from the writing area below. A hairline
+            // Divider closes off the zone — Mac-native treatment that frames
+            // the orphaned "Aa" button without visually shouting.
+            VStack(spacing: 0) {
+                // Title field — discrete, replaces the v1.2 first-line auto-H1.
+                // Padding aligns horizontally with the editor's textContainerInset
+                // (20pt h, HybridEditorView.swift) so the title and body text
+                // share a left edge.
+                TextField("Untitled", text: $localTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 22, weight: .semibold))
+                    .focused($focus, equals: .title)
+                    .submitLabel(.next)
+                    .onSubmit { focusBody() }
+                    .onKeyPress(.tab) {
+                        focusBody()
+                        return .handled
+                    }
+                    .onChange(of: localTitle) { _, newValue in
+                        scheduleAutoSave(title: newValue, body: localBody)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 6)
 
-            // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). Matches the editor's
-            // textBackground so toolbar + editor read as one continuous surface
-            // — no hairline divider needed.
-            FormattingToolbarView(
-                wrapSelection: wrapSelection,
-                applyLinePrefix: applyLinePrefix,
-                applyHeading: applyHeadingLevel,
-                activeInlineKind: editorController.activeInlineKind,
-                activeHeadingLevel: editorController.activeHeadingLevel
-            )
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color(.textBackgroundColor))
+                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
+                FormattingToolbarView(
+                    wrapSelection: wrapSelection,
+                    applyLinePrefix: applyLinePrefix,
+                    applyHeading: applyHeadingLevel,
+                    applyNumberedList: applyNumberedList,
+                    applyBlockQuote: applyBlockQuote,
+                    activeInlineKind: editorController.activeInlineKind,
+                    activeHeadingLevel: editorController.activeHeadingLevel
+                )
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+            }
+            .background(Color(.controlBackgroundColor))
+
+            Divider()
 
             // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
             HybridEditorView(text: $localBody, controller: editorController)
@@ -218,6 +226,19 @@ struct EditorPaneView: View {
     private func applyHeadingLevel(level: Int?) {
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performHeadingLevel(in: tv, level: level)
+    }
+
+    /// Toolbar-popover bridge for the numbered-list toggle (⌘⇧7 equivalent).
+    /// Mirrors `applyLinePrefix` exactly — same routing pattern.
+    private func applyNumberedList() {
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performNumberedList(in: tv)
+    }
+
+    /// Toolbar-popover bridge for the block-quote toggle (⌘⇧9 equivalent).
+    private func applyBlockQuote() {
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performBlockQuote(in: tv)
     }
 
 }

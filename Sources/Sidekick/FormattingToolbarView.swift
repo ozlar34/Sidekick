@@ -14,6 +14,13 @@ struct FormattingToolbarView: View {
     /// Named distinctly from the static `applyHeadingLevel(body:range:level:)`
     /// (mirrors `applyLinePrefix` vs `applyBulletedList`).
     var applyHeading: (Int?) -> Void = { _ in }
+    /// Toggle a numbered-list (`1. `, `2. `, …) on the line(s) containing
+    /// the selection. Mirrors `applyLinePrefix`'s shape — toggle off when
+    /// every non-empty line already has a `<digits>. ` prefix.
+    var applyNumberedList: () -> Void = {}
+    /// Toggle a block-quote (`> `) prefix on the line(s) containing the
+    /// selection. Mirrors `applyLinePrefix` exactly with `"> "` instead of `"- "`.
+    var applyBlockQuote: () -> Void = {}
     /// Set when the caret is inside a bold / italic / code span. Drives the
     /// active-state highlight on the corresponding button. Defaults to nil so
     /// existing call sites (tests, previews, menu-only invocations) compile
@@ -21,52 +28,34 @@ struct FormattingToolbarView: View {
     /// HybridEditorController.activeInlineKind.
     var activeInlineKind: InlineKind? = nil
     /// Heading level (1–3) of the line containing the caret, or nil if the
-    /// caret is on a non-heading line. Drives the dropdown's label and the
-    /// active-row indicator. Populated by EditorPaneView from
-    /// HybridEditorController.activeHeadingLevel.
+    /// caret is on a non-heading line. Drives the popover's active-row
+    /// checkmark on Heading / Subheading / Body. Populated by EditorPaneView
+    /// from HybridEditorController.activeHeadingLevel.
     var activeHeadingLevel: Int? = nil
+
+    /// Apple Notes-style: a single "Aa" trigger collapses every formatting
+    /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
+    /// styles (Heading / Subheading / Body / Bulleted / Numbered / Quote)
+    /// live inside `FormattingPopoverView`. Inline code (⌘⌥C) and Link (⌘K)
+    /// remain reachable via the Format menu / shortcuts but aren't surfaced
+    /// in the popover — Apple Notes itself doesn't either.
+    @State private var popoverShown = false
 
     var body: some View {
         HStack(spacing: 2) {
-            FormatButton(
-                systemName: "bold",
-                tooltip: "Bold (⌘B)",
-                accessibilityLabel: "Bold",
-                isActive: activeInlineKind == .bold
-            ) { wrapSelection("**", "**") }
-
-            FormatButton(
-                systemName: "italic",
-                tooltip: "Italic (⌘I)",
-                accessibilityLabel: "Italic",
-                isActive: activeInlineKind == .italic
-            ) { wrapSelection("*", "*") }
-
-            FormatButton(
-                systemName: "chevron.left.forwardslash.chevron.right",
-                tooltip: "Inline code (⌘⌥C)",
-                accessibilityLabel: "Inline code",
-                isActive: activeInlineKind == .code
-            ) { wrapSelection("`", "`") }
-
-            FormatButton(
-                systemName: "link",
-                tooltip: "Link (⌘K)",
-                accessibilityLabel: "Link",
-                isActive: false
-            ) { wrapSelection("[", "]()") }
-
-            HeadingMenu(
-                activeLevel: activeHeadingLevel,
-                apply: applyHeading
-            )
-
-            FormatButton(
-                systemName: "list.bullet",
-                tooltip: "Bulleted list (⌘⇧8)",
-                accessibilityLabel: "Bulleted list",
-                isActive: false
-            ) { applyLinePrefix() }
+            FormatPopoverTrigger(isOpen: $popoverShown)
+                .popover(isPresented: $popoverShown, arrowEdge: .bottom) {
+                    FormattingPopoverView(
+                        wrapSelection: wrapSelection,
+                        applyLinePrefix: applyLinePrefix,
+                        applyHeading: applyHeading,
+                        applyNumberedList: applyNumberedList,
+                        applyBlockQuote: applyBlockQuote,
+                        activeInlineKind: activeInlineKind,
+                        activeHeadingLevel: activeHeadingLevel,
+                        dismiss: { popoverShown = false }
+                    )
+                }
 
             Spacer()
         }
@@ -456,6 +445,146 @@ struct FormattingToolbarView: View {
         return (newBody, newSelection)
     }
 
+    /// Pure string transformation: toggles a numbered-list prefix (`1. `,
+    /// `2. `, … sequentially per line, restarting at 1 across the block) on
+    /// every line in the block containing `range`. Mirrors `applyBulletedList`
+    /// exactly: line-block expansion, all-prefixed-toggle-off rule, UTF-16
+    /// discipline. The "all prefixed" check accepts any `<digits>+. ` prefix
+    /// (so a hand-edited `5. foo\n7. bar` block still toggles off cleanly).
+    /// On add, any pre-existing numeric prefix is stripped first and the
+    /// block is re-numbered from 1 — guarantees readable raw markdown.
+    internal static func applyNumberedList(
+        body: String,
+        range: NSRange
+    ) -> (newBody: String, newSelection: NSRange) {
+        let nsBody = body as NSString
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+
+        let blockRange = nsBody.lineRange(for: safeRange)
+        let blockSubstring = nsBody.substring(with: blockRange)
+        let endsWithNewline = blockSubstring.hasSuffix("\n")
+        var lines = blockSubstring.components(separatedBy: "\n")
+        let trailingEmpty: Bool
+        if endsWithNewline, let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty = true
+        } else {
+            trailingEmpty = false
+        }
+
+        // Returns prefix length if the line starts with `<digits>+. `; nil
+        // otherwise. Single-line scan — cheaper than a NSRegularExpression.
+        func numberedPrefixLen(of line: String) -> Int? {
+            let ns = line as NSString
+            var i = 0
+            while i < ns.length, ns.character(at: i) >= 0x30 /* 0 */, ns.character(at: i) <= 0x39 /* 9 */ {
+                i += 1
+            }
+            guard i > 0,
+                  i + 1 < ns.length,
+                  ns.character(at: i) == 0x2E /* . */,
+                  ns.character(at: i + 1) == 0x20 /* space */
+            else { return nil }
+            return i + 2
+        }
+
+        let nonEmptyLines = lines.filter { !$0.isEmpty }
+        let allPrefixed = !nonEmptyLines.isEmpty
+            && nonEmptyLines.allSatisfy { numberedPrefixLen(of: $0) != nil }
+
+        let transformed: [String]
+        if allPrefixed {
+            transformed = lines.map { line -> String in
+                if let p = numberedPrefixLen(of: line) {
+                    return (line as NSString).substring(from: p)
+                }
+                return line
+            }
+        } else {
+            // Add mode: strip any existing numeric prefix, re-number from 1.
+            var counter = 1
+            transformed = lines.map { line -> String in
+                let stripped: String
+                if let p = numberedPrefixLen(of: line) {
+                    stripped = (line as NSString).substring(from: p)
+                } else {
+                    stripped = line
+                }
+                let prefix = "\(counter). "
+                counter += 1
+                return prefix + stripped
+            }
+        }
+
+        var newBlock = transformed.joined(separator: "\n")
+        if trailingEmpty {
+            newBlock += "\n"
+        }
+
+        let newBody = nsBody.replacingCharacters(in: blockRange, with: newBlock)
+        let newSelection = NSRange(
+            location: blockRange.location,
+            length: (newBlock as NSString).length
+        )
+        return (newBody, newSelection)
+    }
+
+    /// Pure string transformation: toggles a `"> "` prefix on every line in
+    /// the block containing `range`. Mirrors `applyBulletedList` exactly with
+    /// `"> "` instead of `"- "` — same line-block expansion, same toggle rule.
+    internal static func applyBlockQuote(
+        body: String,
+        range: NSRange
+    ) -> (newBody: String, newSelection: NSRange) {
+        let nsBody = body as NSString
+        let safeLocation = max(0, min(range.location, nsBody.length))
+        let safeLength = max(0, min(range.length, nsBody.length - safeLocation))
+        let safeRange = NSRange(location: safeLocation, length: safeLength)
+
+        let blockRange = nsBody.lineRange(for: safeRange)
+        let blockSubstring = nsBody.substring(with: blockRange)
+        let endsWithNewline = blockSubstring.hasSuffix("\n")
+        var lines = blockSubstring.components(separatedBy: "\n")
+        let trailingEmpty: Bool
+        if endsWithNewline, let last = lines.last, last.isEmpty {
+            lines.removeLast()
+            trailingEmpty = true
+        } else {
+            trailingEmpty = false
+        }
+
+        let nonEmptyLines = lines.filter { !$0.isEmpty }
+        let allPrefixed = !nonEmptyLines.isEmpty
+            && nonEmptyLines.allSatisfy { ($0 as NSString).hasPrefix("> ") }
+
+        let transformed: [String]
+        if allPrefixed {
+            transformed = lines.map { line -> String in
+                let ns = line as NSString
+                if ns.hasPrefix("> ") {
+                    return ns.substring(from: 2)
+                }
+                return line
+            }
+        } else {
+            transformed = lines.map { "> " + $0 }
+        }
+
+        var newBlock = transformed.joined(separator: "\n")
+        if trailingEmpty {
+            newBlock += "\n"
+        }
+
+        let newBody = nsBody.replacingCharacters(in: blockRange, with: newBlock)
+        let newSelection = NSRange(
+            location: blockRange.location,
+            length: (newBlock as NSString).length
+        )
+        return (newBody, newSelection)
+    }
+
     /// Applies markdown wrap directly on an NSTextView using AppKit's edit
     /// sandwich: `shouldChangeText` → `replaceCharacters` → `didChangeText`.
     /// This registers the change on the text view's own `undoManager`
@@ -558,16 +687,32 @@ struct FormattingToolbarView: View {
             newSelectionLength = 0
         }
 
-        // Additive → selection-only edit; strip or swap → full-body replace
-        // (both alter bytes outside the original selection range).
+        // Additive → selection-only edit; strip or swap → paragraph-localized
+        // replace. Inline pairs (bold/italic/code) cannot span paragraph
+        // boundaries in CommonMark, so the paragraph containing the original
+        // selection bounds the entire edit. Going wider (full-body) re-runs
+        // the markdown reparse over every paragraph, which transiently re-
+        // applies bodyParagraphStyle to H1 lines above before applyHeadings
+        // restores h1ParagraphStyle — harmless in theory, but the round-trip
+        // visibly nudged the text up one line height in practice.
         if isAdditive {
             guard textView.shouldChangeText(in: range, replacementString: inserted) else { return }
             textView.replaceCharacters(in: range, with: inserted)
             textView.didChangeText()
         } else {
-            let fullRange = NSRange(location: 0, length: (body as NSString).length)
-            guard textView.shouldChangeText(in: fullRange, replacementString: newBody) else { return }
-            textView.replaceCharacters(in: fullRange, with: newBody)
+            let nsBody = body as NSString
+            let nsNewBody = newBody as NSString
+            let paragraphRange = nsBody.paragraphRange(for: range)
+            // Body delta is fully contained within this paragraph (strip/swap
+            // never touches text outside the enclosing pair). Subtract from
+            // the original paragraph length to get the new paragraph length.
+            let bodyDeltaLen = nsBody.length - nsNewBody.length
+            let newParagraphLength = paragraphRange.length - bodyDeltaLen
+            let newParagraph = nsNewBody.substring(
+                with: NSRange(location: paragraphRange.location, length: newParagraphLength)
+            )
+            guard textView.shouldChangeText(in: paragraphRange, replacementString: newParagraph) else { return }
+            textView.replaceCharacters(in: paragraphRange, with: newParagraph)
             textView.didChangeText()
         }
         textView.setSelectedRange(NSRange(location: effectiveCursor, length: newSelectionLength))
@@ -685,6 +830,89 @@ struct FormattingToolbarView: View {
             )
         }
     }
+
+    /// Applies a numbered-list toggle directly on an NSTextView. Mirrors
+    /// `performLinePrefix` (D-R-03): same edit-sandwich pattern, same caret
+    /// restore semantics. For empty selection on a single transformed line,
+    /// the caret lands AFTER the inserted `"<n>. "` so the user can start
+    /// typing immediately; for multi-line or non-empty selection, the whole
+    /// block is re-selected so the next ⌘⇧7 can toggle off cleanly.
+    static func performNumberedList(in textView: NSTextView) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (fullNewBody, _) = applyNumberedList(body: body, range: range)
+
+        let nsBody = body as NSString
+        let blockRange = nsBody.lineRange(for: range)
+
+        let deltaLength = (fullNewBody as NSString).length - nsBody.length
+        let newBlockLength = blockRange.length + deltaLength
+        let newBlock = (fullNewBody as NSString).substring(
+            with: NSRange(location: blockRange.location, length: newBlockLength)
+        )
+
+        guard textView.shouldChangeText(in: blockRange, replacementString: newBlock) else { return }
+        textView.replaceCharacters(in: blockRange, with: newBlock)
+        textView.didChangeText()
+
+        // Caret restore: empty selection + single-line result → caret after
+        // the new `<digits>. ` prefix (or at line start if stripped). Compute
+        // prefix length on the resulting line by scanning leading digits.
+        if range.length == 0, !newBlock.contains("\n") {
+            let ns = newBlock as NSString
+            var i = 0
+            while i < ns.length, ns.character(at: i) >= 0x30, ns.character(at: i) <= 0x39 {
+                i += 1
+            }
+            let prefixLen: Int
+            if i > 0, i + 1 < ns.length,
+               ns.character(at: i) == 0x2E, ns.character(at: i + 1) == 0x20 {
+                prefixLen = i + 2
+            } else {
+                prefixLen = 0
+            }
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location + prefixLen, length: 0)
+            )
+        } else {
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location, length: (newBlock as NSString).length)
+            )
+        }
+    }
+
+    /// Applies a block-quote toggle directly on an NSTextView. Mirrors
+    /// `performLinePrefix` exactly — `"> "` is a fixed 2-char prefix so the
+    /// caret arithmetic matches the bulleted-list shape.
+    static func performBlockQuote(in textView: NSTextView) {
+        let body = textView.string
+        let range = textView.selectedRange()
+        let (fullNewBody, _) = applyBlockQuote(body: body, range: range)
+
+        let nsBody = body as NSString
+        let blockRange = nsBody.lineRange(for: range)
+
+        let deltaLength = (fullNewBody as NSString).length - nsBody.length
+        let newBlockLength = blockRange.length + deltaLength
+        let newBlock = (fullNewBody as NSString).substring(
+            with: NSRange(location: blockRange.location, length: newBlockLength)
+        )
+
+        guard textView.shouldChangeText(in: blockRange, replacementString: newBlock) else { return }
+        textView.replaceCharacters(in: blockRange, with: newBlock)
+        textView.didChangeText()
+
+        if range.length == 0, !newBlock.contains("\n") {
+            let caretOffset = deltaLength > 0 ? 2 : 0
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location + max(0, caretOffset), length: 0)
+            )
+        } else {
+            textView.setSelectedRange(
+                NSRange(location: blockRange.location, length: (newBlock as NSString).length)
+            )
+        }
+    }
 }
 
 /// Single toolbar button — 28×28 hit target with rounded-rect background that
@@ -725,79 +953,199 @@ private struct FormatButton: View {
     }
 }
 
-/// Heading-level dropdown — paragraph-style picker styled to sit beside
-/// the rest of the formatting toolbar. Label tracks the heading level at
-/// the caret ("Body" / "Heading 1" / …). Each menu row renders at a
-/// clamped scale of its real heading size so the previews communicate
-/// what the user will get.
-///
-/// Active-row indicator: the toolbar label IS the active indicator (it
-/// flips to the current level). Menu rows are deliberately checkmark-free
-/// to keep the styled-preview rows visually clean. Toggle-off works
-/// because every row is a Button that always fires `apply` on click,
-/// regardless of current selection (a Picker would dedupe identical
-/// values and break the toggle-off-via-menu path).
-private struct HeadingMenu: View {
-    let activeLevel: Int?
-    let apply: (Int?) -> Void
+/// "Aa" trigger button — the only control that lives on the toolbar bar
+/// itself. Clicking it opens the formatting popover. Visual treatment
+/// mirrors `FormatButton` (28pt height, 6pt corner, hover background) so
+/// the toolbar reads as one button family — the only difference is the
+/// glyph: a styled "Aa" text mark instead of an SF Symbol, matching Apple
+/// Notes' custom mark.
+private struct FormatPopoverTrigger: View {
+    @Binding var isOpen: Bool
 
     @State private var isHovered = false
 
     var body: some View {
-        Menu {
-            Button(action: { apply(nil) }) {
-                Text("Body")
-                    .font(.system(size: 13, weight: .regular))
-            }
-            Button(action: { apply(1) }) {
-                Text("Heading 1")
-                    .font(.system(size: 17, weight: .semibold))
-            }
-            Button(action: { apply(2) }) {
-                Text("Heading 2")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            Button(action: { apply(3) }) {
-                Text("Heading 3")
-                    .font(.system(size: 13, weight: .semibold))
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.primary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(backgroundColor)
-                    .animation(.easeOut(duration: 0.12), value: isHovered)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+        Button(action: { isOpen.toggle() }) {
+            Text("Aa")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 36, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(backgroundColor)
+                        .animation(.easeOut(duration: 0.12), value: isHovered)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Heading style")
-        .accessibilityLabel("Heading style")
+        .buttonStyle(.plain)
+        .help("Formatting")
+        .accessibilityLabel("Formatting")
         .onHover { isHovered = $0 }
     }
 
-    private var label: String {
-        switch activeLevel {
-        case 1: return "Heading 1"
-        case 2: return "Heading 2"
-        case 3, 4, 5, 6: return "Heading 3"
-        default: return "Body"
-        }
-    }
-
     private var backgroundColor: Color {
+        if isOpen { return Color.accentColor.opacity(0.18) }
         if isHovered { return Color.primary.opacity(0.07) }
         return .clear
+    }
+}
+
+/// Apple Notes-style formatting panel. Two regions:
+///   • Inline row: B / I / U / S — tapping applies wrap and KEEPS the
+///     popover open so the user can stack inline formats. Strikethrough
+///     and underline use `~~text~~` and `<u>text</u>` respectively (the
+///     latter via HTML, since standard CommonMark has no underline syntax).
+///   • Paragraph styles: Heading / Subheading / Body / Bulleted List /
+///     Numbered List / Block Quote. Tap applies and CLOSES the popover —
+///     these are mutually exclusive picks, not stackable toggles. Heading
+///     levels show a leading checkmark when the caret's line matches; list
+///     types currently never show a checkmark (active-state line-prefix
+///     tracking is a follow-up — Apple Notes also doesn't track these
+///     visually for non-heading rows).
+///
+/// Heading 3 is intentionally absent from the popover (parity with Apple
+/// Notes' two-level Title/Heading-Subheading scheme — Title lives in its
+/// own field above the toolbar, so the popover starts at H1). The ⌘⌥3
+/// shortcut still fires `formatHeading3` via AppDelegate; this hides H3
+/// from the visual surface only.
+private struct FormattingPopoverView: View {
+    let wrapSelection: (String, String) -> Void
+    let applyLinePrefix: () -> Void
+    let applyHeading: (Int?) -> Void
+    let applyNumberedList: () -> Void
+    let applyBlockQuote: () -> Void
+    let activeInlineKind: FormattingToolbarView.InlineKind?
+    let activeHeadingLevel: Int?
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Inline row — popover dismisses after each tap so it doesn't
+            // hide the text the user just formatted. Multi-format stacking
+            // is still possible via repeated keyboard shortcuts (⌘B / ⌘I /
+            // ⌘U / ⌘⇧X) which don't open the popover.
+            HStack(spacing: 2) {
+                FormatButton(
+                    systemName: "bold",
+                    tooltip: "Bold (⌘B)",
+                    accessibilityLabel: "Bold",
+                    isActive: activeInlineKind == .bold
+                ) { wrapSelection("**", "**"); dismiss() }
+
+                FormatButton(
+                    systemName: "italic",
+                    tooltip: "Italic (⌘I)",
+                    accessibilityLabel: "Italic",
+                    isActive: activeInlineKind == .italic
+                ) { wrapSelection("*", "*"); dismiss() }
+
+                FormatButton(
+                    systemName: "underline",
+                    tooltip: "Underline (⌘U)",
+                    accessibilityLabel: "Underline",
+                    isActive: false
+                ) { wrapSelection("<u>", "</u>"); dismiss() }
+
+                FormatButton(
+                    systemName: "strikethrough",
+                    tooltip: "Strikethrough (⌘⇧X)",
+                    accessibilityLabel: "Strikethrough",
+                    isActive: false
+                ) { wrapSelection("~~", "~~"); dismiss() }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+
+            Divider()
+
+            // Paragraph styles — single pick, dismisses popover after tap.
+            VStack(spacing: 2) {
+                ParagraphStyleRow(
+                    label: "Heading",
+                    labelFont: .system(size: 17, weight: .semibold),
+                    isActive: activeHeadingLevel == 1
+                ) { applyHeading(1); dismiss() }
+
+                ParagraphStyleRow(
+                    label: "Subheading",
+                    labelFont: .system(size: 15, weight: .semibold),
+                    isActive: activeHeadingLevel == 2
+                ) { applyHeading(2); dismiss() }
+
+                ParagraphStyleRow(
+                    label: "Body",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: activeHeadingLevel == nil
+                ) { applyHeading(nil); dismiss() }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            // List + quote types — visual marker baked into the row label
+            // so the user sees what the prefix will look like.
+            VStack(spacing: 2) {
+                ParagraphStyleRow(
+                    label: "•  Bulleted List",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: false
+                ) { applyLinePrefix(); dismiss() }
+
+                ParagraphStyleRow(
+                    label: "1.  Numbered List",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: false
+                ) { applyNumberedList(); dismiss() }
+
+                ParagraphStyleRow(
+                    label: "❘  Block Quote",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: false
+                ) { applyBlockQuote(); dismiss() }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+        }
+        .frame(width: 240)
+    }
+}
+
+/// Single row in the paragraph-styles list. Leading 12pt slot reserved
+/// for a checkmark (rendered always, opacity-toggled by `isActive`) so
+/// active and inactive rows share a baseline — text doesn't shift when
+/// the active state moves between rows.
+private struct ParagraphStyleRow: View {
+    let label: String
+    let labelFont: Font
+    let isActive: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .opacity(isActive ? 1 : 0)
+                    .frame(width: 12)
+                Text(label)
+                    .font(labelFont)
+                    .foregroundColor(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isHovered ? Color.primary.opacity(0.07) : .clear)
+                    .animation(.easeOut(duration: 0.12), value: isHovered)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }

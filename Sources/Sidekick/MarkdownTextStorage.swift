@@ -187,6 +187,8 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyTables(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
             try applyItalic(in: substring, offset: base)
+            try applyStrikethrough(in: substring, offset: base)
+            try applyUnderline(in: substring, offset: base)
             try applyInlineCode(in: substring, offset: base)
             try applyLinks(in: substring, offset: base)   // D-LR-04, HYBRID-07
         } catch {
@@ -249,7 +251,8 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
-        backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 cleanup
+        backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 + applyUnderline cleanup
+        backing.removeAttribute(.strikethroughStyle, range: range)  // applyStrikethrough cleanup
         // Reset font to the base 15pt editor font, matching
         // HybridEditorView textView.font. Code blocks and inline code
         // re-apply mono explicitly. Do NOT use 16pt — that's the preview
@@ -298,6 +301,37 @@ final class MarkdownTextStorage: NSTextStorage {
                 toHaveTrait: .italicFontMask
             )
             backing.addAttribute(.font, value: italic, range: content)
+        }
+    }
+
+    /// Apply strikethrough styling: single-line strikethrough on content,
+    /// .sidekickHiddenMarker on `~~` markers. Mirrors `applyBold`.
+    private func applyStrikethrough(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findStrikethroughRanges(in: substring)
+        for m in matches {
+            tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
+            tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
+            let content = shift(m.contentRange, by: offset)
+            backing.addAttribute(.strikethroughStyle,
+                                 value: NSUnderlineStyle.single.rawValue,
+                                 range: content)
+        }
+    }
+
+    /// Apply underline styling for `<u>…</u>`: single-line underline on
+    /// content, .sidekickHiddenMarker on the `<u>` / `</u>` tags. Asymmetric
+    /// markers handled by the StrikethroughMatch / UnderlineMatch range fields.
+    /// Runs BEFORE applyLinks so a link inside `<u>` still gets its own
+    /// linkColor + underline applied on top.
+    private func applyUnderline(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findUnderlineRanges(in: substring)
+        for m in matches {
+            tagHiddenMarker(shifting: m.markerOpenRange, by: offset)
+            tagHiddenMarker(shifting: m.markerCloseRange, by: offset)
+            let content = shift(m.contentRange, by: offset)
+            backing.addAttribute(.underlineStyle,
+                                 value: NSUnderlineStyle.single.rawValue,
+                                 range: content)
         }
     }
 

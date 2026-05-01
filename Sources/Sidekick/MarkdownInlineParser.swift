@@ -31,6 +31,18 @@ struct InlineCodeMatch {
     let markerCloseRange: NSRange
 }
 
+struct StrikethroughMatch {
+    let markerOpenRange: NSRange   // length 2 (`~~`)
+    let contentRange: NSRange
+    let markerCloseRange: NSRange  // length 2 (`~~`)
+}
+
+struct UnderlineMatch {
+    let markerOpenRange: NSRange   // length 3 (`<u>`)
+    let contentRange: NSRange
+    let markerCloseRange: NSRange  // length 4 (`</u>`)
+}
+
 struct HeadingMatch {
     let level: Int
     let prefixRange: NSRange
@@ -105,6 +117,16 @@ enum MarkdownInlineParser {
     )
     private static let linkRegex = try! NSRegularExpression(
         pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)",
+        options: []
+    )
+    private static let strikethroughRegex = try! NSRegularExpression(
+        pattern: "~~([^~\\n]+?)~~",
+        options: []
+    )
+    // Underline is HTML, not markdown — `<u>foo</u>`. Match across non-newline
+    // content; pair-only-hide (D-MH-04) drops unclosed `<u>` tags.
+    private static let underlineRegex = try! NSRegularExpression(
+        pattern: "<u>([^\\n]+?)</u>",
         options: []
     )
 
@@ -201,6 +223,53 @@ enum MarkdownInlineParser {
             let content = NSRange(location: r.location + 1, length: contentLength)
             let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
             return InlineCodeMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
+        }
+    }
+
+    // MARK: Strikethrough
+
+    /// Returns ranges for all paired `~~…~~` strikethrough markers in `string`.
+    /// Mirrors `findBoldRanges` shape: 2-char open + content + 2-char close,
+    /// degenerate empty/whitespace pairs skipped.
+    static func findStrikethroughRanges(in string: String) -> [StrikethroughMatch] {
+        let ns = string as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let rawMatches = Self.strikethroughRegex.matches(in: string, range: fullRange)
+
+        return rawMatches.compactMap { match -> StrikethroughMatch? in
+            let r = match.range
+            let contentLength = r.length - 4
+            guard contentLength > 0 else { return nil }
+            let contentNS = ns.substring(with: NSRange(location: r.location + 2, length: contentLength)) as NSString
+            let trimmed = contentNS.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+
+            let markerOpen = NSRange(location: r.location, length: 2)
+            let content = NSRange(location: r.location + 2, length: contentLength)
+            let markerClose = NSRange(location: r.location + r.length - 2, length: 2)
+            return StrikethroughMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
+        }
+    }
+
+    // MARK: Underline
+
+    /// Returns ranges for all paired `<u>…</u>` underline markers in `string`.
+    /// Asymmetric markers — open is 3 chars, close is 4 chars. Total non-content
+    /// length = 7; degenerate empty pairs skipped.
+    static func findUnderlineRanges(in string: String) -> [UnderlineMatch] {
+        let ns = string as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let rawMatches = Self.underlineRegex.matches(in: string, range: fullRange)
+
+        return rawMatches.compactMap { match -> UnderlineMatch? in
+            let r = match.range
+            let contentLength = r.length - 7
+            guard contentLength > 0 else { return nil }
+
+            let markerOpen = NSRange(location: r.location, length: 3)
+            let content = NSRange(location: r.location + 3, length: contentLength)
+            let markerClose = NSRange(location: r.location + r.length - 4, length: 4)
+            return UnderlineMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
         }
     }
 
