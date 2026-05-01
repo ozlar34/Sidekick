@@ -196,6 +196,98 @@ final class FormattingToolbarTests: XCTestCase {
         XCTAssertEqual(result.cursorLocation, 0)
     }
 
+    // F-01 — Underline `<u>…</u>` toggle-off. Pre-fix, repeated ⌘U stacked
+    // tags `<u><u>foo</u></u>` because the parser hookup was missing.
+    func test_toggleOff_underline_strips() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "<u>", suffix: "</u>",
+            body: "<u>foo</u>",
+            range: NSRange(location: 3, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo", "Underline pair stripped from wrapped selection")
+        XCTAssertEqual(result.cursorLocation, 0, "Cursor at start of stripped span")
+    }
+
+    func test_toggleOff_underline_caretOnly_insideTags_strips() {
+        // Caret between the two o's of `<u>foo</u>` (body index 5). ⌘U strips.
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "<u>", suffix: "</u>",
+            body: "<u>foo</u>",
+            range: NSRange(location: 5, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        // Caret at index 5 in old body sits between the o's; after stripping
+        // the 3-char open marker, that gap sits at index 2 in the new body.
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    // F-02 — Strikethrough `~~…~~` toggle-off.
+    func test_toggleOff_strikethrough_strips() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "~~", suffix: "~~",
+            body: "~~foo~~",
+            range: NSRange(location: 2, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "foo", "Strikethrough pair stripped")
+        XCTAssertEqual(result.cursorLocation, 0)
+    }
+
+    func test_toggleOff_strikethrough_caretOnly_insideTags_strips() {
+        // Caret at body index 4 (between o's of `~~foo~~`).
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "~~", suffix: "~~",
+            body: "~~foo~~",
+            range: NSRange(location: 4, length: 0)
+        )
+        XCTAssertEqual(result.newBody, "foo")
+        XCTAssertEqual(result.cursorLocation, 2)
+    }
+
+    // Strikethrough/underline are orthogonal to the bold/italic/code mutex
+    // set — pressing ⌘B on `~~foo~~` content must NOT swap markers; it
+    // should fall through to the wrap path so the new bold markers stack
+    // around the existing strikethrough span.
+    func test_strikethroughPair_boldWrap_doesNotSwap_stacks() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "~~foo~~",
+            range: NSRange(location: 2, length: 3)
+        )
+        // The wrap path runs against the selected content "foo", inserting
+        // `**foo**` in place of the selection — leaving the surrounding
+        // `~~ ~~` markers untouched.
+        XCTAssertEqual(result.newBody, "~~**foo**~~",
+                       "Bold wrap on strike-enclosed selection stacks; does not swap")
+    }
+
+    func test_underlinePair_boldWrap_doesNotSwap_stacks() {
+        let result = FormattingToolbarView.applyMarkdownWrap(
+            prefix: "**", suffix: "**",
+            body: "<u>foo</u>",
+            range: NSRange(location: 3, length: 3)
+        )
+        XCTAssertEqual(result.newBody, "<u>**foo**</u>",
+                       "Bold wrap on underline-enclosed selection stacks; does not swap")
+    }
+
+    // activeInlineKind reports underline/strikethrough so the popover
+    // buttons can highlight when the caret sits inside the corresponding pair.
+    func test_activeInlineKind_reportsUnderline_whenCaretInsideUTags() {
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "<u>foo</u>",
+            selection: NSRange(location: 4, length: 0)  // mid 'foo'
+        )
+        XCTAssertEqual(kind, .underline)
+    }
+
+    func test_activeInlineKind_reportsStrikethrough_whenCaretInsideTildes() {
+        let kind = FormattingToolbarView.activeInlineKind(
+            body: "~~foo~~",
+            selection: NSRange(location: 4, length: 0)  // mid 'foo'
+        )
+        XCTAssertEqual(kind, .strikethrough)
+    }
+
     func test_swap_italicToBold_replacesMarkers() {
         // body "*foo*" — invoke ⌘B (prefix/suffix "**") — different inline kind on
         // the selection → swap the markers, keep inner text. Inline formats are

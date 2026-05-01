@@ -113,16 +113,25 @@ struct FormattingToolbarView: View {
         //
         // Transform rules for inline formats (bold/italic/code):
         //   • same kind  → strip markers (toggle off).
-        //   • different kind → swap: replace the pair's markers with the
-        //     requested ones, keep inner text. Inline formats are mutually
-        //     exclusive at toggle time (no composed ***bold-italic***).
+        //   • different kind → swap, but only inside the bold/italic/code
+        //     mutual-exclusion set (CommonMark forbids composed
+        //     ***bold-italic*** in this codebase). Strikethrough and
+        //     underline are orthogonal to the bold/italic/code set —
+        //     a different-kind hit involving them falls through to the
+        //     wrap path so markers stack (e.g. `**~~foo~~**`).
         // Link (`prefix == "["`) intentionally skips this branch — ⌘K over
         // bold text should wrap the whole thing as a link, not strip it.
         let requestedKind: InlineKind? = inlineKind(forPrefix: prefix)
         if let kind = requestedKind,
            let pair = findAnyEnclosingInlinePair(body: body, selection: safeRange) {
             let innerText = nsBody.substring(with: pair.inner)
-            if pair.kind == kind {
+            let mutexSet: Set<InlineKind> = [.bold, .italic, .code]
+            let canSwap = mutexSet.contains(pair.kind) && mutexSet.contains(kind)
+            if pair.kind != kind && !canSwap {
+                // Different kind, outside the mutex set → don't transform here;
+                // fall through to the wrap path so the new markers stack
+                // around the existing pair's whole span.
+            } else if pair.kind == kind {
                 // Same kind → strip.
                 let newBody = nsBody.replacingCharacters(in: pair.whole, with: innerText)
                 let openLen = pair.inner.location - pair.whole.location
@@ -179,7 +188,11 @@ struct FormattingToolbarView: View {
 
     /// Inline-format kind for toggle/swap detection. Line-prefix formats
     /// (headings, bullets) and link are intentionally NOT inline kinds.
-    internal enum InlineKind { case bold, italic, code }
+    /// Bold/italic/code are mutually exclusive (the swap branch in
+    /// `applyMarkdownWrap` only operates inside that set). Strikethrough
+    /// and underline are orthogonal — they participate in toggle-off but
+    /// stack rather than swap when the requested kind differs.
+    internal enum InlineKind { case bold, italic, code, strikethrough, underline }
 
     /// Returns the inline kind whose pair currently encloses the selection
     /// (caret or range), or nil if the selection sits in plain text. Thin
@@ -199,6 +212,8 @@ struct FormattingToolbarView: View {
         case "**": return .bold
         case "*":  return .italic
         case "`":  return .code
+        case "~~": return .strikethrough
+        case "<u>": return .underline
         default:   return nil
         }
     }
@@ -266,6 +281,16 @@ struct FormattingToolbarView: View {
         for m in MarkdownInlineParser.findInlineCodeRanges(in: lineText) {
             if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
                 return (.code, r.whole, r.inner)
+            }
+        }
+        for m in MarkdownInlineParser.findStrikethroughRanges(in: lineText) {
+            if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
+                return (.strikethrough, r.whole, r.inner)
+            }
+        }
+        for m in MarkdownInlineParser.findUnderlineRanges(in: lineText) {
+            if let r = matchResult(open: m.markerOpenRange, close: m.markerCloseRange) {
+                return (.underline, r.whole, r.inner)
             }
         }
         return nil
@@ -1397,14 +1422,14 @@ private struct FormattingPopoverView: View {
                     systemName: "underline",
                     tooltip: "Underline (⌘U)",
                     accessibilityLabel: "Underline",
-                    isActive: false
+                    isActive: activeInlineKind == .underline
                 ) { wrapSelection("<u>", "</u>"); dismiss() }
 
                 FormatButton(
                     systemName: "strikethrough",
                     tooltip: "Strikethrough (⌘⇧X)",
                     accessibilityLabel: "Strikethrough",
-                    isActive: false
+                    isActive: activeInlineKind == .strikethrough
                 ) { wrapSelection("~~", "~~"); dismiss() }
             }
             .padding(.horizontal, 8)
