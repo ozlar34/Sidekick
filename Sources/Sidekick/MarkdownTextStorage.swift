@@ -192,6 +192,7 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyHeadings(in: substring, offset: base)
             try applyChecklists(in: substring, offset: base)
             try applyBullets(in: substring, offset: base)
+            try applyNumberedLists(in: substring, offset: base)
             try applyBlockQuotes(in: substring, offset: base)
             try applyTables(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
@@ -259,6 +260,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.sidekickHiddenMarker, range: range)
         backing.removeAttribute(.sidekickBulletMarker, range: range)
         backing.removeAttribute(.sidekickChecklistMarker, range: range)
+        backing.removeAttribute(.sidekickNumberedMarker, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
@@ -478,6 +480,25 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.font,
                                  value: NSFont.systemFont(ofSize: 15, weight: .bold),
                                  range: markerRange)
+        }
+    }
+
+    /// Apply numbered-list styling: tag the `N.` prefix with `.sidekickNumberedMarker`
+    /// and `NSColor.secondaryLabelColor` so it is visually distinct from plain `1.`
+    /// typed inline. Only the digits+dot are styled — the trailing space stays at
+    /// the default text color. Color is reset by `clearManagedAttributes` via its
+    /// global `.foregroundColor` reset to `.textColor`.
+    private func applyNumberedLists(in substring: String, offset: Int) throws {
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: substring)
+        for m in matches {
+            let marker = shift(m.markerRange, by: offset)
+            guard marker.length >= 1,
+                  marker.location >= 0,
+                  marker.location + marker.length <= backing.length else { continue }
+            backing.addAttribute(.sidekickNumberedMarker, value: true, range: marker)
+            backing.addAttribute(.foregroundColor,
+                                 value: NSColor.secondaryLabelColor,
+                                 range: marker)
         }
     }
 

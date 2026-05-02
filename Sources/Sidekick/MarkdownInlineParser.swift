@@ -81,6 +81,16 @@ struct ChecklistMatch {
     let isChecked: Bool
 }
 
+/// Numbered list line prefix: `N. ` where N is one or more digits.
+/// `markerRange` covers the number+dot only (`N.`), excluding the trailing
+/// space, so `.secondaryLabelColor` is applied only to the marker itself.
+struct NumberedMatch {
+    /// The `N.` part (digits + dot), excluding trailing space. Variable length.
+    let markerRange: NSRange
+    /// The full `N. ` prefix (digits + dot + space).
+    let fullPrefixRange: NSRange
+}
+
 struct TableMatch {
     /// Header line content (excluding trailing newline). Always non-empty.
     let headerRange: NSRange
@@ -130,6 +140,10 @@ enum MarkdownInlineParser {
     // (would clash with `.sidekickChecklistMarker`).
     private static let bulletRegex = try! NSRegularExpression(
         pattern: "^(- (?!\\[[ xX]\\] )|\\* )",
+        options: []
+    )
+    private static let numberedListRegex = try! NSRegularExpression(
+        pattern: #"^\d+\."#,
         options: []
     )
     private static let checklistRegex = try! NSRegularExpression(
@@ -411,6 +425,61 @@ enum MarkdownInlineParser {
                 // Prefix is always 2 UTF-16 units at line start
                 let prefixRange = NSRange(location: lineRange.location, length: 2)
                 results.append(prefixRange)
+            }
+
+            lineStart = lineEnd
+            if lineStart == lineRange.location {
+                break
+            }
+        }
+
+        return results
+    }
+
+    // MARK: Numbered lists
+
+    /// Returns `NumberedMatch` values for every `N. ` numbered-list prefix in `string`.
+    ///
+    /// - Scans line-by-line; only matches `\d+\.` at line start followed by a space.
+    /// - `markerRange` covers `N.` (digits + dot, no trailing space); variable length.
+    /// - `fullPrefixRange` covers `N. ` (digits + dot + space).
+    static func findNumberedPrefixes(in string: String) -> [NumberedMatch] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        var results: [NumberedMatch] = []
+        var lineStart = 0
+
+        while lineStart < fullLength {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            let lineEnd = lineRange.location + lineRange.length
+
+            let hasTrailingNewline: Bool
+            if lineRange.length > 0 {
+                let lastChar = ns.substring(with: NSRange(location: lineEnd - 1, length: 1))
+                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
+            } else {
+                hasTrailingNewline = false
+            }
+
+            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
+            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
+            let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
+
+            if let match = Self.numberedListRegex.firstMatch(in: lineText, range: lineFullRange) {
+                // match covers `N.` — the digits+dot without the trailing space
+                let dotEnd = match.range.location + match.range.length
+                // require at least one char after the dot (the space) within the line
+                guard dotEnd < matchLength else {
+                    lineStart = lineEnd
+                    if lineStart == lineRange.location { break }
+                    continue
+                }
+                let markerLen = match.range.length  // e.g. 2 for "1.", 3 for "10."
+                let markerRange = NSRange(location: lineRange.location, length: markerLen)
+                let fullPrefixRange = NSRange(location: lineRange.location, length: markerLen + 1)
+                results.append(NumberedMatch(markerRange: markerRange, fullPrefixRange: fullPrefixRange))
             }
 
             lineStart = lineEnd

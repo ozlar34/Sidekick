@@ -35,4 +35,11 @@ extension NSAttributedString.Key {
     /// without mutating the underlying bytes (round-trip safe).
     /// Mouse hits on this marker character flip the underlying ` ` ↔ `x` byte.
     static let sidekickChecklistMarker = NSAttributedString.Key("sidekickChecklistMarker")
+
+    /// Marks the `N.` prefix of a numbered list line (`\d+\.` at line start).
+    /// Value is `Bool` (`true`). MarkdownTextStorage applies
+    /// `NSColor.secondaryLabelColor` to this range so the marker is visually
+    /// distinct from plain `1.` typed inline. The color is cleared by
+    /// `clearManagedAttributes` via its global `.foregroundColor` reset.
+    static let sidekickNumberedMarker = NSAttributedString.Key("sidekickNumberedMarker")
 }
