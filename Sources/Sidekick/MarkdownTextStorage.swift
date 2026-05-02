@@ -430,8 +430,23 @@ final class MarkdownTextStorage: NSTextStorage {
             default: headingStyle = nil
             }
             if let style = headingStyle {
-                let lineRange = (backing.string as NSString).lineRange(for: content)
-                backing.addAttribute(.paragraphStyle, value: style, range: lineRange)
+                // F-06: apply heading paragraphStyle to the line WITHOUT the
+                // trailing \n. The terminator inherits bodyParagraphStyle from
+                // clearManagedAttributes, so when the caret sits on the empty
+                // line directly after a heading (post-Enter) the trailing-line
+                // layout fragment uses body metrics (18pt) instead of the
+                // heading's tall line box (32pt for h1). Without this, AppKit
+                // also uses the \n's heading-styled attrs to seed
+                // typingAttributes when the caret moves there, which leaks H1
+                // into the next typed char.
+                let ns = backing.string as NSString
+                var lineStart = 0, lineEnd = 0, contentsEnd = 0
+                ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd, for: content)
+                let withoutTerminator = NSRange(
+                    location: lineStart,
+                    length: contentsEnd - lineStart
+                )
+                backing.addAttribute(.paragraphStyle, value: style, range: withoutTerminator)
             }
         }
     }

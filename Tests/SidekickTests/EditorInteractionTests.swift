@@ -113,6 +113,62 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertEqual(stack.textView.string, "", "Empty bullet prefix stripped")
     }
 
+    // MARK: - F-06 — Sticky H1 typing-attrs after Enter
+
+    /// Reproduce the F-06 sequence using the live four-piece TextKit stack.
+    /// After the user presses Enter at end of an H1 line and types a char,
+    /// the typed char must render at body font, not H1.
+    func test_enterFromH1_thenTypeChar_charIsBodyFont() {
+        let stack = makeStack(body: "# Heading", selection: NSRange(location: 9, length: 0))
+        // Storage's processEditing has already run on the initial seed via
+        // replaceCharacters → applyAttributes, so the heading line carries
+        // h1ParagraphStyle on (0..10). When the caret is at the end of the
+        // heading line, AppKit auto-reads attrs at offset 8 (last char) which
+        // is H1 28pt, and pushes that into typingAttributes.
+        stack.textView.typingAttributes = [
+            .font: NSFont.systemFont(ofSize: 28, weight: .semibold),
+            .paragraphStyle: MarkdownTextStorage.h1ParagraphStyle,
+        ]
+
+        // Simulate Enter via the same insertText path AppKit uses.
+        stack.textView.insertText("\n", replacementRange: NSRange(location: 9, length: 0))
+        XCTAssertEqual(stack.textView.string, "# Heading\n")
+
+        // Selection has moved to offset 10 — fire our delegate hook.
+        stack.coordinator.textViewDidChangeSelection(
+            Notification(name: NSText.didChangeNotification, object: stack.textView)
+        )
+
+        // Now type 'a' — typingAttributes must be body 15pt by this point.
+        stack.textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(stack.textView.string, "# Heading\na")
+
+        let aFont = stack.textView.textStorage?.attribute(.font, at: 10, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(aFont?.pointSize, 15,
+            "F-06: char typed on line 2 after Enter from H1 must render at body 15pt, not H1 28pt")
+    }
+
+    /// The character on line 2 also needs bodyParagraphStyle so its line box
+    /// is 18pt (body) and not 32pt (h1). Without this the caret on line 2
+    /// remains tall even though the font is body — the paragraph style is
+    /// the load-bearing attribute for caret height.
+    func test_enterFromH1_thenTypeChar_charHasBodyParagraphStyle() {
+        let stack = makeStack(body: "# Heading", selection: NSRange(location: 9, length: 0))
+        stack.textView.typingAttributes = [
+            .font: NSFont.systemFont(ofSize: 28, weight: .semibold),
+            .paragraphStyle: MarkdownTextStorage.h1ParagraphStyle,
+        ]
+        stack.textView.insertText("\n", replacementRange: NSRange(location: 9, length: 0))
+        stack.coordinator.textViewDidChangeSelection(
+            Notification(name: NSText.didChangeNotification, object: stack.textView)
+        )
+        stack.textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        let aStyle = stack.textView.textStorage?.attribute(.paragraphStyle, at: 10, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(aStyle?.maximumLineHeight, 18,
+            "F-06: line 2 char must use bodyParagraphStyle (line box 18pt), not h1ParagraphStyle (32pt)")
+    }
+
     // MARK: - F-10 — Title→body Tab handoff
 
     func test_titleField_tab_invokesCallback() {
