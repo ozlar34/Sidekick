@@ -113,6 +113,69 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertEqual(stack.textView.string, "", "Empty bullet prefix stripped")
     }
 
+    // MARK: - F-10 — Title→body Tab handoff
+
+    func test_titleField_tab_invokesCallback() {
+        // Build the TitleField coordinator directly, simulate the field
+        // editor calling `control(_:textView:doCommandBy: insertTab:)`, and
+        // verify the onTab callback fires + the keystroke is consumed.
+        // Building the full NSViewRepresentable in a windowless test is
+        // overkill; the coordinator is the only piece that owns the routing.
+        var titleText = "hello"
+        var tabFired = false
+        let coordinator = TitleField.Coordinator(
+            text: Binding(get: { titleText }, set: { titleText = $0 }),
+            onTab: { tabFired = true },
+            onSubmit: { }
+        )
+        let dummyControl = NSTextField()
+        let dummyTextView = NSTextView()
+
+        let handled = coordinator.control(
+            dummyControl,
+            textView: dummyTextView,
+            doCommandBy: #selector(NSResponder.insertTab(_:))
+        )
+        XCTAssertTrue(handled, "Tab must be consumed so NSTextField does not also do focus traversal")
+        XCTAssertTrue(tabFired, "onTab callback must fire so EditorPaneView can move focus to the body editor")
+    }
+
+    func test_titleField_return_invokesSubmit() {
+        // Counterpart: Return on the title field should also hand off to the
+        // body, mirroring the prior `.onSubmit { focusBody() }` behavior.
+        var titleText = "hello"
+        var submitFired = false
+        let coordinator = TitleField.Coordinator(
+            text: Binding(get: { titleText }, set: { titleText = $0 }),
+            onTab: { },
+            onSubmit: { submitFired = true }
+        )
+        let handled = coordinator.control(
+            NSTextField(),
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertTrue(submitFired)
+    }
+
+    func test_titleField_otherCommand_fallsThrough() {
+        // Sanity: the coordinator must NOT claim arbitrary field-editor
+        // commands, otherwise we would break ⌘-C / arrow keys / etc.
+        var titleText = "hello"
+        let coordinator = TitleField.Coordinator(
+            text: Binding(get: { titleText }, set: { titleText = $0 }),
+            onTab: { XCTFail("onTab must not fire for unrelated commands") },
+            onSubmit: { XCTFail("onSubmit must not fire for unrelated commands") }
+        )
+        let handled = coordinator.control(
+            NSTextField(),
+            textView: NSTextView(),
+            doCommandBy: #selector(NSResponder.moveLeft(_:))
+        )
+        XCTAssertFalse(handled, "Non-Tab/non-Return commands fall through to NSTextField default")
+    }
+
     // MARK: - F-07 — Stale replacementRange from emoji picker
 
     /// Helper: build a HybridTextView with body + selection, no panel/window.

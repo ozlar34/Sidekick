@@ -10,15 +10,19 @@ struct EditorPaneView: View {
     @State private var localTitle: String = ""
     @State private var localBody: String = ""
     @State private var debouncer = Debouncer(interval: 0.5)
-    @FocusState private var focus: EditorField?
     @Environment(\.setDocumentEdited) private var setDocumentEdited
-
-    private enum EditorField: Hashable { case title, body }
 
     // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
     // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
     // (D-TB-02, D-TB-03, D-TB-04).
     @StateObject private var editorController = HybridEditorController()
+
+    // F-10: title is an NSViewRepresentable wrapping NSTextField so we can
+    // intercept Tab via NSTextFieldDelegate.control(_:textView:doCommandBy:).
+    // SwiftUI's .onKeyPress(.tab) on TextField does not fire on macOS — the
+    // underlying NSTextField field editor consumes Tab as `insertTab:` for
+    // focus traversal before the SwiftUI modifier sees the key.
+    @StateObject private var titleController = TitleFieldController()
 
     // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
     // Banner state is derived from store.externallyChangedIDs (WR-06): a single
@@ -56,16 +60,15 @@ struct EditorPaneView: View {
                 // Padding aligns horizontally with the editor's textContainerInset
                 // (20pt h, HybridEditorView.swift) so the title and body text
                 // share a left edge.
-                TextField("Untitled", text: $localTitle)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 22, weight: .semibold))
-                    .focused($focus, equals: .title)
-                    .submitLabel(.next)
-                    .onSubmit { focusBody() }
-                    .onKeyPress(.tab) {
-                        focusBody()
-                        return .handled
-                    }
+                TitleField(
+                    text: $localTitle,
+                    placeholder: "Untitled",
+                    font: NSFont.systemFont(ofSize: 22, weight: .semibold),
+                    controller: titleController,
+                    onTab: focusBody,
+                    onSubmit: focusBody
+                )
+                    .frame(height: 28)
                     .onChange(of: localTitle) { _, newValue in
                         scheduleAutoSave(title: newValue, body: localBody)
                     }
@@ -120,8 +123,8 @@ struct EditorPaneView: View {
             localBody = note.body
             seedFocusForCurrentNote()
             // Wire Shift-Tab @ body offset 0 → return focus to title.
-            // Counterpart to title→body Tab in the title TextField above.
-            editorController.onShiftTabAtBodyStart = { focus = .title }
+            // Counterpart to title→body Tab handled by TitleField's delegate.
+            editorController.onShiftTabAtBodyStart = { titleController.focus() }
         }
         .onChange(of: note.id) { _, _ in
             localTitle = note.title
@@ -176,16 +179,14 @@ struct EditorPaneView: View {
         if note.title.isEmpty && note.body.isEmpty {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                focus = .title
+                titleController.focus()
             }
         }
     }
 
-    /// Hand off from the SwiftUI title field to the AppKit body editor.
-    /// Releases SwiftUI focus first so .focused() doesn't fight AppKit's
-    /// makeFirstResponder.
+    /// Hand off from the title field to the AppKit body editor. Both fields
+    /// are AppKit-native, so this is a single makeFirstResponder hop.
     private func focusBody() {
-        focus = nil
         if let tv = editorController.textView {
             tv.window?.makeFirstResponder(tv)
         }
