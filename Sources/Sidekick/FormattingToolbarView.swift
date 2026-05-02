@@ -1606,7 +1606,7 @@ private struct ParagraphStyleRow: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(.accentColor)
                     .opacity(isActive ? 1 : 0)
                     .frame(width: 12)
                 Text(label)

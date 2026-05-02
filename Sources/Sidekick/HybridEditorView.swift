@@ -47,7 +47,10 @@ final class HybridTextView: NSTextView {
     /// Hit detection uses `glyphIndex(for:in:fractionOfDistanceThroughGlyph:)`:
     /// only treat as a hit if `fraction < 1.0` (the click landed inside the
     /// glyph rect, not past its trailing edge — past-the-edge hits should
-    /// place the caret like normal).
+    /// place the caret like normal). F-09: also assert the click x sits at
+    /// or past the glyph's left edge — `glyphIndex(for:)` snaps clicks in
+    /// the leading-indent zone (before the line's first glyph) to glyph 0
+    /// with fraction 0, which would otherwise toggle on margin clicks.
     override func mouseDown(with event: NSEvent) {
         if let lm = layoutManager,
            let tc = textContainer,
@@ -70,8 +73,14 @@ final class HybridTextView: NSTextView {
                    storage.attribute(.sidekickChecklistMarker,
                                      at: charIdx,
                                      effectiveRange: nil) != nil {
-                    if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
-                        return
+                    let glyphRect = lm.boundingRect(
+                        forGlyphRange: NSRange(location: glyphIdx, length: 1),
+                        in: tc
+                    )
+                    if textPoint.x >= glyphRect.minX {
+                        if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
+                            return
+                        }
                     }
                 }
             }
