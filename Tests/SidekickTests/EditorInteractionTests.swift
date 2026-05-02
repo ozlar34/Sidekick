@@ -197,4 +197,64 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertEqual(tv.string, "party 🎉t",
             "F-07 regression: emoji must not be overwritten by stale replacementRange on the next keystroke")
     }
+
+    // MARK: - F-07 — emoji stays visible after subsequent edits
+
+    /// Helper that builds a layout-attached HybridTextView for glyph-property
+    /// inspection. Distinct from `makeHybridTextView` because we need access
+    /// to the layout manager and need to force layout.
+    private func makeLayoutStack(initial: String) -> (HybridTextView, MarkdownLayoutManager, MarkdownTextStorage, NSTextContainer) {
+        let storage = MarkdownTextStorage()
+        let lm = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 400, height: 1000))
+        storage.addLayoutManager(lm)
+        lm.addTextContainer(container)
+        let tv = HybridTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 100), textContainer: container)
+        tv.isRichText = false
+        if !initial.isEmpty {
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: initial)
+        }
+        return (tv, lm, storage, container)
+    }
+
+    func test_emoji_glyphsRemainVisible_afterTypingNextChar() {
+        // F-07 regression. Pre-fix, AppKit's re-layout path after a follow-up
+        // keystroke skipped its font-cascade pass and marked the emoji's
+        // surrogate halves null because the primary system font has no glyph
+        // for them. The fix (MarkdownTextStorage.applyEmojiFont) pins
+        // AppleColorEmoji on surrogate-pair ranges so AppKit never has to
+        // cascade and the high-surrogate stays visible.
+        let (tv, lm, _, container) = makeLayoutStack(initial: "hi ")
+        tv.setSelectedRange(NSRange(location: 3, length: 0))
+        tv.insertText("🎉", replacementRange: NSRange(location: NSNotFound, length: 0))
+        tv.insertText("t", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(tv.string, "hi 🎉t")
+        lm.ensureLayout(for: container)
+        // Glyph 3 is the emoji's high surrogate (chars 0..2 are 'h','i',' ').
+        let highSurrogateProp = lm.propertyForGlyph(at: 3)
+        XCTAssertFalse(highSurrogateProp.contains(.null),
+            "F-07 regression: emoji high-surrogate glyph must remain visible after typing the next char")
+    }
+
+    func test_emoji_glyphsRemainVisible_onHeadingLine() {
+        // Same regression, but on an H1 line — the heading font is 28pt
+        // semibold, also lacks emoji glyphs. The fix preserves the ambient
+        // point size so the emoji stays sized to the heading.
+        let (tv, lm, storage, container) = makeLayoutStack(initial: "# Title")
+        tv.setSelectedRange(NSRange(location: 7, length: 0))
+        tv.insertText("🎉", replacementRange: NSRange(location: NSNotFound, length: 0))
+        tv.insertText("t", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(tv.string, "# Title🎉t")
+        lm.ensureLayout(for: container)
+        // Emoji's high surrogate is at glyph index 7 (chars '#',' ' hidden,
+        // then 'T','i','t','l','e','🎉hi','🎉lo','t').
+        let highSurrogateProp = lm.propertyForGlyph(at: 7)
+        XCTAssertFalse(highSurrogateProp.contains(.null),
+            "F-07 regression: emoji on heading line must remain visible after typing the next char")
+        // Sanity: the pinned font on the emoji range matches the heading
+        // point size (28pt), not the body 15pt.
+        let emojiFont = storage.attributes(at: 7, effectiveRange: nil)[.font] as? NSFont
+        XCTAssertEqual(emojiFont?.pointSize, 28,
+            "Pinned emoji font must inherit the heading's point size")
+    }
 }

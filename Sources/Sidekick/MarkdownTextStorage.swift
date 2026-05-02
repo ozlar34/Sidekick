@@ -200,6 +200,7 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyUnderline(in: substring, offset: base)
             try applyInlineCode(in: substring, offset: base)
             try applyLinks(in: substring, offset: base)   // D-LR-04, HYBRID-07
+            applyEmojiFont(in: substring, offset: base)   // F-07: pin Apple Color Emoji on surrogate pairs
         } catch {
             // Parser failure fallback: clear attributes on the edited range
             // (leave bytes intact — STORAGE-01 / D-T-03 round-trip is sacred).
@@ -633,6 +634,58 @@ final class MarkdownTextStorage: NSTextStorage {
                                      value: NSColor.tertiaryLabelColor,
                                      range: shifted)
             }
+        }
+    }
+
+    /// F-07 fix: pin Apple Color Emoji on every emoji surrogate pair in the
+    /// reparse range, preserving the size of the primary font already applied
+    /// at that position (so emoji in an H1 line stays 28pt, body emoji stays
+    /// 15pt). Without this, AppKit's `setGlyphs` re-layout path after a text
+    /// edit calls into the layout manager with the primary font (e.g.
+    /// systemFont 15pt) for the entire paragraph in a single call. The
+    /// primary font has no glyph for emoji surrogate pair characters, so
+    /// AppKit marks the surrogate halves with `.null` glyph property and
+    /// (critically) skips the secondary font-cascade pass that would have
+    /// substituted Apple Color Emoji. The emoji's bytes survive in storage
+    /// but render invisibly. Setting an explicit `.font = AppleColorEmoji`
+    /// on the surrogate pair range short-circuits AppKit's font-cascade
+    /// path: it sees the explicit font, generates the emoji glyph natively,
+    /// and never marks anything null.
+    ///
+    /// Iterates UTF-16 code units in `substring`. A high surrogate
+    /// (0xD800–0xDBFF) followed by a low surrogate (0xDC00–0xDFFF) is the
+    /// surface form of a non-BMP scalar — that's where every emoji past
+    /// U+FFFF lives, plus a long tail of CJK extension blocks. We pin
+    /// AppleColorEmoji on every such pair (CJK extension chars are rare in
+    /// notes and would render either way; doing the cheap pass everywhere
+    /// keeps the rule simple).
+    private func applyEmojiFont(in substring: String, offset: Int) {
+        let ns = substring as NSString
+        let length = ns.length
+        guard length >= 2 else { return }
+        var i = 0
+        while i < length - 1 {
+            let high = ns.character(at: i)
+            if high >= 0xD800 && high <= 0xDBFF {
+                let low = ns.character(at: i + 1)
+                if low >= 0xDC00 && low <= 0xDFFF {
+                    // Surrogate pair — pin AppleColorEmoji at the ambient
+                    // font size (preserves H1/H2/H3 sizing, mono code size).
+                    let pairRange = NSRange(location: offset + i, length: 2)
+                    if pairRange.location >= 0,
+                       pairRange.location + pairRange.length <= backing.length {
+                        let ambientFont = (backing.attribute(.font, at: pairRange.location, effectiveRange: nil) as? NSFont)
+                            ?? NSFont.systemFont(ofSize: 15, weight: .regular)
+                        let emojiFont = NSFont(name: "AppleColorEmoji", size: ambientFont.pointSize)
+                            ?? NSFont(name: "AppleColorEmojiUI", size: ambientFont.pointSize)
+                            ?? ambientFont
+                        backing.addAttribute(.font, value: emojiFont, range: pairRange)
+                    }
+                    i += 2
+                    continue
+                }
+            }
+            i += 1
         }
     }
 
