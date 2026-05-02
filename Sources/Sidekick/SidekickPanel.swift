@@ -22,6 +22,30 @@ final class SidekickPanel: NSPanel {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// F-08: nonactivating panels carry a private window-server tag that the
+    /// input-services daemon uses to route IME / Character Viewer events.
+    /// That tag goes stale across hide/show and after the system input
+    /// services route through another window. Re-activating the text view's
+    /// NSTextInputContext on becomeKey re-binds the daemon to us so the next
+    /// emoji-picker invocation lands inside Sidekick's body editor instead of
+    /// the previously-targeted app.
+    override func becomeKey() {
+        super.becomeKey()
+        if let tv = firstResponder as? NSTextView {
+            tv.inputContext?.activate()
+            tv.inputContext?.invalidateCharacterCoordinates()
+        }
+    }
+
+    /// F-07/F-08: discard any in-flight marked-text composition when the
+    /// panel resigns key. Without this, a half-committed IME run can persist
+    /// into the next show and interact badly with the picker's stale
+    /// replacementRange (handled separately on the textView side).
+    override func resignKey() {
+        super.resignKey()
+        (firstResponder as? NSTextView)?.inputContext?.discardMarkedText()
+    }
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,

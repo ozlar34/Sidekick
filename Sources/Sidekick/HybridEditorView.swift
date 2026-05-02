@@ -79,6 +79,26 @@ final class HybridTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    /// F-07: defense against macOS Character Viewer (emoji picker) handing us
+    /// a stale `replacementRange` after our nonactivating panel briefly loses
+    /// input-target status. Per FB13789916, the picker can capture a range at
+    /// invocation time that no longer matches the textView's selection by the
+    /// time the user picks an emoji and the picker fires `insertText:`. Honoring
+    /// the stale range causes the next typed character to replace the just-
+    /// inserted emoji. When we are NOT in active marked-text composition (so
+    /// no IME composition is in flight) and the picker's range disagrees with
+    /// our current selection, fall back to inserting at the current selection
+    /// (`NSNotFound` per NSTextInputClient docs).
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        var range = replacementRange
+        if !hasMarkedText(),
+           range.location != NSNotFound,
+           !NSEqualRanges(range, selectedRange()) {
+            range = NSRange(location: NSNotFound, length: 0)
+        }
+        super.insertText(string, replacementRange: range)
+    }
+
     override func setConstrainedFrameSize(_ desiredSize: NSSize) {
         var size = desiredSize
         if let clipHeight = enclosingScrollView?.contentView.bounds.height {
@@ -168,6 +188,22 @@ struct HybridEditorView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isEditable = true
         textView.isSelectable = true
+        // F-07: NSTextView's automatic text mutations (smart quotes, dash
+        // substitution, autocorrect, link detection, inline completion) inject
+        // synthetic key events that delete recently-typed characters. After
+        // a paste:-driven emoji insertion (which is how the macOS Character
+        // Viewer commits picks), autocorrect fires a synthetic deleteBackward:
+        // ~1.4s later, removing whatever ASCII char the user just typed
+        // adjacent to the emoji. A markdown notes editor wants none of these
+        // mutations — they conflict with markdown syntax (smart quotes break
+        // raw ", dash subs break --, text replacements rewrite snippets).
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
         textView.textContainerInset = NSSize(width: 20, height: 18)       // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
         textView.font = NSFont.systemFont(ofSize: 15, weight: .regular)
         // Absolute line-height clamp instead of lineHeightMultiple. AppKit

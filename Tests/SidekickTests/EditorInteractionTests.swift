@@ -112,4 +112,89 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertTrue(handled, "Enter on empty bullet must still be consumed by the list-continuation handler")
         XCTAssertEqual(stack.textView.string, "", "Empty bullet prefix stripped")
     }
+
+    // MARK: - F-07 — Stale replacementRange from emoji picker
+
+    /// Helper: build a HybridTextView with body + selection, no panel/window.
+    private func makeHybridTextView(body: String, selection: NSRange) -> HybridTextView {
+        let storage = MarkdownTextStorage()
+        let layoutManager = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 200, height: 1000))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        let tv = HybridTextView(
+            frame: NSRect(x: 0, y: 0, width: 200, height: 100),
+            textContainer: container
+        )
+        tv.isRichText = false
+        if !body.isEmpty {
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: body)
+        }
+        tv.setSelectedRange(selection)
+        return tv
+    }
+
+    func test_insertText_staleReplacementRange_fallsBackToCurrentSelection() {
+        // Reproduces F-07: emoji picker fires insertText with a replacementRange
+        // captured at picker-invocation time. By the time the user picks an
+        // emoji, the selection has moved (e.g. user typed " " after picker
+        // opened). Honoring the stale range would replace different content
+        // than the user expects. Our override falls back to current selection.
+        let tv = makeHybridTextView(
+            body: "party ",
+            selection: NSRange(location: 6, length: 0)
+        )
+        // Stale range: picker captured the selection at offset 0 (different).
+        let stale = NSRange(location: 0, length: 0)
+        tv.insertText("🎉", replacementRange: stale)
+        XCTAssertEqual(tv.string, "party 🎉",
+            "Insert must land at current selection (offset 6), not the stale replacementRange (offset 0)")
+    }
+
+    func test_insertText_NSNotFoundReplacementRange_passesThrough() {
+        // Sanity: when the picker / IME gives us NSNotFound (the documented
+        // "use current selection" sentinel), we don't mangle it.
+        let tv = makeHybridTextView(
+            body: "hello",
+            selection: NSRange(location: 5, length: 0)
+        )
+        tv.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(tv.string, "hello!")
+    }
+
+    func test_insertText_validReplacementRange_isHonored() {
+        // Counter-test: when replacementRange MATCHES the current selection,
+        // the standard insertText path runs unchanged. This is the normal
+        // typing case (NSTextView default uses replacementRange == selection).
+        let tv = makeHybridTextView(
+            body: "hello",
+            selection: NSRange(location: 0, length: 5)
+        )
+        // Range matches selection — standard replace-selection-with-text path.
+        tv.insertText("world", replacementRange: NSRange(location: 0, length: 5))
+        XCTAssertEqual(tv.string, "world")
+    }
+
+    func test_insertText_noEmojiOverwrite_simulatesF07Sequence() {
+        // End-to-end F-07 simulation: insert emoji, then type 't' immediately
+        // after. The emoji must remain; 't' must be appended after it.
+        let tv = makeHybridTextView(
+            body: "party ",
+            selection: NSRange(location: 6, length: 0)
+        )
+        // Step 1: picker fires insertText for the emoji at the (correct,
+        // matching) selection.
+        tv.insertText("🎉", replacementRange: NSRange(location: 6, length: 0))
+        XCTAssertEqual(tv.string, "party 🎉")
+        // After the insert, NSTextView updates selection to end of insert.
+        // 🎉 is 2 UTF-16 units, so selection should now be at offset 8.
+        XCTAssertEqual(tv.selectedRange().location, 8)
+
+        // Step 2: simulate the picker's stale replacementRange firing AGAIN
+        // on the next typed key (the actual F-07 mechanism per FB13789916).
+        // Our override must ignore the stale 6,0 range and append at 8 instead.
+        tv.insertText("t", replacementRange: NSRange(location: 6, length: 0))
+        XCTAssertEqual(tv.string, "party 🎉t",
+            "F-07 regression: emoji must not be overwritten by stale replacementRange on the next keystroke")
+    }
 }
