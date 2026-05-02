@@ -113,6 +113,69 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertEqual(stack.textView.string, "", "Empty bullet prefix stripped")
     }
 
+    // MARK: - Numbered-list Enter continuation (handleNumberedReturn)
+
+    func test_numberedReturn_continuesOnNonEmptyLine() {
+        let stack = makeStack(body: "1. hello", selection: NSRange(location: 8, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(stack.textView.string, "1. hello\n2. ")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 12, length: 0))
+    }
+
+    func test_numberedReturn_advancesNumber() {
+        let stack = makeStack(body: "3. item", selection: NSRange(location: 7, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(stack.textView.string, "3. item\n4. ")
+    }
+
+    func test_numberedReturn_emptyPrefix_stripsAndExits() {
+        let stack = makeStack(body: "1. ", selection: NSRange(location: 3, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(stack.textView.string, "")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_numberedReturn_caretBeforePrefix_fallsThrough() {
+        // Caret inside the prefix region should not trigger continuation.
+        let stack = makeStack(body: "1. hello", selection: NSRange(location: 1, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertFalse(handled)
+    }
+
+    func test_numberedReturn_nonListLine_fallsThrough() {
+        let stack = makeStack(body: "plain text", selection: NSRange(location: 5, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertFalse(handled)
+    }
+
+    func test_numberedReturn_withSelection_fallsThrough() {
+        // Non-empty selection: default NSTextView delete-and-insert should fire.
+        let stack = makeStack(body: "1. hello", selection: NSRange(location: 3, length: 3))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertFalse(handled)
+    }
+
     // MARK: - F-06 — Sticky H1 typing-attrs after Enter
 
     /// Reproduce the F-06 sequence using the live four-piece TextKit stack.
