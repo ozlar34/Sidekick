@@ -213,7 +213,7 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
-        textView.textContainerInset = NSSize(width: 20, height: 18)       // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
+        textView.textContainerInset = NSSize(width: 20, height: 10)       // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
         textView.font = NSFont.systemFont(ofSize: 15, weight: .regular)
         // Absolute line-height clamp instead of lineHeightMultiple. AppKit
         // derives the insertion-point height from the layout fragment height,
