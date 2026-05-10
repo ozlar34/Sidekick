@@ -34,6 +34,21 @@ struct EditorPaneView: View {
         store.externallyChangedIDs.contains(note.id)
     }
 
+    /// Footer text below the editor body. "Created Apr 20 · Edited 2:14 PM"
+    /// when both timestamps are known; falls back to "Edited …" alone if
+    /// createdAt is nil (only possible on a brand-new pre-migration note
+    /// that hasn't passed through applyIndex yet).
+    private var metadataLine: String {
+        let edited = note.modified.map { NoteRowFormatting.formattedModifiedTime($0) }
+        let created = note.createdAt.map { NoteRowFormatting.formattedCreated($0) }
+        switch (created, edited) {
+        case let (.some(c), .some(e)): return "Created \(c) · Edited \(e)"
+        case let (.some(c), .none):    return "Created \(c)"
+        case let (.none, .some(e)):    return "Edited \(e)"
+        case (.none, .none):           return ""
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // External-edit banner (STORE-07) — top of editor
@@ -108,6 +123,19 @@ struct EditorPaneView: View {
                     .frame(height: 2)
                     .allowsHitTesting(false)
                 }
+
+            // Created / Edited footer — Apple Notes style. Sits inside the
+            // editor pane VStack so the scroll view's clip bounds shrink by
+            // ~24pt; HybridEditorView.clipFrameChanged adapts automatically.
+            HStack {
+                Spacer()
+                Text(metadataLine)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .background(Color(.textBackgroundColor))
 
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {

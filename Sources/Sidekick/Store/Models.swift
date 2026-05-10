@@ -8,6 +8,7 @@ struct Note: Identifiable, Equatable {
     var pinned: Bool
     var order: Int
     var modified: Date? = nil
+    var createdAt: Date? = nil
 }
 
 struct NoteIndex: Codable, Equatable {
@@ -25,6 +26,10 @@ struct IndexEntry: Codable, Equatable {
     var title: String? = nil
     var pinned: Bool
     var order: Int
+    // Optional for backwards compat with pre-migration .index.json files.
+    // Backfilled in NoteStore.applyIndex from filesystem creation date the
+    // first time an old index is loaded; persisted on the next save.
+    var createdAt: Date? = nil
 }
 
 struct DiskEntry: Equatable {

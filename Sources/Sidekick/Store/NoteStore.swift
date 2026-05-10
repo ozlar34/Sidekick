@@ -78,6 +78,7 @@ final class NoteStore: ObservableObject {
         let id = UUID()
         let uuid8 = String(id.uuidString.prefix(8)).lowercased()
         let filename = "untitled-\(uuid8).md"
+        let now = Date()
 
         // Load current index (or start empty) to compute correct order.
         let currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
@@ -92,10 +93,10 @@ final class NoteStore: ObservableObject {
         // disk but is missing from .index.json — reconcile on next reload
         // will adopt it with a new UUID, which is a recoverable state.
         var newIndex = currentIndex
-        newIndex.notes.append(IndexEntry(id: id, filename: filename, title: "", pinned: false, order: order))
+        newIndex.notes.append(IndexEntry(id: id, filename: filename, title: "", pinned: false, order: order, createdAt: now))
         try await io.saveIndex(newIndex)
 
-        let note = Note(id: id, filename: filename, title: "", body: "", pinned: false, order: order, modified: Date())
+        let note = Note(id: id, filename: filename, title: "", body: "", pinned: false, order: order, modified: now, createdAt: now)
         notes.append(note)
         return note
     }
@@ -328,6 +329,7 @@ final class NoteStore: ObservableObject {
         var materialized: [Note] = []
         var migratedIndex = index
         var didMigrate = false
+        var didMigrateCreatedAt = false
         for (i, entry) in index.notes.enumerated() {
             let body = (try? await io.readNote(filename: entry.filename)) ?? ""
             let modified = await io.mtime(filename: entry.filename)
@@ -341,6 +343,18 @@ final class NoteStore: ObservableObject {
                 migratedIndex.notes[i].title = title
                 didMigrate = true
             }
+            // One-shot createdAt bootstrap. Prefer filesystem birth time;
+            // fall back to mtime so post-migration notes always carry a
+            // non-nil value once persisted.
+            let createdAt: Date?
+            if let stored = entry.createdAt {
+                createdAt = stored
+            } else {
+                let fsCreated = await io.ctime(filename: entry.filename)
+                createdAt = fsCreated ?? modified
+                migratedIndex.notes[i].createdAt = createdAt
+                didMigrateCreatedAt = true
+            }
             materialized.append(Note(
                 id: entry.id,
                 filename: entry.filename,
@@ -348,7 +362,8 @@ final class NoteStore: ObservableObject {
                 body: body,
                 pinned: entry.pinned,
                 order: entry.order,
-                modified: modified
+                modified: modified,
+                createdAt: createdAt
             ))
         }
         // Sort: pinned first, then by order.
@@ -356,8 +371,13 @@ final class NoteStore: ObservableObject {
             if $0.pinned != $1.pinned { return $0.pinned }
             return $0.order < $1.order
         }
-        // Persist bootstrapped titles so the migration runs once per note.
-        if didMigrate {
+        // Persist bootstrapped fields so each migration runs once per note.
+        // The createdAt migration also drops a one-shot pre-migration backup
+        // before its first index rewrite.
+        if didMigrateCreatedAt {
+            await io.backupIndexForCreatedMigration()
+        }
+        if didMigrate || didMigrateCreatedAt {
             try? await io.saveIndex(migratedIndex)
         }
     }
