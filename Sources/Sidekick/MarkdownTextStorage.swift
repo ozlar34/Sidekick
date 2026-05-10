@@ -676,11 +676,13 @@ final class MarkdownTextStorage: NSTextStorage {
     }
 
     /// Apply thematic-break styling: tag the dash/asterisk/underscore line with
-    /// `.sidekickThematicBreak` so `MarkdownLayoutManager.drawBackground(...)`
-    /// renders a hairline across the line's used rect, and dim the source chars
-    /// to tertiary so the raw `---` recedes visually underneath. Source bytes
-    /// stay intact — round-trip (D-T-03) is preserved by leaving the line in
-    /// the buffer unchanged.
+    /// `.sidekickThematicBreak` (read by the layout manager's drawBackground
+    /// override to paint the hairline) AND with `.sidekickHiddenMarker` so the
+    /// glyphs collapse to zero width — the raw `---` source chars survive in
+    /// the buffer (D-T-03 round-trip) but the user only sees the hairline.
+    /// The line's trailing newline is intentionally NOT in the parser's range,
+    /// so it stays visible and the line fragment retains its line-box height
+    /// (giving drawBackground a non-empty rect to draw into).
     private func applyThematicBreak(in substring: String, offset: Int) throws {
         let ranges = MarkdownInlineParser.findThematicBreaks(in: substring)
         for r in ranges {
@@ -689,12 +691,7 @@ final class MarkdownTextStorage: NSTextStorage {
                   shifted.location >= 0,
                   shifted.location + shifted.length <= backing.length else { continue }
             backing.addAttribute(.sidekickThematicBreak, value: true, range: shifted)
-            // Dim the dashes so the rendered hairline reads as the primary
-            // visual element. Tertiary matches the receding treatment used on
-            // hidden table pipes, keeping the editor's quiet palette consistent.
-            backing.addAttribute(.foregroundColor,
-                                 value: NSColor.tertiaryLabelColor,
-                                 range: shifted)
+            backing.addAttribute(.sidekickHiddenMarker, value: true, range: shifted)
         }
     }
 
