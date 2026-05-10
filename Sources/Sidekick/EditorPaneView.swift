@@ -93,14 +93,21 @@ struct EditorPaneView: View {
             }
             .background(Color(.controlBackgroundColor))
 
-            Divider()
-
-            // Editor content — hybrid editor is the only surface (Phase 11 REMOVE-03/04)
+            // Soft inset shadow at body top — replaces translucent Divider() that bled through panel vibrancy.
             HybridEditorView(text: $localBody, controller: editorController)
                 .onChange(of: localBody) { _, newValue in
                     scheduleAutoSave(title: localTitle, body: newValue)
                 }
                 .background(Color(.textBackgroundColor))
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.18), Color.white.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 2)
+                    .allowsHitTesting(false)
+                }
 
             // Disk-write failure toast (REL-01) — bottom of editor
             if diskWriteError {
