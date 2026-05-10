@@ -137,6 +137,7 @@ struct NoteRowView: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .help(note.title.isEmpty ? "Untitled" : note.title)
         .contextMenu {
             if note.pinned {
                 Button("Unpin") {

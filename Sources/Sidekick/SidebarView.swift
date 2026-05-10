@@ -75,7 +75,7 @@ struct SidebarView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .frame(width: 140)
+            .frame(width: 190)
             .overlay(alignment: .trailing) {
                 Rectangle()
                     .fill(Color(.separatorColor))
