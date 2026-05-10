@@ -8,6 +8,7 @@ enum Defaults {
     static let notesFolder = "notesFolder"
     static let filenameFollowsTitle = "filenameFollowsTitle"
     static let lastSelectedNoteID = "lastSelectedNoteID"
+    static let sidebarWidth = "sidebarWidth"
     // launchAtLogin is NOT stored in UserDefaults — read from SMAppService.mainApp.status (RESEARCH Pitfall 1)
     // hotkey stored automatically by KeyboardShortcuts library
 }

@@ -5,6 +5,7 @@ struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @ObservedObject var panelState: PanelState
     @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
+    @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = 190
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
 
@@ -15,6 +16,18 @@ struct SidebarView: View {
     private var selectedNote: Note? {
         guard let id = panelState.selectedNoteID else { return nil }
         return store.notes.first(where: { $0.id == id })
+    }
+
+    private var sidebarDividerHandle: some View {
+        let handle = ResizeHandleView(
+            onDrag: { (newWidth: CGFloat) in
+                sidebarWidth = Double(max(CGFloat(120), min(CGFloat(280), newWidth)))
+            },
+            onDragEnd: {},
+            startWidthProvider: { CGFloat(sidebarWidth) },
+            growsRight: true
+        )
+        return handle.frame(width: 6)
     }
 
     var body: some View {
@@ -75,11 +88,14 @@ struct SidebarView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .frame(width: 190)
+            .frame(width: CGFloat(sidebarWidth))
             .overlay(alignment: .trailing) {
                 Rectangle()
                     .fill(Color(.separatorColor))
                     .frame(width: 1)
+            }
+            .overlay(alignment: .trailing) {
+                sidebarDividerHandle
             }
 
             // Editor — plain opaque background
