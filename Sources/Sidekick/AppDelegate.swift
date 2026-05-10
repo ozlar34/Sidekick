@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController.store = store
     }
 
-    func openSettings() {
+    @objc func openSettings(_ sender: Any? = nil) {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController()
         }
@@ -313,8 +313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[Sidekick] mainMenu installed")
     }
 
-    /// Installs a persistent NSStatusItem in the right-side system menu bar with a
-    /// two-item dropdown: Toggle Sidekick Panel, Quit Sidekick.
+    /// Installs a persistent NSStatusItem in the right-side system menu bar.
+    /// Left-click toggles the panel immediately (no intermediate dropdown);
+    /// right-click shows a one-item "Quit Sidekick" menu.
     /// The status item survives activation-policy flips (.accessory ↔ .regular) that
     /// PanelController performs in slideIn/slideOut.
     internal func installStatusItem() {
@@ -336,29 +337,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       accessibilityDescription: "Sidekick")
                 button.image?.isTemplate = true
             }
+
+            // Wire button to a click handler instead of assigning item.menu —
+            // setting .menu makes AppKit show the menu on any click and swallows
+            // the action, forcing two clicks to open the panel.
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        let menu = NSMenu()
-
-        let toggleItem = NSMenuItem(
-            title: "Toggle Sidekick Panel",
-            action: #selector(toggleSidekickPanel(_:)),
-            keyEquivalent: ""
-        )
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        menu.addItem(NSMenuItem(
-            title: "Quit Sidekick",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: ""
-        ))
-
-        item.menu = menu
         self.statusItem = item
         NSLog("[Sidekick] statusItem installed")
+    }
+
+    /// Single click handler for the status-bar button. Branches on the event
+    /// type from `NSApp.currentEvent`: right-click attaches a transient
+    /// quit-only menu and pops it via `performClick`, then detaches; left-click
+    /// (and any other button) toggles the panel through the same code path as
+    /// the ⌃⌥⌘N hotkey.
+    @objc func statusItemClicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            let menu = NSMenu()
+            let settingsMenuItem = NSMenuItem(
+                title: "Settings",
+                action: #selector(openSettings(_:)),
+                keyEquivalent: ""
+            )
+            settingsMenuItem.target = self
+            menu.addItem(settingsMenuItem)
+            menu.addItem(NSMenuItem.separator())
+            menu.addItem(NSMenuItem(
+                title: "Quit Sidekick",
+                action: #selector(NSApplication.terminate(_:)),
+                keyEquivalent: ""
+            ))
+            // Attach the menu only for this pop, then detach so the next
+            // left-click reaches `action` instead of being swallowed by AppKit's
+            // built-in menu-on-click behavior.
+            statusItem?.menu = menu
+            sender.performClick(nil)
+            statusItem?.menu = nil
+        } else {
+            panelController.toggle()
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -623,7 +644,8 @@ extension AppDelegate: NSUserInterfaceValidations {
              #selector(reloadNotes(_:)):
             return panelVisible                                   // D-V-05 + D-U-01
 
-        case #selector(toggleSidekickPanel(_:)):
+        case #selector(toggleSidekickPanel(_:)),
+             #selector(openSettings(_:)):
             return true                    // always enabled — status bar must work whether panel is open or closed
 
         case #selector(formatBold(_:)),
