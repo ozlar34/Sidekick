@@ -25,6 +25,10 @@ struct FormattingToolbarView: View {
     /// containing the selection. Mirrors `applyLinePrefix`'s shape — toggle
     /// off when every non-empty line already has the prefix.
     var applyChecklist: () -> Void = {}
+    /// Insert a markdown thematic break (`---`) on its own line below the
+    /// caret line. One-shot insert (no toggle-off path) — round-trip-safe
+    /// because the source bytes survive untouched in the buffer.
+    var insertThematicBreak: () -> Void = {}
     /// Set when the caret is inside a bold / italic / code span. Drives the
     /// active-state highlight on the corresponding button. Defaults to nil so
     /// existing call sites (tests, previews, menu-only invocations) compile
@@ -62,6 +66,7 @@ struct FormattingToolbarView: View {
                         applyNumberedList: applyNumberedList,
                         applyBlockQuote: applyBlockQuote,
                         applyChecklist: applyChecklist,
+                        insertThematicBreak: insertThematicBreak,
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
                         activeLinePrefix: activeLinePrefix,
@@ -1383,6 +1388,48 @@ struct FormattingToolbarView: View {
             )
         }
     }
+
+    /// Inserts a markdown thematic break (`---`) on its own line below the
+    /// caret line. The parser only treats `---` as a thematic break when the
+    /// preceding line is empty (else it is a setext-H2 underline candidate),
+    /// so non-empty caret lines get an extra blank line inserted between the
+    /// content and the break. One-shot insert — no toggle-off path.
+    ///
+    /// Edit-sandwich pattern matches `performBlockQuote`. Caret lands on the
+    /// blank line directly below the inserted `---`, ready for the next entry.
+    static func performInsertThematicBreak(in textView: NSTextView) {
+        let nsBody = textView.string as NSString
+        let range = textView.selectedRange()
+        let lineRange = nsBody.lineRange(for: range)
+        let lineEnd = lineRange.location + lineRange.length
+        let lineText = lineRange.length > 0 ? nsBody.substring(with: lineRange) : ""
+        let lineHasContent = !lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let endsWithNewline = lineRange.length > 0 && nsBody.character(at: lineEnd - 1) == 0x0A
+
+        // Build the insertion. For non-empty current lines we need a blank
+        // line between the content and `---`; an empty current line already
+        // serves as that separator (or is the doc start).
+        let insertion: String
+        if !lineHasContent {
+            insertion = "---\n"
+        } else if endsWithNewline {
+            insertion = "\n---\n"
+        } else {
+            // Last line of document, no trailing newline — prepend one to
+            // open the blank-line separator, append another so the break
+            // line itself terminates.
+            insertion = "\n\n---\n"
+        }
+
+        let editRange = NSRange(location: lineEnd, length: 0)
+        guard textView.shouldChangeText(in: editRange, replacementString: insertion) else { return }
+        textView.replaceCharacters(in: editRange, with: insertion)
+        textView.didChangeText()
+
+        // Caret lands at end of insertion (start of the blank line below `---`).
+        let caretAfter = lineEnd + (insertion as NSString).length
+        textView.setSelectedRange(NSRange(location: caretAfter, length: 0))
+    }
 }
 
 /// Single toolbar button — 28×28 hit target with rounded-rect background that
@@ -1484,6 +1531,7 @@ private struct FormattingPopoverView: View {
     let applyNumberedList: () -> Void
     let applyBlockQuote: () -> Void
     let applyChecklist: () -> Void
+    let insertThematicBreak: () -> Void
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
     let activeLinePrefix: FormattingToolbarView.LinePrefix?
@@ -1581,6 +1629,14 @@ private struct FormattingPopoverView: View {
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .checklist
                 ) { applyChecklist(); dismiss() }
+
+                // One-shot insert — no toggle-off path (a thematic break has
+                // no "active" state to highlight; clicking always emits one).
+                ParagraphStyleRow(
+                    label: "—  Horizontal Rule",
+                    labelFont: .system(size: 13, weight: .regular),
+                    isActive: false
+                ) { insertThematicBreak(); dismiss() }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 6)

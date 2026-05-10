@@ -348,4 +348,44 @@ final class MarkdownInlineParserTests: XCTestCase {
         // 3 pipes in header (no body in this fixture)
         XCTAssertEqual(m.pipeRanges.count, 3)
     }
+
+    // MARK: - Thematic breaks (`---` / `***` / `___`)
+
+    func test_thematicBreak_dashes_atDocStart() {
+        // First line of a doc: prev-line check passes via the location==0 short-circuit.
+        let matches = MarkdownInlineParser.findThematicBreaks(in: "---\n")
+        XCTAssertEqual(matches.count, 1, "Dashes at doc start must match")
+        XCTAssertEqual(matches[0], NSRange(location: 0, length: 3), "Range covers `---` without trailing newline")
+    }
+
+    func test_thematicBreak_afterBlankLine() {
+        // Standard usage: paragraph, blank line, ---, blank line.
+        let body = "Paragraph.\n\n---\n\nAfter."
+        let matches = MarkdownInlineParser.findThematicBreaks(in: body)
+        XCTAssertEqual(matches.count, 1, "Thematic break separated by blank lines must match")
+        // `---` starts at offset 12: "Paragraph.\n\n" = 10 + 1 + 1 = 12
+        XCTAssertEqual(matches[0], NSRange(location: 12, length: 3))
+    }
+
+    func test_thematicBreak_setextHeading_doesNotMatch() {
+        // `Title\n---` is a setext H2 underline (paragraph immediately above).
+        // We don't render setext headings, but we also shouldn't render the
+        // dashes as a thematic break — the visual ambiguity wins.
+        let matches = MarkdownInlineParser.findThematicBreaks(in: "Title\n---\n")
+        XCTAssertTrue(matches.isEmpty, "Dashes directly under a non-empty line are setext H2 — must skip")
+    }
+
+    func test_thematicBreak_asterisksAndUnderscores() {
+        // CommonMark: 3+ of the same char (`-`, `*`, `_`) all qualify.
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "***\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "___\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "----\n").count, 1, "Four dashes still qualify")
+    }
+
+    func test_thematicBreak_mixedChars_doesNotMatch() {
+        // Mixed character classes (e.g. `-*-`) are not a thematic break.
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "-*-\n").isEmpty)
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "--\n").isEmpty,
+                      "Two dashes is not enough — minimum is three")
+    }
 }

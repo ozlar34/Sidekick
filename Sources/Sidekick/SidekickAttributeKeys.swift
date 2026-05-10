@@ -42,4 +42,13 @@ extension NSAttributedString.Key {
     /// distinct from plain `1.` typed inline. The color is cleared by
     /// `clearManagedAttributes` via its global `.foregroundColor` reset.
     static let sidekickNumberedMarker = NSAttributedString.Key("sidekickNumberedMarker")
+
+    /// Marks a markdown thematic-break line (`---` / `***` / `___` standalone).
+    /// Value is `Bool` (`true`). MarkdownTextStorage tags the line content
+    /// range and dims it to tertiary; MarkdownLayoutManager reads this attribute
+    /// in `drawBackground(forGlyphRange:at:)` to draw a 1pt hairline horizontally
+    /// across the line's used rect. Source bytes stay intact — the dashes still
+    /// round-trip to disk (D-T-03), they're just visually muted underneath the
+    /// rendered hairline.
+    static let sidekickThematicBreak = NSAttributedString.Key("sidekickThematicBreak")
 }

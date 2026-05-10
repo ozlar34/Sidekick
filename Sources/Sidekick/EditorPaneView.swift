@@ -95,6 +95,7 @@ struct EditorPaneView: View {
                     applyNumberedList: applyNumberedList,
                     applyBlockQuote: applyBlockQuote,
                     applyChecklist: applyChecklist,
+                    insertThematicBreak: insertThematicBreak,
                     activeInlineKind: editorController.activeInlineKind,
                     activeHeadingLevel: editorController.activeHeadingLevel,
                     activeLinePrefix: editorController.activeLinePrefix
@@ -286,6 +287,14 @@ struct EditorPaneView: View {
     private func applyChecklist() {
         guard let tv = editorController.textView else { return }
         FormattingToolbarView.performChecklist(in: tv)
+    }
+
+    /// Toolbar bridge for inserting a markdown thematic break (`---`).
+    /// One-shot insert — no toggle-off path. Mirrors the other perform*
+    /// bridges in shape.
+    private func insertThematicBreak() {
+        guard let tv = editorController.textView else { return }
+        FormattingToolbarView.performInsertThematicBreak(in: tv)
     }
 
 }

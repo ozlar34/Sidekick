@@ -154,6 +154,14 @@ enum MarkdownInlineParser {
         pattern: "^> ",
         options: []
     )
+    // Thematic break: a line consisting only of three or more `-`, `*`, or `_`
+    // characters (mixed not allowed per CommonMark), with optional surrounding
+    // whitespace. The regex is run against single-line text (newline stripped
+    // before matching) so `^…$` anchors the whole line.
+    private static let thematicBreakRegex = try! NSRegularExpression(
+        pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$",
+        options: []
+    )
     private static let fenceRegex = try! NSRegularExpression(
         pattern: "^```[a-zA-Z0-9]*$",
         options: []
@@ -527,6 +535,69 @@ enum MarkdownInlineParser {
             if Self.blockQuoteRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
                 let prefixRange = NSRange(location: lineRange.location, length: 2)
                 results.append(prefixRange)
+            }
+
+            lineStart = lineEnd
+            if lineStart == lineRange.location {
+                break
+            }
+        }
+
+        return results
+    }
+
+    // MARK: Thematic breaks (`---` / `***` / `___`)
+
+    /// Returns the line-content NSRange (no trailing newline) for every
+    /// thematic-break line in `string`. A thematic break is a line containing
+    /// only three-or-more `-`, `*`, or `_` characters (single character class —
+    /// mixed not allowed) with optional surrounding spaces/tabs.
+    ///
+    /// To rule out heading underlines (`Title\n---`) and table separators,
+    /// callers (MarkdownTextStorage.applyThematicBreak) should additionally
+    /// check that the previous line is empty. Fenced-code-block expansion is
+    /// handled at the storage layer (the reparse range subsumes the fence).
+    static func findThematicBreaks(in string: String) -> [NSRange] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        var results: [NSRange] = []
+        var lineStart = 0
+
+        while lineStart < fullLength {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            let lineEnd = lineRange.location + lineRange.length
+
+            let hasTrailingNewline: Bool
+            if lineRange.length > 0 {
+                let lastChar = ns.substring(with: NSRange(location: lineEnd - 1, length: 1))
+                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
+            } else {
+                hasTrailingNewline = false
+            }
+
+            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
+            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
+            let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
+
+            if Self.thematicBreakRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
+                // Heading-underline guard: a `---` line directly under a non-
+                // empty line is a setext H2 underline, not a thematic break.
+                // Same for `===`. We don't support setext headings, but the
+                // visual ambiguity is enough to skip the hairline render — the
+                // user expects the dashes to read as text in that case.
+                let prevLineIsEmpty: Bool
+                if lineRange.location == 0 {
+                    prevLineIsEmpty = true
+                } else {
+                    let prevLineRange = ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
+                    let prevText = ns.substring(with: prevLineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+                    prevLineIsEmpty = prevText.isEmpty
+                }
+                if prevLineIsEmpty {
+                    results.append(NSRange(location: lineRange.location, length: matchLength))
+                }
             }
 
             lineStart = lineEnd

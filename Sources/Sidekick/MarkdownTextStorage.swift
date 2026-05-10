@@ -195,6 +195,7 @@ final class MarkdownTextStorage: NSTextStorage {
             try applyNumberedLists(in: substring, offset: base)
             try applyBlockQuotes(in: substring, offset: base)
             try applyTables(in: substring, offset: base)
+            try applyThematicBreak(in: substring, offset: base)
             try applyBold(in: substring, offset: base)
             try applyItalic(in: substring, offset: base)
             try applyStrikethrough(in: substring, offset: base)
@@ -261,6 +262,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.sidekickBulletMarker, range: range)
         backing.removeAttribute(.sidekickChecklistMarker, range: range)
         backing.removeAttribute(.sidekickNumberedMarker, range: range)
+        backing.removeAttribute(.sidekickThematicBreak, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
@@ -670,6 +672,29 @@ final class MarkdownTextStorage: NSTextStorage {
                                      value: NSColor.tertiaryLabelColor,
                                      range: shifted)
             }
+        }
+    }
+
+    /// Apply thematic-break styling: tag the dash/asterisk/underscore line with
+    /// `.sidekickThematicBreak` so `MarkdownLayoutManager.drawBackground(...)`
+    /// renders a hairline across the line's used rect, and dim the source chars
+    /// to tertiary so the raw `---` recedes visually underneath. Source bytes
+    /// stay intact — round-trip (D-T-03) is preserved by leaving the line in
+    /// the buffer unchanged.
+    private func applyThematicBreak(in substring: String, offset: Int) throws {
+        let ranges = MarkdownInlineParser.findThematicBreaks(in: substring)
+        for r in ranges {
+            let shifted = shift(r, by: offset)
+            guard shifted.length > 0,
+                  shifted.location >= 0,
+                  shifted.location + shifted.length <= backing.length else { continue }
+            backing.addAttribute(.sidekickThematicBreak, value: true, range: shifted)
+            // Dim the dashes so the rendered hairline reads as the primary
+            // visual element. Tertiary matches the receding treatment used on
+            // hidden table pipes, keeping the editor's quiet palette consistent.
+            backing.addAttribute(.foregroundColor,
+                                 value: NSColor.tertiaryLabelColor,
+                                 range: shifted)
         }
     }
 

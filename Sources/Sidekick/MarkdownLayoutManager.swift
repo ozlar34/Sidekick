@@ -99,4 +99,58 @@ final class MarkdownLayoutManager: NSLayoutManager {
 
         super.setGlyphs(UnsafePointer(mutableGlyphs), properties: UnsafePointer(mutableProperties), characterIndexes: characterIndexes, font: font, forGlyphRange: glyphRange)
     }
+
+    /// Draw a horizontal hairline across any glyph range whose backing
+    /// characters carry `.sidekickThematicBreak`. The base implementation
+    /// handles `.backgroundColor`-driven block fills (used by inline code +
+    /// fenced code blocks); we extend it to paint the thematic-break rule
+    /// after super so the hairline sits on top of any background. Drawing
+    /// in the layout manager (vs. an NSTextAttachment / glyph substitution)
+    /// keeps the source bytes lossless — the `---` chars survive round-trip
+    /// and the caret can still navigate them like any other text.
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+
+        guard let storage = self.textStorage,
+              let container = self.textContainers.first,
+              storage.length > 0 else { return }
+
+        // Walk the visible glyph range looking for runs flagged with
+        // `.sidekickThematicBreak`. The attribute is applied at the storage
+        // layer line-by-line so each contiguous run corresponds to one line.
+        let charRange = self.characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        guard charRange.length > 0,
+              charRange.location + charRange.length <= storage.length else { return }
+
+        storage.enumerateAttribute(
+            .sidekickThematicBreak,
+            in: charRange,
+            options: []
+        ) { value, attrRange, _ in
+            guard (value as? Bool) == true,
+                  attrRange.length > 0 else { return }
+
+            let runGlyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            guard runGlyphRange.length > 0 else { return }
+
+            let lineRect = self.lineFragmentUsedRect(
+                forGlyphAt: runGlyphRange.location,
+                effectiveRange: nil
+            )
+            let inset = container.lineFragmentPadding
+            let usableWidth = container.size.width - inset * 2
+            // Center the hairline vertically inside the line rect.
+            let hairlineHeight: CGFloat = 1
+            let hairlineY = origin.y + lineRect.midY - hairlineHeight / 2
+            let hairlineRect = NSRect(
+                x: origin.x + inset,
+                y: hairlineY,
+                width: max(0, usableWidth),
+                height: hairlineHeight
+            )
+
+            NSColor.separatorColor.setFill()
+            hairlineRect.fill()
+        }
+    }
 }
