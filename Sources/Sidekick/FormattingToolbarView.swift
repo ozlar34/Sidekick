@@ -1395,8 +1395,13 @@ struct FormattingToolbarView: View {
     /// so non-empty caret lines get an extra blank line inserted between the
     /// content and the break. One-shot insert — no toggle-off path.
     ///
-    /// Edit-sandwich pattern matches `performBlockQuote`. Caret lands on the
-    /// blank line directly below the inserted `---`, ready for the next entry.
+    /// Edit-sandwich pattern matches `performBlockQuote`. Caret lands on a
+    /// real empty line BELOW the inserted `---`. Each insertion always
+    /// terminates with `\n\n` (hairline-line `\n` + new-blank-line `\n`) and
+    /// the caret is set to the position right before that final `\n` —
+    /// otherwise AppKit can render a past-end caret with upstream affinity
+    /// at the end of the (visually empty) hairline line, which looks like
+    /// the caret is sitting on the rule itself.
     static func performInsertThematicBreak(in textView: NSTextView) {
         let nsBody = textView.string as NSString
         let range = textView.selectedRange()
@@ -1407,18 +1412,19 @@ struct FormattingToolbarView: View {
         let endsWithNewline = lineRange.length > 0 && nsBody.character(at: lineEnd - 1) == 0x0A
 
         // Build the insertion. For non-empty current lines we need a blank
-        // line between the content and `---`; an empty current line already
-        // serves as that separator (or is the doc start).
+        // line BEFORE `---` (parser disambiguates from setext-H2). All
+        // variants end with `---\n\n` so there's a real empty line below
+        // the rule for the caret to anchor on.
         let insertion: String
         if !lineHasContent {
-            insertion = "---\n"
+            // Existing empty line above already serves as the separator.
+            insertion = "---\n\n"
         } else if endsWithNewline {
-            insertion = "\n---\n"
+            insertion = "\n---\n\n"
         } else {
-            // Last line of document, no trailing newline — prepend one to
-            // open the blank-line separator, append another so the break
-            // line itself terminates.
-            insertion = "\n\n---\n"
+            // Last line of doc, no trailing newline — prepend one to open
+            // the blank-line separator above the rule.
+            insertion = "\n\n---\n\n"
         }
 
         let editRange = NSRange(location: lineEnd, length: 0)
@@ -1426,8 +1432,11 @@ struct FormattingToolbarView: View {
         textView.replaceCharacters(in: editRange, with: insertion)
         textView.didChangeText()
 
-        // Caret lands at end of insertion (start of the blank line below `---`).
-        let caretAfter = lineEnd + (insertion as NSString).length
+        // Place caret one before the trailing `\n` so it sits at the start of
+        // the new empty line below the rule (a real character position, not a
+        // past-end phantom — the latter renders unpredictably when the line
+        // immediately above has all-hidden glyphs).
+        let caretAfter = lineEnd + (insertion as NSString).length - 1
         textView.setSelectedRange(NSRange(location: caretAfter, length: 0))
     }
 }
