@@ -362,6 +362,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Shorten AppKit's default ~1.5s tooltip delay app-wide. Affects every
+        // .help()/NSView.toolTip site. register() sets the in-memory default
+        // for this run only — does NOT persist to the user's plist.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 1.0])
+
         installMainMenu()                          // G-05: must run before any UI is shown
         installStatusItem()                        // NEW — install menu bar icon
         NSApp.setActivationPolicy(.accessory)
