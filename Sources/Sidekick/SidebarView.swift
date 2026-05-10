@@ -129,7 +129,7 @@ struct SidebarView: View {
             // Check whether the configured notes folder exists (STORE-04 / MF-01)
             let configured = UserDefaults.standard.string(forKey: Defaults.notesFolder) ?? ""
             let folder = configured.isEmpty
-                ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/Sidekick")
+                ? StorageLocation.defaultNotesFolder
                 : URL(fileURLWithPath: configured)
             var isDir: ObjCBool = false
             let exists = FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir)
@@ -207,8 +207,7 @@ struct SidebarView: View {
     }
 
     private func createFolder() {
-        let target = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/Sidekick")
+        let target = StorageLocation.defaultNotesFolder
         showMissingFolderSheet = false
         Task {
             do {

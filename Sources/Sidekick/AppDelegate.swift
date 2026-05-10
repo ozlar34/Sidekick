@@ -393,11 +393,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         NSLog("[Sidekick] launched")
 
-        // NoteStore root: read from UserDefaults if set, otherwise ~/Documents/Sidekick/
+        // One-shot move of legacy ~/Documents/Sidekick/ → ~/Library/Application Support/Sidekick/.
+        // Must run BEFORE NoteStore init so the path resolution below sees the migrated location.
+        StorageLocation.migrateDefaultLocationIfNeeded()
+
+        // NoteStore root: read from UserDefaults if set, otherwise the App Support default.
         let configuredPath = UserDefaults.standard.string(forKey: Defaults.notesFolder)
         let folder: URL = (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Documents/Sidekick")
+            ?? StorageLocation.defaultNotesFolder
         do {
             let s = try NoteStore(folder: folder)
             self.store = s

@@ -123,8 +123,7 @@ struct SettingsView: View {
 
     private var displayPath: String {
         notesFolder.isEmpty
-            ? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Documents/Sidekick").path
+            ? StorageLocation.defaultNotesFolder.path
             : notesFolder
     }
 
