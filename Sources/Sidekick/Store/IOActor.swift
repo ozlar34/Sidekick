@@ -37,32 +37,6 @@ actor IOActor {
         return vals?.contentModificationDate
     }
 
-    /// Filesystem birth time, used to backfill `createdAt` on pre-migration
-    /// index entries. Returns nil if the file is missing or the platform
-    /// can't surface a creation date.
-    func ctime(filename: String) -> Date? {
-        let url = folder.appendingPathComponent(filename)
-        let vals = try? url.resourceValues(forKeys: [.creationDateKey])
-        return vals?.creationDate
-    }
-
-    /// Writes a one-shot snapshot of the existing `.index.json` to
-    /// `.index.json.pre-created-migration.bak` if both:
-    ///   - the live index file exists
-    ///   - the backup does not already exist
-    /// Idempotent — safe to call before every migration save.
-    func backupIndexForCreatedMigration() {
-        let live = folder.appendingPathComponent(".index.json")
-        let bak = folder.appendingPathComponent(".index.json.pre-created-migration.bak")
-        guard FileManager.default.fileExists(atPath: live.path) else { return }
-        guard !FileManager.default.fileExists(atPath: bak.path) else { return }
-        do {
-            try FileManager.default.copyItem(at: live, to: bak)
-        } catch {
-            NSLog("[Sidekick] IOActor: createdAt backup failed: \(error)")
-        }
-    }
-
     func deleteNote(filename: String) throws {
         let url = folder.appendingPathComponent(filename)
         try FileManager.default.removeItem(at: url)

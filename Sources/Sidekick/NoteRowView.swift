@@ -64,23 +64,6 @@ enum NoteRowFormatting {
         return f
     }()
 
-    /// Date-only label for the editor's Created footer. Today/yesterday get
-    /// the friendly word; within this year → "Apr 15"; older → "Apr 15, 2024".
-    /// Apple Notes uses date-only here even though the underlying timestamp
-    /// has time-of-day precision.
-    static func formattedCreated(_ date: Date, now: Date = Date()) -> String {
-        let cal = Calendar.current
-        if cal.isDate(date, inSameDayAs: now) { return "Today" }
-        if let yesterdayStart = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: now)),
-           cal.isDate(date, inSameDayAs: yesterdayStart) {
-            return "Yesterday"
-        }
-        if cal.component(.year, from: date) == cal.component(.year, from: now) {
-            return monthDayFormatter.string(from: date)
-        }
-        return monthDayYearFormatter.string(from: date)
-    }
-
     /// Compact relative-modified label for sidebar rows. Apple-Notes / Mail-style:
     /// today → "10:34 AM"; yesterday → "Yesterday"; within 7 days → weekday name;
     /// this year → "Apr 15"; older → "Apr 15, 2024". `now` is injectable for tests.

@@ -329,7 +329,6 @@ final class NoteStore: ObservableObject {
         var materialized: [Note] = []
         var migratedIndex = index
         var didMigrate = false
-        var didMigrateCreatedAt = false
         for (i, entry) in index.notes.enumerated() {
             let body = (try? await io.readNote(filename: entry.filename)) ?? ""
             let modified = await io.mtime(filename: entry.filename)
@@ -343,18 +342,9 @@ final class NoteStore: ObservableObject {
                 migratedIndex.notes[i].title = title
                 didMigrate = true
             }
-            // One-shot createdAt bootstrap. Prefer filesystem birth time;
-            // fall back to mtime so post-migration notes always carry a
-            // non-nil value once persisted.
-            let createdAt: Date?
-            if let stored = entry.createdAt {
-                createdAt = stored
-            } else {
-                let fsCreated = await io.ctime(filename: entry.filename)
-                createdAt = fsCreated ?? modified
-                migratedIndex.notes[i].createdAt = createdAt
-                didMigrateCreatedAt = true
-            }
+            // createdAt is stamped on create(); legacy entries stay nil.
+            // Filesystem birth time isn't preserved across folder moves, so
+            // a backfill from ctime would lie about pre-existing notes.
             materialized.append(Note(
                 id: entry.id,
                 filename: entry.filename,
@@ -363,7 +353,7 @@ final class NoteStore: ObservableObject {
                 pinned: entry.pinned,
                 order: entry.order,
                 modified: modified,
-                createdAt: createdAt
+                createdAt: entry.createdAt
             ))
         }
         // Sort: pinned first, then by order.
@@ -371,13 +361,8 @@ final class NoteStore: ObservableObject {
             if $0.pinned != $1.pinned { return $0.pinned }
             return $0.order < $1.order
         }
-        // Persist bootstrapped fields so each migration runs once per note.
-        // The createdAt migration also drops a one-shot pre-migration backup
-        // before its first index rewrite.
-        if didMigrateCreatedAt {
-            await io.backupIndexForCreatedMigration()
-        }
-        if didMigrate || didMigrateCreatedAt {
+        // Persist bootstrapped titles so the migration runs once per note.
+        if didMigrate {
             try? await io.saveIndex(migratedIndex)
         }
     }

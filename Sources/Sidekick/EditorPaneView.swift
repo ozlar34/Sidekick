@@ -34,19 +34,12 @@ struct EditorPaneView: View {
         store.externallyChangedIDs.contains(note.id)
     }
 
-    /// Footer text below the editor body. "Created Apr 20 · Edited 2:14 PM"
-    /// when both timestamps are known; falls back to "Edited …" alone if
-    /// createdAt is nil (only possible on a brand-new pre-migration note
-    /// that hasn't passed through applyIndex yet).
+    /// Footer text below the editor body. "Edited 2:14 PM" — Created date
+    /// is intentionally hidden because legacy notes pre-date the field and
+    /// filesystem birth time isn't preserved across folder moves.
     private var metadataLine: String {
-        let edited = note.modified.map { NoteRowFormatting.formattedModifiedTime($0) }
-        let created = note.createdAt.map { NoteRowFormatting.formattedCreated($0) }
-        switch (created, edited) {
-        case let (.some(c), .some(e)): return "Created \(c) · Edited \(e)"
-        case let (.some(c), .none):    return "Created \(c)"
-        case let (.none, .some(e)):    return "Edited \(e)"
-        case (.none, .none):           return ""
-        }
+        guard let edited = note.modified else { return "" }
+        return "Edited \(NoteRowFormatting.formattedModifiedTime(edited))"
     }
 
     var body: some View {
@@ -85,6 +78,9 @@ struct EditorPaneView: View {
                 )
                     .frame(height: 28)
                     .onChange(of: localTitle) { _, newValue in
+                        // Skip the onAppear / note-switch reseed — it would
+                        // re-write the same body to disk and bump mtime.
+                        guard newValue != note.title else { return }
                         scheduleAutoSave(title: newValue, body: localBody)
                     }
                     .padding(.horizontal, 20)
@@ -111,6 +107,9 @@ struct EditorPaneView: View {
             // Soft inset shadow at body top — replaces translucent Divider() that bled through panel vibrancy.
             HybridEditorView(text: $localBody, controller: editorController)
                 .onChange(of: localBody) { _, newValue in
+                    // Skip the onAppear / note-switch reseed — it would
+                    // re-write the same body to disk and bump mtime.
+                    guard newValue != note.body else { return }
                     scheduleAutoSave(title: localTitle, body: newValue)
                 }
                 .background(Color(.textBackgroundColor))
