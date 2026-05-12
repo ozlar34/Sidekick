@@ -116,6 +116,64 @@ final class HybridTextView: NSTextView {
         super.setConstrainedFrameSize(size)
     }
 
+    /// Tracks the last rect we drew a shifted HR-line caret at, so we can
+    /// invalidate it on the next selection change. NSTextView caches the
+    /// *unshifted* caret rect for its own setNeedsDisplay invalidation, so
+    /// if we don't manually invalidate the shifted position, the caret
+    /// pixel persists as a ghost when the caret moves away.
+    private var lastShiftedCaretRect: NSRect?
+
+    /// Selection changes are the trigger for HR-caret ghost cleanup. We
+    /// override the most-primitive selection setter (multi-range form) so
+    /// every path — keyboard, mouse, programmatic — invalidates the prior
+    /// shifted rect before NSTextView updates internal state.
+    override func setSelectedRanges(
+        _ ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting: Bool
+    ) {
+        if let prev = lastShiftedCaretRect {
+            setNeedsDisplay(prev.insetBy(dx: -2, dy: -2))
+            lastShiftedCaretRect = nil
+        }
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+    }
+
+    /// On a thematic-break line the `---` source glyphs are zero-width
+    /// (.null), so NSTextView's natural caret rect lands at x=0 for every
+    /// position inside the line. Visually, the user sees the caret stuck
+    /// at the left edge regardless of arrow-key movement. We detect a
+    /// caret whose preceding character carries `.sidekickThematicBreak`
+    /// and shift the draw rect to the right edge of the hairline — where
+    /// the rendered horizontal rule visually ends.
+    ///
+    /// Position 0 of an HR line (probe char has no thematic break attr)
+    /// stays at the left edge so down-arrow from above lands sensibly.
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        if let storage = textStorage,
+           let tc = textContainer,
+           selectedRange().length == 0 {
+            let caret = selectedRange().location
+            let n = storage.length
+            if caret > 0,
+               caret - 1 < n,
+               storage.attribute(.sidekickThematicBreak,
+                                 at: caret - 1,
+                                 effectiveRange: nil) != nil {
+                let inset = tc.lineFragmentPadding
+                let caretWidth = max(rect.width, 1)
+                var shifted = rect
+                shifted.origin.x = textContainerOrigin.x + tc.size.width - inset - caretWidth
+                super.drawInsertionPoint(in: shifted, color: color, turnedOn: flag)
+                if flag {
+                    lastShiftedCaretRect = shifted
+                }
+                return
+            }
+        }
+        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+    }
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         guard let clipView = enclosingScrollView?.contentView else { return }
@@ -213,7 +271,7 @@ struct HybridEditorView: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
-        textView.textContainerInset = NSSize(width: 20, height: 10)       // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
+        textView.textContainerInset = NSSize(width: 14, height: 10)       // P7-PAD-01 (CONTEXT Claude's Discretion — recommended)
         textView.font = NSFont.systemFont(ofSize: 15, weight: .regular)
         // Absolute line-height clamp instead of lineHeightMultiple. AppKit
         // derives the insertion-point height from the layout fragment height,
@@ -419,6 +477,7 @@ struct HybridEditorView: NSViewRepresentable {
         /// through to NSTextView's default behavior.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                if FormattingToolbarView.handleThematicBreakReturn(in: textView) { return true }
                 if FormattingToolbarView.handleChecklistReturn(in: textView) { return true }
                 if FormattingToolbarView.handleBulletReturn(in: textView) { return true }
                 if FormattingToolbarView.handleNumberedReturn(in: textView) { return true }

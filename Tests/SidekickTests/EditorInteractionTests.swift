@@ -176,6 +176,85 @@ final class EditorInteractionTests: XCTestCase {
         XCTAssertFalse(handled)
     }
 
+    // MARK: - Thematic-break Enter handler (handleThematicBreakReturn)
+
+    func test_thematicBreakReturn_caretAtLineStart_movesCaretToLineAbove() {
+        // "\n---\n\n" — empty separator at offset 0, `---` line at 1..4,
+        // trailing empty line at 5. Caret at offset 1 (start of HR line,
+        // visually at left edge of hairline — the bug repro position).
+        let stack = makeStack(body: "\n---\n\n", selection: NSRange(location: 1, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled, "Enter on an HR line must be consumed (no fallthrough to default newline)")
+        XCTAssertEqual(stack.textView.string, "\n---\n\n", "Text must not mutate — Enter on HR is a pure caret move")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0),
+                       "Caret jumps to end of empty separator line above the HR")
+    }
+
+    func test_thematicBreakReturn_caretMidDashes_alsoMovesCaretAbove() {
+        // Caret at offset 2 (between first and second dash) — drawInsertionPoint
+        // shifts this visually to the right edge of the hairline, but the
+        // handler treats the entire HR line as an atomic boundary.
+        let stack = makeStack(body: "\n---\n\n", selection: NSRange(location: 2, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(stack.textView.string, "\n---\n\n")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_thematicBreakReturn_hrAtDocStart_opensBlankLineAbove() {
+        // No separator line exists above the HR — defensive branch inserts
+        // a clean `\n` at offset 0 and parks the caret on it.
+        let stack = makeStack(body: "---\n\n", selection: NSRange(location: 0, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertTrue(handled)
+        XCTAssertEqual(stack.textView.string, "\n---\n\n", "One `\\n` opened above the HR")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0),
+                       "Caret sits on the newly opened blank line")
+
+        // The opened `\n` must NOT carry the thematic-break attribute — that
+        // is exactly the failure mode the handler exists to prevent. After
+        // processEditing runs, position 0 should be a plain `\n`.
+        XCTAssertNil(
+            stack.textView.textStorage?.attribute(.sidekickThematicBreak, at: 0, effectiveRange: nil),
+            "Newly inserted `\\n` must not inherit thematic-break attribute"
+        )
+        // The original `---` (now at offsets 1..3) still carries the attribute.
+        XCTAssertNotNil(
+            stack.textView.textStorage?.attribute(.sidekickThematicBreak, at: 1, effectiveRange: nil),
+            "Original HR survives and keeps its thematic-break attribute"
+        )
+    }
+
+    func test_thematicBreakReturn_withSelection_fallsThrough() {
+        // Non-empty selection on an HR line: default NSTextView delete-and-
+        // insert behavior takes over (handler must return false).
+        let stack = makeStack(body: "\n---\n\n", selection: NSRange(location: 1, length: 3))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertFalse(handled)
+    }
+
+    func test_thematicBreakReturn_nonHRLine_fallsThrough() {
+        // Caret on a plain paragraph: handler must not fire.
+        let stack = makeStack(body: "plain text\n", selection: NSRange(location: 3, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+        XCTAssertFalse(handled)
+    }
+
     // MARK: - F-06 — Sticky H1 typing-attrs after Enter
 
     /// Reproduce the F-06 sequence using the live four-piece TextKit stack.

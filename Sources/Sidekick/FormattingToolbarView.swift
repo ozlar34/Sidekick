@@ -1389,6 +1389,52 @@ struct FormattingToolbarView: View {
         }
     }
 
+    /// Enter handler for thematic-break lines. The HR's `---` glyphs are
+    /// rendered zero-width with a hairline drawn over them, so the caret can
+    /// land at positions 0..lineLen of an HR line while looking like it's on
+    /// the hairline. Letting AppKit's default `insertNewline:` fire there
+    /// stacks new hairlines per keystroke: the inserted `\n` inherits
+    /// `.sidekickThematicBreak` from typing attributes (or survives the
+    /// paragraph-scoped reparse) and the layout manager paints one hairline
+    /// per contiguous TB run. Treat the HR as an atomic block boundary
+    /// instead — Enter escapes upward to the empty separator line above
+    /// (parser guarantees it exists per MarkdownInlineParser.swift
+    /// `prevLineIsEmpty`). Returns true when handled.
+    static func handleThematicBreakReturn(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+        guard let storage = textView.textStorage, storage.length > 0 else { return false }
+
+        let lineRange = nsBody.lineRange(for: selection)
+        guard lineRange.length > 0,
+              lineRange.location < storage.length,
+              storage.attribute(.sidekickThematicBreak,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return false }
+
+        // Doc-start HR has no separator line above. Open one with a clean
+        // `\n` (no TB attrs via shouldChangeText sandwich → typingAttributes
+        // path; at location 0 there is no preceding TB-tagged char to
+        // inherit from) and place the caret on it.
+        if lineRange.location == 0 {
+            let editRange = NSRange(location: 0, length: 0)
+            guard textView.shouldChangeText(in: editRange, replacementString: "\n") else { return false }
+            textView.replaceCharacters(in: editRange, with: "\n")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            return true
+        }
+
+        // Pure caret move — no text mutation, no shouldChangeText needed.
+        // Position `lineRange.location - 1` is the `\n` of the line above;
+        // selecting that location places the caret at the END of that line
+        // (which is the empty separator), ready for typing.
+        textView.setSelectedRange(NSRange(location: lineRange.location - 1, length: 0))
+        return true
+    }
+
     /// Inserts a markdown thematic break (`---`) on its own line below the
     /// caret line. The parser only treats `---` as a thematic break when the
     /// preceding line is empty (else it is a setext-H2 underline candidate),
