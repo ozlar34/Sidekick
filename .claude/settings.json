@@ -5,8 +5,7 @@
     "gmail",
     "google-calendar",
     "n8n-nodes",
-    "raindrop",
-    "manus-mcp"
+    "raindrop"
   ],
   "deniedMcpServers": [
     { "serverName": "claude_ai_Gmail" },

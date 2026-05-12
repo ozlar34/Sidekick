@@ -28,13 +28,6 @@ enum NoteRowFormatting {
         return meaningfulLines(in: body).first
     }
 
-    /// Preview — first meaningful body line, 50-char cap. Title now lives
-    /// in its own field (Note.title), so the body is freely scanned from
-    /// line 1. Returns nil when the body has no meaningful content.
-    static func preview(for body: String) -> String? {
-        return meaningfulLines(in: body).first.map { String($0.prefix(50)) }
-    }
-
     private static let timeOfDayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale.current
@@ -111,29 +104,15 @@ struct NoteRowView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if let modified = note.modified {
-                    Text(NoteRowFormatting.formattedModifiedTime(modified))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                if let preview = NoteRowFormatting.preview(for: note.body) {
-                    if note.modified != nil {
-                        Text("·")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(preview)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+            if let modified = note.modified {
+                Text(NoteRowFormatting.formattedModifiedTime(modified))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 12)
+        .padding(.leading, 6)
+        .padding(.trailing, 6)
         .padding(.top, 8)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
