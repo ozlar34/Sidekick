@@ -723,6 +723,59 @@ enum MarkdownInlineParser {
         }
     }
 
+    /// Bare-URL detector for the link-chip render path (Phase B). Uses
+    /// `NSDataDetector(.link)` because manual http(s) regex chokes on URL
+    /// edge cases (parens, trailing punctuation) that DataDetector already
+    /// handles. Returns ranges that do NOT overlap any markdown link bracket
+    /// pair from `findLinkRanges`, so `[label](url)` patterns retain their
+    /// existing styled-label behavior.
+    static func findAutoLinkRanges(in string: String) -> [NSRange] {
+        let ns = string as NSString
+        let fullLength = ns.length
+        guard fullLength > 0 else { return [] }
+
+        let detector: NSDataDetector
+        do {
+            detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        } catch {
+            return []
+        }
+
+        // Build a "claimed" mask of UTF-16 ranges covered by any markdown
+        // link's `[...]( ... )` span — auto-link candidates that fall inside
+        // are dropped (the [label](url) path already styles them).
+        let mdLinks = findLinkRanges(in: string)
+        let claimedSpans: [NSRange] = mdLinks.map { m in
+            // Full bracket-paren span: openBracket → closeParen.
+            let start = m.openBracketRange.location
+            let end = m.closeParenRange.location + m.closeParenRange.length
+            return NSRange(location: start, length: end - start)
+        }
+
+        let candidates = detector.matches(in: string, range: NSRange(location: 0, length: fullLength))
+        return candidates.compactMap { r -> NSRange? in
+            let range = r.range
+            guard range.length > 0,
+                  range.location + range.length <= fullLength else { return nil }
+            for claimed in claimedSpans {
+                if NSIntersectionRange(range, claimed).length > 0 { return nil }
+            }
+            return range
+        }
+    }
+
+    /// Compute the display label for a link-chip pill. Strips `http://` /
+    /// `https://`, leading `www.`, trailing `/`. Falls back to the raw URL
+    /// if stripping would yield an empty string.
+    static func chipDisplayText(forURL urlString: String) -> String {
+        var s = urlString
+        if s.hasPrefix("https://") { s.removeFirst("https://".count) }
+        else if s.hasPrefix("http://") { s.removeFirst("http://".count) }
+        if s.hasPrefix("www.") { s.removeFirst("www.".count) }
+        while s.hasSuffix("/") { s.removeLast() }
+        return s.isEmpty ? urlString : s
+    }
+
     // MARK: Fenced Code Blocks
 
     /// Returns matches for all paired ` ``` `…` ``` ` fenced code blocks in `string`.

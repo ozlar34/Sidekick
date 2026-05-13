@@ -280,6 +280,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.sidekickChecklistMarker, range: range)
         backing.removeAttribute(.sidekickNumberedMarker, range: range)
         backing.removeAttribute(.sidekickThematicBreak, range: range)
+        backing.removeAttribute(.sidekickLinkChip, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
@@ -397,6 +398,11 @@ final class MarkdownTextStorage: NSTextStorage {
     /// Hides [, ], (, URL, ) marker ranges and styles the label with link-foreground + underline.
     /// Tags the label with AppKit's .link attribute when URL(string:) parses; omits .link otherwise (D-LR-06 fallback).
     /// Mirrors applyInlineCode shape. Per D-LR-02, D-LR-03, D-LR-05.
+    ///
+    /// Phase B extension: when the markdown label equals the URL (modulo
+    /// chip-display stripping), or for bare URLs in body text, the URL is
+    /// collapsed into a single rendered "link-chip" via `.sidekickLinkChip`.
+    /// Source bytes are preserved — only attributes change.
     private func applyLinks(in substring: String, offset: Int) throws {
         let matches = MarkdownInlineParser.findLinkRanges(in: substring)
         for m in matches {
@@ -409,22 +415,73 @@ final class MarkdownTextStorage: NSTextStorage {
 
             let label = shift(m.labelRange, by: offset)
 
-            // Visible label styling (D-LR-03): link color + single underline
-            backing.addAttribute(.foregroundColor, value: NSColor.linkColor, range: label)
-            backing.addAttribute(.underlineStyle,
-                                 value: NSUnderlineStyle.single.rawValue,
-                                 range: label)
-
-            // AppKit .link attribute on label (D-LR-05) — nil-fallback per D-LR-06
+            // Inspect the label text and the URL text. If they match (after
+            // chip-display stripping) the label is itself a raw URL — collapse
+            // into a chip. Otherwise keep the styled-label rendering.
             let ns = backing.string as NSString
             let shiftedURLRange = shift(m.urlRange, by: offset)
-            if shiftedURLRange.length > 0,
-               shiftedURLRange.location + shiftedURLRange.length <= ns.length {
-                let urlText = ns.substring(with: shiftedURLRange)
+            guard label.length > 0,
+                  label.location + label.length <= ns.length,
+                  shiftedURLRange.length > 0,
+                  shiftedURLRange.location + shiftedURLRange.length <= ns.length else {
+                continue
+            }
+            let labelText = ns.substring(with: label)
+            let urlText = ns.substring(with: shiftedURLRange)
+            let labelChip = MarkdownInlineParser.chipDisplayText(forURL: labelText)
+            let urlChip = MarkdownInlineParser.chipDisplayText(forURL: urlText)
+
+            if labelChip == urlChip {
+                // Label is the URL — hide the whole label and chip the first char.
+                tagHiddenMarker(shifting: m.labelRange, by: offset)
+                let firstCharRange = NSRange(location: label.location, length: 1)
+                backing.addAttribute(.sidekickLinkChip,
+                                     value: urlChip,
+                                     range: firstCharRange)
+                if let url = URL(string: urlText) {
+                    backing.addAttribute(.link, value: url, range: firstCharRange)
+                }
+                // Defeat NSTextView's automatic linkTextAttributes (linkColor +
+                // single underline) on the chip anchor — the pill is our
+                // visual, the system underline would render below it.
+                backing.addAttribute(.underlineStyle, value: 0, range: firstCharRange)
+            } else {
+                // Visible label styling (D-LR-03): link color + single underline
+                backing.addAttribute(.foregroundColor, value: NSColor.linkColor, range: label)
+                backing.addAttribute(.underlineStyle,
+                                     value: NSUnderlineStyle.single.rawValue,
+                                     range: label)
+                // AppKit .link attribute on label (D-LR-05) — nil-fallback per D-LR-06
                 if let url = URL(string: urlText) {
                     backing.addAttribute(.link, value: url, range: label)
                 }
             }
+        }
+
+        // Bare-URL auto-link pass. Each detected range becomes a chip:
+        // every char hidden, first char carries `.sidekickLinkChip` (display
+        // text) plus `.link` so cmd-click / system handling still works.
+        let autoLinks = MarkdownInlineParser.findAutoLinkRanges(in: substring)
+        let ns = backing.string as NSString
+        for r in autoLinks {
+            let shifted = shift(r, by: offset)
+            guard shifted.length > 0,
+                  shifted.location + shifted.length <= ns.length else { continue }
+            let urlText = ns.substring(with: shifted)
+
+            tagHiddenMarker(shifting: r, by: offset)
+
+            let firstCharRange = NSRange(location: shifted.location, length: 1)
+            let displayText = MarkdownInlineParser.chipDisplayText(forURL: urlText)
+            backing.addAttribute(.sidekickLinkChip,
+                                 value: displayText,
+                                 range: firstCharRange)
+            if let url = URL(string: urlText) {
+                backing.addAttribute(.link, value: url, range: firstCharRange)
+            }
+            // Defeat NSTextView's automatic linkTextAttributes underline on
+            // the chip anchor (see [url](url) branch above).
+            backing.addAttribute(.underlineStyle, value: 0, range: firstCharRange)
         }
     }
 

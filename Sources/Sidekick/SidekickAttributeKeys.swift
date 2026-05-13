@@ -43,6 +43,24 @@ extension NSAttributedString.Key {
     /// `clearManagedAttributes` via its global `.foregroundColor` reset.
     static let sidekickNumberedMarker = NSAttributedString.Key("sidekickNumberedMarker")
 
+    /// Marks the FIRST character of a URL run that should render as a single
+    /// "link chip" pill (bare URLs, and `[url](url)` markdown links where the
+    /// label equals the URL). Value is `String` — the display text shown
+    /// inside the pill (URL with `https?://`, leading `www.`, trailing `/`
+    /// stripped). The remaining URL characters carry `.sidekickHiddenMarker`
+    /// so they collapse to zero-width invisible glyphs.
+    ///
+    /// `MarkdownLayoutManager` keeps the chip-anchor glyph visible by marking
+    /// it as `.controlCharacter` (instead of `.null`) in `setGlyphs(...)`,
+    /// then — acting as its own `NSLayoutManagerDelegate` — returns a custom
+    /// bounding box wide enough to fit the display text. The pill background
+    /// and label are painted in `drawBackground(forGlyphRange:at:)`.
+    ///
+    /// Source bytes survive round-trip (D-T-03): only attributes change, the
+    /// full URL stays in the buffer. Native caret navigation steps through
+    /// the hidden chars one at a time (D-MH-03).
+    static let sidekickLinkChip = NSAttributedString.Key("sidekickLinkChip")
+
     /// Marks a markdown thematic-break line (`---` / `***` / `___` standalone).
     /// Value is `Bool` (`true`). MarkdownTextStorage tags the line content
     /// range and dims it to tertiary; MarkdownLayoutManager reads this attribute

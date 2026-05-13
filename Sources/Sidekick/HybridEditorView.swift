@@ -292,6 +292,16 @@ struct HybridEditorView: NSViewRepresentable {
         textView.insertionPointColor = NSColor.textColor
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.drawsBackground = true
+        // Drop NSUnderlineStyle.single from the default linkTextAttributes
+        // (kept linkColor + pointingHand) so link-chip pills don't get an
+        // auto-underline rendered at the control-glyph baseline. The
+        // [label](url) styled-label path applies its own explicit storage
+        // underline in MarkdownTextStorage.applyLinks, so dropping the
+        // temp-attribute default doesn't affect it.
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .cursor: NSCursor.pointingHand,
+        ]
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
         controller.textView = textView   // NEW (D-TB-02) — publish upward once
