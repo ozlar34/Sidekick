@@ -282,8 +282,8 @@ struct HybridEditorView: NSViewRepresentable {
         // glyph height. paragraphSpacing adds breathing room between bullets
         // and paragraphs without growing the line box (and thus the caret).
         let defaultStyle = NSMutableParagraphStyle()
-        defaultStyle.minimumLineHeight = 18
-        defaultStyle.maximumLineHeight = 18
+        defaultStyle.minimumLineHeight = 20
+        defaultStyle.maximumLineHeight = 20
         defaultStyle.paragraphSpacing = 1
         textView.defaultParagraphStyle = defaultStyle
         // Explicit dynamic text color — NSColor.textColor adapts to light/dark

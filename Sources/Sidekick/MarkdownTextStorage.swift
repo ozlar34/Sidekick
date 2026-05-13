@@ -73,8 +73,8 @@ final class MarkdownTextStorage: NSTextStorage {
         let style = NSMutableParagraphStyle()
         style.firstLineHeadIndent = 18
         style.headIndent = 18
-        style.minimumLineHeight = 18
-        style.maximumLineHeight = 18
+        style.minimumLineHeight = 20
+        style.maximumLineHeight = 20
         style.paragraphSpacing = 1
         return style
     }()
@@ -88,8 +88,8 @@ final class MarkdownTextStorage: NSTextStorage {
         // font that has airy intrinsic metrics. paragraphSpacing carries the
         // breathing-room budget instead, since it adds gap between paragraphs
         // without growing the line box.
-        style.minimumLineHeight = 18
-        style.maximumLineHeight = 18
+        style.minimumLineHeight = 20
+        style.maximumLineHeight = 20
         style.paragraphSpacing = 1
         return style
     }()
@@ -105,9 +105,9 @@ final class MarkdownTextStorage: NSTextStorage {
         let style = NSMutableParagraphStyle()
         style.firstLineHeadIndent = 0
         style.headIndent = 14
-        style.minimumLineHeight = 18
-        style.maximumLineHeight = 18
-        style.paragraphSpacing = 4
+        style.minimumLineHeight = 20
+        style.maximumLineHeight = 20
+        style.paragraphSpacing = 7
         return style
     }()
 
