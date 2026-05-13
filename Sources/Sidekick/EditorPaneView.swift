@@ -84,8 +84,8 @@ struct EditorPaneView: View {
                         scheduleAutoSave(title: newValue, body: localBody)
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 6)
+                    .padding(.top, 14)
+                    .padding(.bottom, 2)
 
                 // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
                 FormattingToolbarView(
@@ -101,7 +101,7 @@ struct EditorPaneView: View {
                     activeLinePrefix: editorController.activeLinePrefix
                 )
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 4)
             }
             .background(Color(.controlBackgroundColor))
 

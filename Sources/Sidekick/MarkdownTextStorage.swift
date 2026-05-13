@@ -94,6 +94,23 @@ final class MarkdownTextStorage: NSTextStorage {
         return style
     }()
 
+    /// Paragraph style applied to bullet / checklist / numbered list lines so
+    /// wrapped lines hang under the first character of content instead of
+    /// flushing back under the bullet glyph. `headIndent = 14` is sized to:
+    /// SF Pro 15pt bold • glyph advance (~5.5pt) + space char (~4pt) + ~4pt
+    /// of visual breathing room. paragraphSpacing of 4 (vs body's 1) gives
+    /// list items per-row air without growing the line box (and thus the
+    /// caret) — matches the body-style tradeoff documented above.
+    static let bulletParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = 0
+        style.headIndent = 14
+        style.minimumLineHeight = 18
+        style.maximumLineHeight = 18
+        style.paragraphSpacing = 4
+        return style
+    }()
+
     // MARK: - Required overrides (NSTextStorage subclass contract)
 
     override var string: String { backing.string }
@@ -482,6 +499,13 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.font,
                                  value: NSFont.systemFont(ofSize: 15, weight: .bold),
                                  range: markerRange)
+            // Hanging indent: stamp bulletParagraphStyle on the whole line so
+            // wrapped lines align under the first char of content (not under
+            // the bullet glyph). Mirrors applyBlockQuotes line-range pattern.
+            let lineRange = (backing.string as NSString).lineRange(for: shifted)
+            backing.addAttribute(.paragraphStyle,
+                                 value: Self.bulletParagraphStyle,
+                                 range: lineRange)
         }
     }
 
@@ -501,6 +525,14 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.foregroundColor,
                                  value: NSColor.secondaryLabelColor,
                                  range: marker)
+            // Hanging indent + per-item air — same style bullets use. headIndent
+            // is sized for a single-digit marker (`1.`); multi-digit lists will
+            // wrap with the same hang and the marker just visually exceeds it —
+            // acceptable for a notes app, full digit-aware indent is overkill.
+            let lineRange = (backing.string as NSString).lineRange(for: marker)
+            backing.addAttribute(.paragraphStyle,
+                                 value: Self.bulletParagraphStyle,
+                                 range: lineRange)
         }
     }
 
@@ -530,6 +562,13 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.font,
                                  value: NSFont.systemFont(ofSize: 15, weight: .bold),
                                  range: marker)
+            // Hanging indent + per-item air — same style bullets use. Applied
+            // for both checked and unchecked rows so the visual rhythm matches
+            // bullets and numbered lists.
+            let lineRange = (backing.string as NSString).lineRange(for: marker)
+            backing.addAttribute(.paragraphStyle,
+                                 value: Self.bulletParagraphStyle,
+                                 range: lineRange)
 
             tagHiddenMarker(shifting: m.hiddenRange, by: offset)
 
