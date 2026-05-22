@@ -98,7 +98,8 @@ struct EditorPaneView: View {
                     insertThematicBreak: insertThematicBreak,
                     activeInlineKind: editorController.activeInlineKind,
                     activeHeadingLevel: editorController.activeHeadingLevel,
-                    activeLinePrefix: editorController.activeLinePrefix
+                    activeLinePrefix: editorController.activeLinePrefix,
+                    armedInlineKinds: editorController.armedInlineKinds
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)

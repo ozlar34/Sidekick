@@ -47,6 +47,13 @@ struct FormattingToolbarView: View {
     /// HybridEditorController.activeLinePrefix.
     var activeLinePrefix: LinePrefix? = nil
 
+    /// Inline kinds currently armed on an empty selection (quick-260523-29t).
+    /// OR-ed into each inline button's `isActive` highlight so the toolbar
+    /// shows "armed for next-typed character" the same way it shows
+    /// "caret inside an existing pair". Defaults empty so existing call
+    /// sites (tests, previews) compile without change.
+    var armedInlineKinds: Set<InlineKind> = []
+
     /// Apple Notes-style: a single "Aa" trigger collapses every formatting
     /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
     /// styles (Heading / Subheading / Body / Bulleted / Numbered / Quote)
@@ -70,6 +77,7 @@ struct FormattingToolbarView: View {
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
                         activeLinePrefix: activeLinePrefix,
+                        armedInlineKinds: armedInlineKinds,
                         dismiss: { popoverShown = false }
                     )
                 }
@@ -312,6 +320,106 @@ struct FormattingToolbarView: View {
         case "<u>": return .underline
         default:   return nil
         }
+    }
+
+    // MARK: - Armed inline-format helpers (hide-markers-on-empty-selection)
+    //
+    // These power the "Cmd+B with empty selection does NOT insert ****; it arms
+    // the next-typed character" UX. Pure state-transition + string-composition
+    // math, no AppKit deps — see ArmedInlineFormatTests for the contract.
+
+    /// Bold/italic/code are mutually exclusive (CommonMark forbids composed
+    /// triple-asterisk in this codebase — see comment on applyMarkdownWrap's
+    /// mutex set at line 159). Underline + strikethrough are orthogonal: they
+    /// can stack with each other and with any one mutex kind.
+    private static let mutexInlineKinds: Set<InlineKind> = [.bold, .italic, .code]
+
+    /// Wrap markers per inline kind. Single source of truth shared with the
+    /// `inlineKind(forPrefix:)` table above.
+    private static func prefixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "<u>"
+        }
+    }
+
+    private static func suffixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "</u>"
+        }
+    }
+
+    /// Pure state-transition for arming an inline kind on an empty selection.
+    ///
+    /// Rules (from locked decisions for quick-29t):
+    ///   1. If `requestedKind` is already armed → toggle off (remove from BOTH
+    ///      `set` and `order`).
+    ///   2. Else if `requestedKind` is in the bold/italic/code mutex set AND a
+    ///      different mutex kind is currently armed → replace that mutex kind
+    ///      in place. Both `set` and `order` are updated; the requested kind
+    ///      takes the existing mutex kind's slot in `order` so orthogonal
+    ///      neighbours (underline / strikethrough) keep their positions.
+    ///   3. Else → append `requestedKind` to `order` (becomes the new
+    ///      outermost / last-armed) and insert into `set`. This covers both
+    ///      "first arm" and "orthogonal stack" cases.
+    ///
+    /// Inputs are not mutated; a fresh tuple is returned.
+    internal static func armedInlineKindsAfterArm(
+        current: (set: Set<InlineKind>, order: [InlineKind]),
+        requestedKind: InlineKind
+    ) -> (set: Set<InlineKind>, order: [InlineKind]) {
+        // Rule 1: re-arming the same kind toggles off.
+        if current.set.contains(requestedKind) {
+            var newSet = current.set
+            newSet.remove(requestedKind)
+            let newOrder = current.order.filter { $0 != requestedKind }
+            return (newSet, newOrder)
+        }
+
+        // Rule 2: mutex-replace. If the requested kind is in the mutex set
+        // and another mutex kind is already armed, swap in-place.
+        if mutexInlineKinds.contains(requestedKind),
+           let existingMutex = current.order.first(where: { mutexInlineKinds.contains($0) }) {
+            var newSet = current.set
+            newSet.remove(existingMutex)
+            newSet.insert(requestedKind)
+            var newOrder = current.order
+            if let idx = newOrder.firstIndex(of: existingMutex) {
+                newOrder[idx] = requestedKind
+            }
+            return (newSet, newOrder)
+        }
+
+        // Rule 3: append (first arm OR orthogonal stack).
+        var newSet = current.set
+        newSet.insert(requestedKind)
+        var newOrder = current.order
+        newOrder.append(requestedKind)
+        return (newSet, newOrder)
+    }
+
+    /// Pure composition: given the `order` of armed kinds (innermost first,
+    /// outermost last), build the (prefix, suffix) pair that wraps a single
+    /// typed character.
+    ///
+    /// Reading left-to-right, the OUTER prefix comes first. Example for
+    /// `order = [.bold, .underline]` (bold armed first, underline second):
+    ///   prefix = "<u>**"   (outer <u> then inner **)
+    ///   suffix = "**</u>"  (inner ** then outer </u>)
+    /// Wrapping "X" gives `<u>**X**</u>`, which renders as bold-and-underlined.
+    internal static func composeArmedWrap(
+        order: [InlineKind]
+    ) -> (prefix: String, suffix: String) {
+        let prefix = order.reversed().map { prefixFor($0) }.joined()
+        let suffix = order.map { suffixFor($0) }.joined()
+        return (prefix, suffix)
     }
 
     /// Find any inline-kind marker pair (bold / italic / code) on the line
@@ -1187,6 +1295,66 @@ struct FormattingToolbarView: View {
     static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
         let body = textView.string
         let range = textView.selectedRange()
+
+        // quick-260523-29t: arm-or-edit fork for empty selections on inline
+        // formats. When the user fires Cmd+B (or any of the 5 inline shortcuts)
+        // with NO selected text, we suppress marker insertion and instead arm
+        // the next-typed character's style. This matches TextEdit / Pages /
+        // Notes rich-text behavior. The fork takes the ARM path only when
+        // ALL of:
+        //   a. textView is a HybridTextView (state lives on the subclass)
+        //   b. selection is caret-only (length 0)
+        //   c. prefix maps to one of the 5 inline kinds (NOT link `[`)
+        //   d. caret is NOT inside a fenced code block (F-05 inert)
+        //   e. caret is NOT inside an existing same-kind pair (the existing
+        //      universal toggle-off path in applyMarkdownWrap handles that
+        //      case correctly — strip the markers — so we fall through)
+        //
+        // When ARM is taken, ZERO body mutation occurs: no shouldChangeText
+        // sandwich, no push-token bump, no undo state. This is purely an
+        // in-memory flag flip on the HybridTextView.
+        if range.length == 0,
+           let htv = textView as? HybridTextView,
+           let requestedKind = inlineKind(forPrefix: prefix) {
+
+            // (d) Fenced-code-block check (mirrors the F-05 branch in
+            // applyMarkdownWrap at line 119-136).
+            var insideFence = false
+            for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+                let fenceContent = fence.contentRange
+                let startInside = range.location >= fenceContent.location
+                    && range.location <= fenceContent.location + fenceContent.length
+                if startInside {
+                    insideFence = true
+                    break
+                }
+            }
+            if insideFence {
+                // Silent no-op — no body edit, no arm state set. F-05 parity.
+                return
+            }
+
+            // (e) Same-kind enclosing-pair check — re-uses the universal
+            // toggle-off detection. If the caret sits inside an existing pair
+            // of the SAME kind, fall through to applyMarkdownWrap so the
+            // pair is stripped (toggle-off). For different-kind pairs we
+            // also fall through (the existing swap / nest logic owns it).
+            let existingPairKind = activeInlineKind(body: body, selection: range)
+            if existingPairKind == requestedKind {
+                // Fall through to the strip path below.
+            } else {
+                // ARM path — no body mutation. Update state + publish + return.
+                let newState = armedInlineKindsAfterArm(
+                    current: (htv.armedInlineKinds, htv.armedInlineKindsOrder),
+                    requestedKind: requestedKind
+                )
+                htv.armedInlineKinds = newState.set
+                htv.armedInlineKindsOrder = newState.order
+                htv.republishArmedKinds()
+                return
+            }
+        }
+
         let (newBody, cursor) = applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
@@ -1695,6 +1863,10 @@ private struct FormattingPopoverView: View {
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
     let activeLinePrefix: FormattingToolbarView.LinePrefix?
+    /// quick-260523-29t: armed inline kinds. OR-ed into each inline button's
+    /// isActive so the toolbar reflects "armed for next-typed character" the
+    /// same way it reflects "caret inside an existing pair".
+    let armedInlineKinds: Set<FormattingToolbarView.InlineKind>
     let dismiss: () -> Void
 
     var body: some View {
@@ -1708,28 +1880,28 @@ private struct FormattingPopoverView: View {
                     systemName: "bold",
                     tooltip: "Bold (⌘B)",
                     accessibilityLabel: "Bold",
-                    isActive: activeInlineKind == .bold
+                    isActive: activeInlineKind == .bold || armedInlineKinds.contains(.bold)
                 ) { wrapSelection("**", "**"); dismiss() }
 
                 FormatButton(
                     systemName: "italic",
                     tooltip: "Italic (⌘I)",
                     accessibilityLabel: "Italic",
-                    isActive: activeInlineKind == .italic
+                    isActive: activeInlineKind == .italic || armedInlineKinds.contains(.italic)
                 ) { wrapSelection("*", "*"); dismiss() }
 
                 FormatButton(
                     systemName: "underline",
                     tooltip: "Underline (⌘U)",
                     accessibilityLabel: "Underline",
-                    isActive: activeInlineKind == .underline
+                    isActive: activeInlineKind == .underline || armedInlineKinds.contains(.underline)
                 ) { wrapSelection("<u>", "</u>"); dismiss() }
 
                 FormatButton(
                     systemName: "strikethrough",
                     tooltip: "Strikethrough (⌘⇧X)",
                     accessibilityLabel: "Strikethrough",
-                    isActive: activeInlineKind == .strikethrough
+                    isActive: activeInlineKind == .strikethrough || armedInlineKinds.contains(.strikethrough)
                 ) { wrapSelection("~~", "~~"); dismiss() }
             }
             .padding(.horizontal, 8)
