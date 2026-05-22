@@ -459,6 +459,59 @@ final class EditorInteractionTests: XCTestCase {
             "F-07 regression: emoji must not be overwritten by stale replacementRange on the next keystroke")
     }
 
+    // MARK: - EDIT-03 — checklist delete paths
+
+    func test_checklistBackspace_emptyLine_stripsPrefix() {
+        // Path A / D-05: empty checklist line, caret at end of the 6-char prefix.
+        let stack = makeStack(body: "- [ ] ", selection: NSRange(location: 6, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Backspace on empty checklist line must be consumed")
+        XCTAssertEqual(stack.textView.string, "", "Whole 6-char prefix stripped — clean empty line")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistBackspace_contentStart_demotesLine() {
+        // Path B / D-06: caret at start of content — strip prefix, demote to plain line.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 6, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Backspace at content start must be consumed")
+        XCTAssertEqual(stack.textView.string, "task", "Prefix stripped, content preserved")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistForwardDelete_fromLineStart_stripsPrefix() {
+        // Path C: forward-delete from line start would remove the `-`; strip whole prefix.
+        let stack = makeStack(body: "- [ ] ", selection: NSRange(location: 0, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteForward(_:)))
+        XCTAssertTrue(handled, "Forward-delete from line start must be consumed")
+        XCTAssertEqual(stack.textView.string, "", "Whole prefix stripped — clean empty line")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistBackspace_selection_overlapsPrefix_noRemnant() {
+        // Path E: selection starts inside the prefix — union strip leaves no fragment.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 3, length: 5))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Selection overlapping the prefix must be consumed")
+        XCTAssertFalse(stack.textView.string.contains("- ["),
+                       "No broken `- [` prefix fragment may remain")
+        XCTAssertFalse(stack.textView.string.contains("- [ ]"),
+                       "No bare `- [ ]` remnant may remain")
+        XCTAssertEqual(stack.textView.string, "sk",
+                       "Union strip: lineStart..selectionEnd removed, leaving content tail")
+    }
+
+    func test_checklistBackspace_midContent_notIntercepted() {
+        // Caret mid-word — handler must decline so default single-char delete runs.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 8, length: 0))
+        let handled = FormattingToolbarView.handleChecklistBackspace(in: stack.textView)
+        XCTAssertFalse(handled, "Mid-content Backspace must fall through to default delete")
+    }
+
     // MARK: - F-07 — emoji stays visible after subsequent edits
 
     /// Helper that builds a layout-attached HybridTextView for glyph-property
