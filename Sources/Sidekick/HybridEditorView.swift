@@ -348,7 +348,12 @@ struct HybridEditorView: NSViewRepresentable {
         // blindly wrote every update, textDidChange → binding.text = tv.string
         // → updateNSView → storage.replaceCharacters → textDidChange would
         // never terminate on first keystroke.
-        if textView.string != text {
+        // EDIT-02 fix: also require that the incoming `text` is NOT a
+        // reflexive echo of what the Coordinator just pushed up. A bare
+        // storage replace bypasses the shouldChangeText sandwich and corrupts
+        // NSTextView's undo coalescing, so it must fire ONLY for genuine
+        // external pushes (note switch, reload from disk).
+        if textView.string != text && text != context.coordinator.lastBoundText {
             // Programmatic edit — bypass the shouldChangeText sandwich
             // (CONTEXT PATTERNS line 497 note): this update originates from
             // SwiftUI state, NOT from a user keystroke, so we should NOT
@@ -366,6 +371,12 @@ struct HybridEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HybridEditorView
         weak var textView: NSTextView?
+        /// EDIT-02 fix: the last text value this Coordinator pushed up into the
+        /// SwiftUI binding via textDidChange. updateNSView compares the incoming
+        /// `text` against this to distinguish a reflexive echo of user typing
+        /// (skip the bare-storage edit — undo would be corrupted) from a genuine
+        /// external push such as a note switch or reload-from-disk (apply it).
+        var lastBoundText: String = ""
 
         init(_ parent: HybridEditorView) {
             self.parent = parent
@@ -377,6 +388,10 @@ struct HybridEditorView: NSViewRepresentable {
             // Infinite-loop guard — only push up if the binding value is stale.
             if parent.text != tv.string {
                 parent.text = tv.string
+                // EDIT-02 fix: record what we just pushed so updateNSView can
+                // recognise the reflexive echo and skip the undo-corrupting
+                // bare-storage replace.
+                lastBoundText = tv.string
             }
             // Text edits can change which inline pair encloses the caret
             // without the selection itself moving (e.g. typing the closing
