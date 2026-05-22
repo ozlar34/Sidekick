@@ -92,4 +92,65 @@ final class UndoCoalescingTests: XCTestCase {
         XCTAssertFalse(tv.undoManager?.canUndo ?? false,
                        "Bare storage edit must NOT register on undoManager — this is the bug mechanism the EDIT-02 fix prevents from firing reflexively")
     }
+
+    // MARK: - EDIT-02 / WR-01 guard predicate (IN-02)
+
+    /// Test D: the `updateNSView` binding-push guard — extracted as the pure
+    /// `HybridEditorView.bindingPushDecision` — classifies the three cases
+    /// IN-02 calls out:
+    ///   (a) reflexive echo                             → consume sentinel, skip
+    ///   (b) genuine note switch                        → apply external push
+    ///   (c) external push equal to a prior typed value → apply external push
+    ///
+    /// Case (c) is the WR-01 false-negative: before the single-shot fix, an
+    /// external push whose value happened to equal an earlier-typed string was
+    /// wrongly classified as a reflexive echo and dropped. With the sentinel
+    /// cleared the moment it matches case (a), case (c) is reached with a
+    /// stale/empty sentinel and correctly applies.
+    func test_bindingPushDecision_classifiesEchoSwitchAndStalePush() {
+        // (a) Reflexive echo: text view already shows the value the Coordinator
+        // just pushed up, and the incoming binding `text` equals that sentinel.
+        let echo = HybridEditorView.bindingPushDecision(
+            currentString: "foo",          // editor currently shows "foo"
+            incomingText: "foo",           // ... but binding agrees — no diff yet
+            lastBoundText: "foo"
+        )
+        XCTAssertEqual(echo, .noChange,
+                       "Incoming text equal to the current string is a no-op")
+
+        // The reflexive-echo branch proper: editor moved on to "bar" via a
+        // genuine push, then SwiftUI re-runs updateNSView with the echo of the
+        // earlier "foo" the Coordinator pushed. textView.string ("bar") differs
+        // from incoming ("foo") AND incoming equals the sentinel → consume it.
+        let reflexive = HybridEditorView.bindingPushDecision(
+            currentString: "bar",
+            incomingText: "foo",
+            lastBoundText: "foo"
+        )
+        XCTAssertEqual(reflexive, .reflexiveEchoConsumeSentinel,
+                       "An incoming text equal to the live sentinel is a reflexive echo — skip the bare-storage replace and consume the sentinel")
+
+        // (b) Genuine note switch: incoming text is brand-new content, unequal
+        // to both the current string and the sentinel → apply.
+        let switchNote = HybridEditorView.bindingPushDecision(
+            currentString: "old note body",
+            incomingText: "different note body",
+            lastBoundText: "old note body"
+        )
+        XCTAssertEqual(switchNote, .applyExternalPush,
+                       "A note switch to fresh content must apply the external push")
+
+        // (c) WR-01 false-negative path: type "foo" → type "bar" → external
+        // push "foo". By the time the "foo" push arrives, the sentinel has
+        // already been consumed (cleared to "") by the reflexive echo of an
+        // earlier push, so it is now empty. The incoming "foo" differs from the
+        // current "bar" AND differs from the empty sentinel → apply, NOT drop.
+        let stalePush = HybridEditorView.bindingPushDecision(
+            currentString: "bar",
+            incomingText: "foo",           // equals a *previously* typed value
+            lastBoundText: ""              // sentinel already consumed
+        )
+        XCTAssertEqual(stalePush, .applyExternalPush,
+                       "A genuine external push equal to a previously-typed value must apply — the single-shot sentinel must not shadow it (WR-01)")
+    }
 }
