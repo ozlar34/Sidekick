@@ -93,64 +93,155 @@ final class UndoCoalescingTests: XCTestCase {
                        "Bare storage edit must NOT register on undoManager — this is the bug mechanism the EDIT-02 fix prevents from firing reflexively")
     }
 
-    // MARK: - EDIT-02 / WR-01 guard predicate (IN-02)
+    // MARK: - EDIT-02 guard predicate (token-based)
 
     /// Test D: the `updateNSView` binding-push guard — extracted as the pure
-    /// `HybridEditorView.bindingPushDecision` — classifies the three cases
-    /// IN-02 calls out:
-    ///   (a) reflexive echo                             → consume sentinel, skip
-    ///   (b) genuine note switch                        → apply external push
-    ///   (c) external push equal to a prior typed value → apply external push
+    /// `HybridEditorView.bindingPushDecision`. Classification is by EXPLICIT
+    /// PUSH TOKEN, never by string value:
+    ///   - strings equal                    → noChange
+    ///   - strings differ, token UNCHANGED  → reflexiveEcho (skip the replace)
+    ///   - strings differ, token ADVANCED   → applyExternalPush
     ///
-    /// Case (c) is the WR-01 false-negative: before the single-shot fix, an
-    /// external push whose value happened to equal an earlier-typed string was
-    /// wrongly classified as a reflexive echo and dropped. With the sentinel
-    /// cleared the moment it matches case (a), case (c) is reached with a
-    /// stale/empty sentinel and correctly applies.
-    func test_bindingPushDecision_classifiesEchoSwitchAndStalePush() {
-        // (a) Reflexive echo: text view already shows the value the Coordinator
-        // just pushed up, and the incoming binding `text` equals that sentinel.
-        let echo = HybridEditorView.bindingPushDecision(
-            currentString: "foo",          // editor currently shows "foo"
-            incomingText: "foo",           // ... but binding agrees — no diff yet
-            lastBoundText: "foo"
+    /// The last case is the WR-01 false-negative — a genuine external push
+    /// whose new body equals a value the user typed earlier. The old
+    /// single-shot string sentinel could misclassify it; an explicit token
+    /// cannot, because the push site advances the token regardless of the
+    /// body's value.
+    ///
+    /// Note: this is the PURE-FUNCTION check. The authoritative live-path
+    /// EDIT-02 regression guard is Test E
+    /// (`test_liveMultiKeystroke_singleUndoStepsBackOneIncrement`) — Test D
+    /// alone stayed green through the 79f0f3b single-shot-sentinel regression.
+    func test_bindingPushDecision_classifiesByPushToken() {
+        // No-op: binding already equals the text view string (token unchanged).
+        let noChange = HybridEditorView.bindingPushDecision(
+            currentString: "foo",
+            incomingText: "foo",
+            currentToken: 3,
+            lastConsumedToken: 3
         )
-        XCTAssertEqual(echo, .noChange,
+        XCTAssertEqual(noChange, .noChange,
                        "Incoming text equal to the current string is a no-op")
 
-        // The reflexive-echo branch proper: editor moved on to "bar" via a
-        // genuine push, then SwiftUI re-runs updateNSView with the echo of the
-        // earlier "foo" the Coordinator pushed. textView.string ("bar") differs
-        // from incoming ("foo") AND incoming equals the sentinel → consume it.
+        // Reflexive echo: strings differ but NO push token advanced — the
+        // SwiftUI binding is echoing user typing back into updateNSView.
         let reflexive = HybridEditorView.bindingPushDecision(
             currentString: "bar",
             incomingText: "foo",
-            lastBoundText: "foo"
+            currentToken: 3,
+            lastConsumedToken: 3
         )
-        XCTAssertEqual(reflexive, .reflexiveEchoConsumeSentinel,
-                       "An incoming text equal to the live sentinel is a reflexive echo — skip the bare-storage replace and consume the sentinel")
+        XCTAssertEqual(reflexive, .reflexiveEcho,
+                       "Strings differ with an unchanged token — a reflexive echo; skip the undo-corrupting bare-storage replace")
 
-        // (b) Genuine note switch: incoming text is brand-new content, unequal
-        // to both the current string and the sentinel → apply.
+        // Genuine note switch: fresh content AND the push token advanced.
         let switchNote = HybridEditorView.bindingPushDecision(
             currentString: "old note body",
             incomingText: "different note body",
-            lastBoundText: "old note body"
+            currentToken: 4,
+            lastConsumedToken: 3
         )
         XCTAssertEqual(switchNote, .applyExternalPush,
-                       "A note switch to fresh content must apply the external push")
+                       "An advanced token marks a genuine external push — apply it")
 
-        // (c) WR-01 false-negative path: type "foo" → type "bar" → external
-        // push "foo". By the time the "foo" push arrives, the sentinel has
-        // already been consumed (cleared to "") by the reflexive echo of an
-        // earlier push, so it is now empty. The incoming "foo" differs from the
-        // current "bar" AND differs from the empty sentinel → apply, NOT drop.
-        let stalePush = HybridEditorView.bindingPushDecision(
+        // WR-01 false-negative, now solved by the token: a genuine external
+        // push (token advanced) whose new body happens to equal a string the
+        // user typed earlier. String-value comparison would mistake this for
+        // an echo and drop it; the token cannot be fooled — the push site
+        // advanced it regardless of the body's value.
+        let collidingPush = HybridEditorView.bindingPushDecision(
             currentString: "bar",
             incomingText: "foo",           // equals a *previously* typed value
-            lastBoundText: ""              // sentinel already consumed
+            currentToken: 4,
+            lastConsumedToken: 3
         )
-        XCTAssertEqual(stalePush, .applyExternalPush,
-                       "A genuine external push equal to a previously-typed value must apply — the single-shot sentinel must not shadow it (WR-01)")
+        XCTAssertEqual(collidingPush, .applyExternalPush,
+                       "A genuine external push must apply even when its body equals a previously-typed string — the token decides, not the string value (WR-01)")
+    }
+
+    /// Test E — the authoritative live-path EDIT-02 regression guard.
+    ///
+    /// Drives a REAL `NSTextView` through a per-character `shouldChangeText /
+    /// replaceCharacters / didChangeText` sandwich — one sandwich per keystroke,
+    /// exactly what AppKit does for genuine typing — and, after each character,
+    /// runs the reflexive-echo round-trip `updateNSView` performs: the binding
+    /// value SwiftUI echoes back, with the push token UNCHANGED, must classify
+    /// as a reflexive echo, never an external push.
+    ///
+    /// This is the test that would have caught the 79f0f3b single-shot-sentinel
+    /// regression. The pure-function Test D only checks `bindingPushDecision`
+    /// against hand-picked inputs and stayed green while the live typing path
+    /// corrupted the undo stack and one Cmd+Z wiped the whole note
+    /// (03-UAT.md Test 1). The assertion that a single `undo()` steps back
+    /// exactly one character — not the whole body — is the real EDIT-02 check.
+    func test_liveMultiKeystroke_singleUndoStepsBackOneIncrement() {
+        let tv = makeTextView("", selection: NSRange(location: 0, length: 0))
+        // Disable per-event coalescing so each explicit keystroke group is a
+        // distinct undo step — same rationale as Test B (no real run-loop
+        // event cycle in a unit test; see 03-01-SUMMARY.md "Auto-fixed Issues" #1).
+        tv.undoManager?.groupsByEvent = false
+
+        // A fixed push token, identical on both sides of every echo check:
+        // a reflexive echo of user typing never advances the token.
+        let token = 1
+        var previousString = ""
+
+        for ch in "hello" {
+            let appendRange = NSRange(location: tv.string.utf16.count, length: 0)
+            // Open the explicit group BEFORE shouldChangeText — shouldChangeText
+            // registers its undo action internally and needs a valid group.
+            tv.undoManager?.beginUndoGrouping()
+            guard tv.shouldChangeText(in: appendRange, replacementString: String(ch)) else {
+                tv.undoManager?.endUndoGrouping()
+                return XCTFail("shouldChangeText must permit the keystroke")
+            }
+            tv.replaceCharacters(in: appendRange, with: String(ch))
+            tv.didChangeText()
+            tv.undoManager?.endUndoGrouping()
+
+            // Reflexive-echo round-trip, in sync: the Coordinator pushed
+            // tv.string up to the binding; SwiftUI re-runs updateNSView with
+            // that echoed value. Binding equals the text view → no-op.
+            let echoInSync = HybridEditorView.bindingPushDecision(
+                currentString: tv.string,
+                incomingText: tv.string,
+                currentToken: token,
+                lastConsumedToken: token
+            )
+            XCTAssertEqual(echoInSync, .noChange,
+                           "Binding equal to the text view string is a no-op")
+
+            // The regression window: updateNSView runs with an echo that LAGS
+            // the text view by one keystroke (the binding a beat behind). The
+            // token is unchanged → this MUST be a reflexive echo. The 79f0f3b
+            // bug returned .applyExternalPush here once the sentinel emptied,
+            // firing the undo-corrupting bare-storage replace.
+            let echoLagging = HybridEditorView.bindingPushDecision(
+                currentString: tv.string,
+                incomingText: previousString,
+                currentToken: token,
+                lastConsumedToken: token
+            )
+            XCTAssertEqual(echoLagging, .reflexiveEcho,
+                           "A lagging echo with an unchanged token is a reflexive echo — never an external push (the 79f0f3b regression)")
+
+            previousString = tv.string
+        }
+
+        XCTAssertEqual(tv.string, "hello", "All five keystrokes must land")
+
+        // The EDIT-02 assertion: one Cmd+Z steps back exactly ONE character,
+        // NOT the whole note — the exact failure from 03-UAT.md Test 1.
+        tv.undoManager?.undo()
+        XCTAssertEqual(tv.string, "hell",
+                       "First undo must remove exactly one character — not the whole body")
+        tv.undoManager?.undo()
+        XCTAssertEqual(tv.string, "hel", "Second undo must remove exactly one character")
+        tv.undoManager?.undo()
+        XCTAssertEqual(tv.string, "he", "Third undo must remove exactly one character")
+
+        // Redo replays the same increments forward (Cmd+Shift+Z).
+        tv.undoManager?.redo()
+        XCTAssertEqual(tv.string, "hel", "Redo must restore exactly one character")
     }
 }
