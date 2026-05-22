@@ -353,16 +353,32 @@ struct HybridEditorView: NSViewRepresentable {
         // storage replace bypasses the shouldChangeText sandwich and corrupts
         // NSTextView's undo coalescing, so it must fire ONLY for genuine
         // external pushes (note switch, reload from disk).
-        if textView.string != text && text != context.coordinator.lastBoundText {
-            // Programmatic edit — bypass the shouldChangeText sandwich
-            // (CONTEXT PATTERNS line 497 note): this update originates from
-            // SwiftUI state, NOT from a user keystroke, so we should NOT
-            // register on the NSTextView undo stack.
-            storage.beginEditing()
-            let fullRange = NSRange(location: 0, length: storage.length)
-            storage.replaceCharacters(in: fullRange, with: text)
-            storage.endEditing()
-            // processEditing fires inside endEditing → attributes reapplied.
+        //
+        // WR-01 fix: `lastBoundText` is a single-shot sentinel — it must only
+        // shadow the *immediate* reflexive echo, never a later genuine push
+        // that happens to equal a previously-typed value. So once a candidate
+        // update matches the sentinel, consume it (clear the sentinel) instead
+        // of letting it persist for the Coordinator's lifetime. Without this,
+        // a sequence like type "foo" → type "bar" → external push "foo" would
+        // be wrongly dropped because "foo" still equals the stale sentinel.
+        if textView.string != text {
+            if text == context.coordinator.lastBoundText {
+                // Reflexive echo of what the Coordinator just pushed up —
+                // skip the undo-corrupting bare-storage replace. Clear the
+                // sentinel so it cannot shadow a future genuine external push
+                // that happens to carry the same string value.
+                context.coordinator.lastBoundText = ""
+            } else {
+                // Programmatic edit — bypass the shouldChangeText sandwich
+                // (CONTEXT PATTERNS line 497 note): this update originates from
+                // SwiftUI state, NOT from a user keystroke, so we should NOT
+                // register on the NSTextView undo stack.
+                storage.beginEditing()
+                let fullRange = NSRange(location: 0, length: storage.length)
+                storage.replaceCharacters(in: fullRange, with: text)
+                storage.endEditing()
+                // processEditing fires inside endEditing → attributes reapplied.
+            }
         }
     }
 
