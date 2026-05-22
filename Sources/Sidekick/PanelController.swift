@@ -170,7 +170,14 @@ final class PanelController {
         // macOS 14+: .accessory + NSApp.activate alone does NOT reliably make
         // the app frontmost for menu-bar display. Switch to .regular while the
         // panel is up, then back to .accessory in slideOut's completion.
-        NSApp.setActivationPolicy(.regular)
+        // Only flip to .regular when the user has Dock visibility enabled.
+        // When showInDock is OFF the app stays .accessory while the panel is open.
+        // Note: menu-bar items and ⌘-shortcuts still function in .accessory mode
+        // (keyboard events route via NSApp.mainMenu regardless of policy) — but
+        // this is verified in Plan 02 Task 2 checkpoint.
+        if UserDefaults.standard.object(forKey: Defaults.showInDock) as? Bool ?? true {
+            NSApp.setActivationPolicy(.regular)
+        }
         panel.orderFrontRegardless()
         panel.makeKey()
         NSApp.activate(ignoringOtherApps: true)
