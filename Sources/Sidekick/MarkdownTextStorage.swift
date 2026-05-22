@@ -617,7 +617,7 @@ final class MarkdownTextStorage: NSTextStorage {
             // Use the same bold body-size font as the bullet marker so the
             // ◯/◉ glyph reads at consistent weight with surrounding text.
             backing.addAttribute(.font,
-                                 value: NSFont.systemFont(ofSize: 15, weight: .bold),
+                                 value: NSFont.systemFont(ofSize: 15, weight: .semibold),
                                  range: marker)
             // Hanging indent + per-item air — same style bullets use. Applied
             // for both checked and unchecked rows so the visual rhythm matches

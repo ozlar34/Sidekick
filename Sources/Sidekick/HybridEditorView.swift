@@ -73,11 +73,16 @@ final class HybridTextView: NSTextView {
                    storage.attribute(.sidekickChecklistMarker,
                                      at: charIdx,
                                      effectiveRange: nil) != nil {
-                    let glyphRect = lm.boundingRect(
-                        forGlyphRange: NSRange(location: glyphIdx, length: 1),
-                        in: tc
-                    )
-                    if textPoint.x >= glyphRect.minX {
+                    let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
+                    let glyphLocation = lm.location(forGlyphAt: glyphIdx)
+                    let squareSide: CGFloat = 11
+                    let squareX = lineRect.origin.x + glyphLocation.x
+                    let baselineY = lineRect.origin.y + glyphLocation.y
+                    let squareY = baselineY - squareSide * 0.75
+                    let squareRect = NSRect(x: squareX, y: squareY, width: squareSide, height: squareSide)
+                    // UI-SPEC: minimum 20×20pt tap zone centered on the drawn square.
+                    let tapZone = squareRect.insetBy(dx: -(20 - squareSide) / 2, dy: -(20 - squareSide) / 2)
+                    if tapZone.contains(textPoint) {
                         if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
                             return
                         }

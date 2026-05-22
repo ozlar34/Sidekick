@@ -1680,7 +1680,7 @@ private struct FormattingPopoverView: View {
                 ) { applyBlockQuote(); dismiss() }
 
                 ParagraphStyleRow(
-                    label: "◯  Checklist",
+                    label: "□  Checklist",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .checklist
                 ) { applyChecklist(); dismiss() }
