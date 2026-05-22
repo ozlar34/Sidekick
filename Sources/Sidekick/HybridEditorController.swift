@@ -31,6 +31,22 @@ final class HybridEditorController: ObservableObject {
         willSet { objectWillChange.send() }
     }
 
+    /// Incremented by EditorPaneView at each GENUINE external-push site
+    /// (note switch, reload-from-disk). HybridEditorView.updateNSView
+    /// compares this against the value the Coordinator last consumed: a
+    /// difference means a real external push (apply the bare-storage
+    /// replace); equal means any binding change reaching updateNSView is a
+    /// reflexive echo of user typing (skip it — a bare replace would
+    /// corrupt the NSTextView undo stack, EDIT-02).
+    ///
+    /// This replaces the WR-01 single-shot string sentinel: classifying
+    /// by an explicit push-site flag means a genuine push whose new body
+    /// happens to equal a previously-typed string can never be mistaken
+    /// for an echo (the WR-01 false-negative), and — critically — a
+    /// reflexive echo can never be mistaken for a genuine push (the
+    /// EDIT-02 regression this plan closes).
+    @Published var externalPushToken: Int = 0
+
     /// Set when the caret sits inside a bold / italic / code inline span.
     /// Driven by HybridEditorView's Coordinator on selection and text
     /// changes; consumed by FormattingToolbarView for its active-state

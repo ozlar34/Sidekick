@@ -162,6 +162,10 @@ struct EditorPaneView: View {
             editorController.onShiftTabAtBodyStart = { titleController.focus() }
         }
         .onChange(of: note.id) { _, _ in
+            // EDIT-02 echo guard: bump the push token BEFORE reseeding
+            // localBody so HybridEditorView.updateNSView sees the advanced
+            // token and classifies the new body as a genuine external push.
+            editorController.externalPushToken += 1
             localTitle = note.title
             localBody = note.body
             diskWriteError = false
@@ -232,6 +236,10 @@ struct EditorPaneView: View {
     private func reloadFromDisk() async {
         await store.reloadNote(id: note.id)
         if let updated = store.notes.first(where: { $0.id == note.id }) {
+            // EDIT-02 echo guard: bump the push token before reseeding the
+            // editor body from on-disk content so updateNSView classifies it
+            // as a genuine external push.
+            editorController.externalPushToken += 1
             localBody = updated.body
         }
         store.acknowledgeExternalChange(id: note.id)

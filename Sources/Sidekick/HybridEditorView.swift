@@ -336,7 +336,7 @@ struct HybridEditorView: NSViewRepresentable {
         return scrollView
     }
 
-    /// Outcome of the EDIT-02 / WR-01 `updateNSView` binding-push decision.
+    /// Outcome of the EDIT-02 `updateNSView` binding-push decision.
     ///
     /// Extracted as a named type so the guard's branching logic is unit-testable
     /// without mounting the full `NSViewRepresentable` (IN-02). `updateNSView`
@@ -344,92 +344,92 @@ struct HybridEditorView: NSViewRepresentable {
     enum BindingPushDecision: Equatable {
         /// Binding value already equals the text view string — nothing to do.
         case noChange
-        /// Incoming `text` is a reflexive echo of what the Coordinator just
-        /// pushed up. Skip the undo-corrupting bare-storage replace; the
-        /// single-shot sentinel must be cleared so it cannot shadow a later
-        /// genuine push carrying the same string value.
-        case reflexiveEchoConsumeSentinel
-        /// Genuine external push (note switch, reload-from-disk, toolbar
-        /// mutation). Apply the bare-storage replace.
+        /// Incoming `text` differs from the text view, but no genuine external
+        /// push has occurred (tokens equal) — this is a reflexive echo of user
+        /// typing. Skip the undo-corrupting bare-storage replace.
+        case reflexiveEcho
+        /// A genuine external push (note switch / reload-from-disk) raised the
+        /// token. Apply the bare-storage replace and record the token.
         case applyExternalPush
     }
 
-    /// Pure decision function for the EDIT-02 / WR-01 binding-push guard.
+    /// Pure decision function for the EDIT-02 binding-push guard.
     ///
-    /// Given the current text view string, the incoming binding `text`, and the
-    /// Coordinator's single-shot `lastBoundText` sentinel, decide which of the
-    /// three `updateNSView` branches to take. Kept side-effect-free so a test
-    /// (IN-02) can exercise:
-    ///   (a) reflexive echo                              → consume sentinel, skip
-    ///   (b) genuine note switch                         → apply
-    ///   (c) external push equal to a prior typed value  → apply (WR-01 path)
+    /// Classification is by EXPLICIT PUSH TOKEN, never by string value:
+    ///   - currentString == incomingText               -> noChange
+    ///   - currentToken != lastConsumedToken           -> applyExternalPush
+    ///   - otherwise (token unchanged, strings differ) -> reflexiveEcho
     ///
-    /// Case (c) is the false-negative the WR-01 fix closed: because the sentinel
-    /// is single-shot (cleared the moment it matches a reflexive echo), a later
-    /// push equal to an earlier-typed value is no longer wrongly dropped.
+    /// Why token, not string (history): the WR-01 fix tried to distinguish
+    /// echo vs push by comparing `incomingText` against a remembered string. A
+    /// single-shot variant of that (commit 79f0f3b) cleared the remembered
+    /// string on the first echo, so every later reflexive echo of normal
+    /// typing was misclassified as an external push -> bare-storage replace ->
+    /// corrupted undo stack -> Cmd+Z wiped the whole note. An explicit push
+    /// token cannot be fooled by value collisions in EITHER direction.
     static func bindingPushDecision(
         currentString: String,
         incomingText: String,
-        lastBoundText: String
+        currentToken: Int,
+        lastConsumedToken: Int
     ) -> BindingPushDecision {
         guard currentString != incomingText else { return .noChange }
-        if incomingText == lastBoundText {
-            return .reflexiveEchoConsumeSentinel
+        if currentToken != lastConsumedToken {
+            return .applyExternalPush
         }
-        return .applyExternalPush
+        return .reflexiveEcho
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView,
               let storage = textView.textStorage as? MarkdownTextStorage else { return }
 
-        // External binding-push: e.g. reloadFromDisk() (STORAGE-03) or
-        // toolbar wrapSelection mutation from Phase 10.
+        // External binding-push guard (EDIT-02).
         //
-        // Guard against infinite loop: only push into storage when the
-        // binding value differs from the current text view string. If we
-        // blindly wrote every update, textDidChange → binding.text = tv.string
-        // → updateNSView → storage.replaceCharacters → textDidChange would
-        // never terminate on first keystroke.
-        // EDIT-02 fix: also require that the incoming `text` is NOT a
-        // reflexive echo of what the Coordinator just pushed up. A bare
-        // storage replace bypasses the shouldChangeText sandwich and corrupts
+        // Classification is token-based: EditorPaneView bumps
+        // `controller.externalPushToken` at each genuine external-push site
+        // (note switch, reload-from-disk). updateNSView compares that token
+        // against the value this Coordinator last consumed — an advance means
+        // a real external push; an unchanged token means any binding change
+        // reaching here is a reflexive echo of user typing.
+        //
+        // Why token, not string value: a bare `storage.replaceCharacters`
+        // bypasses the shouldChangeText/didChangeText sandwich and corrupts
         // NSTextView's undo coalescing, so it must fire ONLY for genuine
-        // external pushes (note switch, reload from disk).
+        // external pushes. The WR-01 single-shot string sentinel could be
+        // fooled by value collisions in both directions (see
+        // `bindingPushDecision`); an explicit push token cannot.
         //
-        // WR-01 fix: `lastBoundText` is a single-shot sentinel — it must only
-        // shadow the *immediate* reflexive echo, never a later genuine push
-        // that happens to equal a previously-typed value. So once a candidate
-        // update matches the sentinel, consume it (clear the sentinel) instead
-        // of letting it persist for the Coordinator's lifetime. Without this,
-        // a sequence like type "foo" → type "bar" → external push "foo" would
-        // be wrongly dropped because "foo" still equals the stale sentinel.
-        //
-        // The branching itself lives in `bindingPushDecision` (a pure function)
-        // so it can be unit-tested without mounting the NSViewRepresentable.
+        // The branching itself lives in `bindingPushDecision` (a pure
+        // function) so it can be unit-tested without mounting the
+        // NSViewRepresentable.
         switch Self.bindingPushDecision(
             currentString: textView.string,
             incomingText: text,
-            lastBoundText: context.coordinator.lastBoundText
+            currentToken: controller.externalPushToken,
+            lastConsumedToken: context.coordinator.lastConsumedPushToken
         ) {
         case .noChange:
             break
-        case .reflexiveEchoConsumeSentinel:
-            // Reflexive echo of what the Coordinator just pushed up —
-            // skip the undo-corrupting bare-storage replace. Clear the
-            // sentinel so it cannot shadow a future genuine external push
-            // that happens to carry the same string value.
-            context.coordinator.lastBoundText = ""
+        case .reflexiveEcho:
+            // Reflexive echo of user typing — the SwiftUI binding caught up
+            // to what the Coordinator pushed in textDidChange. A bare-storage
+            // replace here bypasses the shouldChangeText/didChangeText
+            // sandwich and corrupts the NSTextView undo stack (EDIT-02).
+            // No token advanced -> skip. No state to clear.
+            break
         case .applyExternalPush:
-            // Programmatic edit — bypass the shouldChangeText sandwich
-            // (CONTEXT PATTERNS line 497 note): this update originates from
-            // SwiftUI state, NOT from a user keystroke, so we should NOT
-            // register on the NSTextView undo stack.
+            // Genuine external push — note switch or reload-from-disk bumped
+            // the token. Apply the bare-storage replace (intentionally NOT
+            // registered on the undo stack — this content did not come from a
+            // user keystroke), then record the token so a follow-up reflexive
+            // echo of this same value is not re-applied.
             storage.beginEditing()
             let fullRange = NSRange(location: 0, length: storage.length)
             storage.replaceCharacters(in: fullRange, with: text)
             storage.endEditing()
             // processEditing fires inside endEditing → attributes reapplied.
+            context.coordinator.lastConsumedPushToken = controller.externalPushToken
         }
     }
 
@@ -438,27 +438,33 @@ struct HybridEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HybridEditorView
         weak var textView: NSTextView?
-        /// EDIT-02 fix: the last text value this Coordinator pushed up into the
-        /// SwiftUI binding via textDidChange. updateNSView compares the incoming
-        /// `text` against this to distinguish a reflexive echo of user typing
-        /// (skip the bare-storage edit — undo would be corrupted) from a genuine
-        /// external push such as a note switch or reload-from-disk (apply it).
-        var lastBoundText: String = ""
+        /// The value of `controller.externalPushToken` this Coordinator has
+        /// already applied. updateNSView treats `controller.externalPushToken
+        /// != lastConsumedPushToken` as a genuine external push. Initialized
+        /// to match the controller's starting token in `init` so the first
+        /// updateNSView after mount is not misread as a push.
+        var lastConsumedPushToken: Int
 
         init(_ parent: HybridEditorView) {
             self.parent = parent
+            // Seed the last-consumed token to the controller's current value
+            // so the first updateNSView after mount is treated as an echo /
+            // no-op, not a push (makeNSView already seeds the initial text).
+            // `controller` is @MainActor-isolated and makeCoordinator() — the
+            // sole caller — runs on the main actor, so the read is safe.
+            self.lastConsumedPushToken = MainActor.assumeIsolated {
+                parent.controller.externalPushToken
+            }
             super.init()
         }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             // Infinite-loop guard — only push up if the binding value is stale.
+            // No per-keystroke string snapshot is needed: the EDIT-02 echo
+            // guard is now purely token-based (see `bindingPushDecision`).
             if parent.text != tv.string {
                 parent.text = tv.string
-                // EDIT-02 fix: record what we just pushed so updateNSView can
-                // recognise the reflexive echo and skip the undo-corrupting
-                // bare-storage replace.
-                lastBoundText = tv.string
             }
             // Text edits can change which inline pair encloses the caret
             // without the selection itself moving (e.g. typing the closing
