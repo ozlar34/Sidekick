@@ -38,7 +38,65 @@ import SwiftUI
 ///
 /// `widthTracksTextView` + `autoresizingMask = .width` continue to handle
 /// width tracking; we only own the vertical floor.
-final class HybridTextView: NSTextView {
+/// Note: not `final` so test files can subclass with a local UndoManager
+/// (windowless NSTextViews have no undoManager via the responder chain).
+/// See `TestableHybridTextView` in ArmedInlineFormatTests.swift. Production
+/// code never subclasses HybridTextView — there is exactly one instance
+/// created in `HybridEditorView.makeNSView`.
+class HybridTextView: NSTextView {
+    // MARK: - Armed inline-format state (quick-260523-29t)
+    //
+    // "Hide markers on empty selection" UX: Cmd+B with caret-only selection
+    // does NOT write `****` into the body; it arms the next-typed character's
+    // style. State lives on the text view (the unique focused-editor source
+    // of truth) and is mirrored upward through the weak `hybridController`
+    // back-pointer so the toolbar can OR arming into its `isActive` highlight.
+    //
+    // Design Note (clear-on-consumption vs persist-until-cancel):
+    //   The locked decisions hedged between these two behaviors. We CLEAR on
+    //   consumption because the user-visible behavior is identical: after the
+    //   first typed char, the caret sits between char and suffix — i.e. INSIDE
+    //   an existing inline pair. The toolbar's `findAnyEnclosingInlinePair`
+    //   path keeps the button highlighted as long as the caret stays inside.
+    //   Subsequent typed chars naturally extend the pair via vanilla NSTextView
+    //   insertion. On caret-move-out the inline-pair detector reports
+    //   "not in a pair" and the button de-highlights. Strictly less state to
+    //   track; revisit only if real UAT proves the simpler version feels wrong.
+
+    /// Set of armed inline kinds. Empty when no Cmd+B/I/U/etc has been
+    /// pressed with an empty selection (the default state).
+    var armedInlineKinds: Set<FormattingToolbarView.InlineKind> = []
+
+    /// Order of arming (innermost / first-armed → outermost / last-armed).
+    /// Drives `composeArmedWrap`'s reading-order output. Kept in lockstep
+    /// with `armedInlineKinds` by `FormattingToolbarView.armedInlineKindsAfterArm`.
+    var armedInlineKindsOrder: [FormattingToolbarView.InlineKind] = []
+
+    /// Weak back-pointer to the controller so the text view can republish
+    /// arming changes upward. Set once in `HybridEditorView.makeNSView` right
+    /// after `controller.textView = textView`. Weak to avoid the retain cycle
+    /// (controller owns view-lifetime; we don't want the text view to keep
+    /// the controller alive past its scope).
+    weak var hybridController: HybridEditorController?
+
+    /// One-shot flag — set to true immediately before a programmatic
+    /// `setSelectedRange` call that participates in consumption-on-type, so
+    /// the selection-change cancel branch in `setSelectedRanges` skips clearing
+    /// the armed set on THAT specific call. AppKit fires selection-change as
+    /// a side-effect of `replaceCharacters` + `setSelectedRange`, which would
+    /// otherwise clear the armed set BEFORE consumption finishes.
+    private var suppressArmedClearOnNextSelectionChange: Bool = false
+
+    /// Republish armed kinds upward. Coalesced (skip write when value
+    /// unchanged) for the same SwiftUI re-render reason as the other
+    /// HybridEditorController publishers.
+    func republishArmedKinds() {
+        guard let c = hybridController else { return }
+        if c.armedInlineKinds != armedInlineKinds {
+            c.armedInlineKinds = armedInlineKinds
+        }
+    }
+
     /// Click-to-toggle for GFM task-list checkboxes. When the user clicks on
     /// the substituted ◯/◉ glyph (the leading `-` char of a task-list line),
     /// flip the state byte (` ` ↔ `x`) instead of moving the caret. Anywhere
@@ -115,6 +173,91 @@ final class HybridTextView: NSTextView {
            !NSEqualRanges(range, selectedRange()) {
             range = NSRange(location: NSNotFound, length: 0)
         }
+
+        // quick-260523-29t: armed-inline consumption-on-type. Layers BENEATH
+        // the F-07 range fix so the consumption uses the sanitized range.
+        // Only fires when ALL of:
+        //   a. there is an armed inline kind
+        //   b. no IME composition is in flight (hasMarkedText() == false)
+        //   c. input is a printable, non-control single-character or longer
+        //      run of printables (filters out Tab, Enter, etc.)
+        //   d. caret is NOT inside a fenced code block (defensive — arming
+        //      was already gated, but caret could have moved INTO a fence
+        //      while armed and BEFORE the selection-cancel cleared it; F-05
+        //      intent says drop consumption AND clear)
+        // When consumption fires, the wrap is built from `composeArmedWrap`,
+        // applied via the standard shouldChangeText/replaceCharacters/
+        // didChangeText sandwich (single undo step), the caret is placed
+        // between the typed char and the closing suffix, and armed state
+        // is cleared (Design Note above).
+        if !armedInlineKinds.isEmpty, !hasMarkedText() {
+            let effective: String
+            if let s = string as? String {
+                effective = s
+            } else if let a = string as? NSAttributedString {
+                effective = a.string
+            } else {
+                effective = ""
+            }
+
+            let isPrintable = !effective.isEmpty && effective.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+
+            if isPrintable {
+                // F-05 defense: drop consumption if caret is now inside a
+                // fenced code block, AND clear armed state.
+                let editRange: NSRange = (range.location == NSNotFound) ? selectedRange() : range
+                let body = self.string
+                var insideFence = false
+                for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+                    let fenceContent = fence.contentRange
+                    let editEnd = editRange.location + editRange.length
+                    let startInside = editRange.location >= fenceContent.location
+                        && editRange.location <= fenceContent.location + fenceContent.length
+                    let endInside = editEnd >= fenceContent.location
+                        && editEnd <= fenceContent.location + fenceContent.length
+                    if startInside || endInside {
+                        insideFence = true
+                        break
+                    }
+                }
+
+                if insideFence {
+                    armedInlineKinds.removeAll()
+                    armedInlineKindsOrder.removeAll()
+                    republishArmedKinds()
+                    super.insertText(string, replacementRange: range)
+                    return
+                }
+
+                let (p, s) = FormattingToolbarView.composeArmedWrap(
+                    order: armedInlineKindsOrder
+                )
+                let replacement = p + effective + s
+                guard shouldChangeText(in: editRange, replacementString: replacement) else {
+                    return
+                }
+                replaceCharacters(in: editRange, with: replacement)
+                didChangeText()
+
+                let caretLoc = editRange.location
+                    + (p as NSString).length
+                    + (effective as NSString).length
+                // Suppress the side-effect selection-change cancel — the
+                // selection move below is OUR programmatic caret placement,
+                // not user navigation.
+                suppressArmedClearOnNextSelectionChange = true
+                setSelectedRange(NSRange(location: caretLoc, length: 0))
+
+                // Clear armed state per Design Note (clear-on-consumption).
+                armedInlineKinds.removeAll()
+                armedInlineKindsOrder.removeAll()
+                republishArmedKinds()
+                return
+            }
+        }
+
         super.insertText(string, replacementRange: range)
     }
 
@@ -137,11 +280,28 @@ final class HybridTextView: NSTextView {
     /// override the most-primitive selection setter (multi-range form) so
     /// every path — keyboard, mouse, programmatic — invalidates the prior
     /// shifted rect before NSTextView updates internal state.
+    ///
+    /// quick-260523-29t: also the trigger for armed-inline cancel. Any non-
+    /// still-selecting selection change clears the armed set UNLESS the
+    /// one-shot `suppressArmedClearOnNextSelectionChange` flag is set (which
+    /// `insertText` raises around its own programmatic caret-placement call).
+    /// `stillSelecting == true` means a drag is in progress — don't clear
+    /// arming mid-drag; AppKit will fire one final `stillSelecting == false`
+    /// call when the drag ends and THAT clears.
     override func setSelectedRanges(
         _ ranges: [NSValue],
         affinity: NSSelectionAffinity,
         stillSelecting: Bool
     ) {
+        if !stillSelecting {
+            if suppressArmedClearOnNextSelectionChange {
+                suppressArmedClearOnNextSelectionChange = false
+            } else if !armedInlineKinds.isEmpty {
+                armedInlineKinds.removeAll()
+                armedInlineKindsOrder.removeAll()
+                republishArmedKinds()
+            }
+        }
         if let prev = lastShiftedCaretRect {
             setNeedsDisplay(prev.insetBy(dx: -2, dy: -2))
             lastShiftedCaretRect = nil
@@ -315,6 +475,9 @@ struct HybridEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
         controller.textView = textView   // NEW (D-TB-02) — publish upward once
+        // quick-260523-29t: weak back-pointer so HybridTextView can republish
+        // armedInlineKinds upward without a retain cycle.
+        textView.hybridController = controller
 
         // Seed initial text. replaceCharacters triggers processEditing which
         // applies the initial attribute pass.

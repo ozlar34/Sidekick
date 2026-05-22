@@ -47,6 +47,13 @@ struct FormattingToolbarView: View {
     /// HybridEditorController.activeLinePrefix.
     var activeLinePrefix: LinePrefix? = nil
 
+    /// Inline kinds currently armed on an empty selection (quick-260523-29t).
+    /// OR-ed into each inline button's `isActive` highlight so the toolbar
+    /// shows "armed for next-typed character" the same way it shows
+    /// "caret inside an existing pair". Defaults empty so existing call
+    /// sites (tests, previews) compile without change.
+    var armedInlineKinds: Set<InlineKind> = []
+
     /// Apple Notes-style: a single "Aa" trigger collapses every formatting
     /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
     /// styles (Heading / Subheading / Body / Bulleted / Numbered / Quote)
@@ -70,6 +77,7 @@ struct FormattingToolbarView: View {
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
                         activeLinePrefix: activeLinePrefix,
+                        armedInlineKinds: armedInlineKinds,
                         dismiss: { popoverShown = false }
                     )
                 }
@@ -1287,6 +1295,66 @@ struct FormattingToolbarView: View {
     static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
         let body = textView.string
         let range = textView.selectedRange()
+
+        // quick-260523-29t: arm-or-edit fork for empty selections on inline
+        // formats. When the user fires Cmd+B (or any of the 5 inline shortcuts)
+        // with NO selected text, we suppress marker insertion and instead arm
+        // the next-typed character's style. This matches TextEdit / Pages /
+        // Notes rich-text behavior. The fork takes the ARM path only when
+        // ALL of:
+        //   a. textView is a HybridTextView (state lives on the subclass)
+        //   b. selection is caret-only (length 0)
+        //   c. prefix maps to one of the 5 inline kinds (NOT link `[`)
+        //   d. caret is NOT inside a fenced code block (F-05 inert)
+        //   e. caret is NOT inside an existing same-kind pair (the existing
+        //      universal toggle-off path in applyMarkdownWrap handles that
+        //      case correctly — strip the markers — so we fall through)
+        //
+        // When ARM is taken, ZERO body mutation occurs: no shouldChangeText
+        // sandwich, no push-token bump, no undo state. This is purely an
+        // in-memory flag flip on the HybridTextView.
+        if range.length == 0,
+           let htv = textView as? HybridTextView,
+           let requestedKind = inlineKind(forPrefix: prefix) {
+
+            // (d) Fenced-code-block check (mirrors the F-05 branch in
+            // applyMarkdownWrap at line 119-136).
+            var insideFence = false
+            for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+                let fenceContent = fence.contentRange
+                let startInside = range.location >= fenceContent.location
+                    && range.location <= fenceContent.location + fenceContent.length
+                if startInside {
+                    insideFence = true
+                    break
+                }
+            }
+            if insideFence {
+                // Silent no-op — no body edit, no arm state set. F-05 parity.
+                return
+            }
+
+            // (e) Same-kind enclosing-pair check — re-uses the universal
+            // toggle-off detection. If the caret sits inside an existing pair
+            // of the SAME kind, fall through to applyMarkdownWrap so the
+            // pair is stripped (toggle-off). For different-kind pairs we
+            // also fall through (the existing swap / nest logic owns it).
+            let existingPairKind = activeInlineKind(body: body, selection: range)
+            if existingPairKind == requestedKind {
+                // Fall through to the strip path below.
+            } else {
+                // ARM path — no body mutation. Update state + publish + return.
+                let newState = armedInlineKindsAfterArm(
+                    current: (htv.armedInlineKinds, htv.armedInlineKindsOrder),
+                    requestedKind: requestedKind
+                )
+                htv.armedInlineKinds = newState.set
+                htv.armedInlineKindsOrder = newState.order
+                htv.republishArmedKinds()
+                return
+            }
+        }
+
         let (newBody, cursor) = applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
@@ -1795,6 +1863,10 @@ private struct FormattingPopoverView: View {
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
     let activeLinePrefix: FormattingToolbarView.LinePrefix?
+    /// quick-260523-29t: armed inline kinds. OR-ed into each inline button's
+    /// isActive so the toolbar reflects "armed for next-typed character" the
+    /// same way it reflects "caret inside an existing pair".
+    let armedInlineKinds: Set<FormattingToolbarView.InlineKind>
     let dismiss: () -> Void
 
     var body: some View {
@@ -1808,28 +1880,28 @@ private struct FormattingPopoverView: View {
                     systemName: "bold",
                     tooltip: "Bold (⌘B)",
                     accessibilityLabel: "Bold",
-                    isActive: activeInlineKind == .bold
+                    isActive: activeInlineKind == .bold || armedInlineKinds.contains(.bold)
                 ) { wrapSelection("**", "**"); dismiss() }
 
                 FormatButton(
                     systemName: "italic",
                     tooltip: "Italic (⌘I)",
                     accessibilityLabel: "Italic",
-                    isActive: activeInlineKind == .italic
+                    isActive: activeInlineKind == .italic || armedInlineKinds.contains(.italic)
                 ) { wrapSelection("*", "*"); dismiss() }
 
                 FormatButton(
                     systemName: "underline",
                     tooltip: "Underline (⌘U)",
                     accessibilityLabel: "Underline",
-                    isActive: activeInlineKind == .underline
+                    isActive: activeInlineKind == .underline || armedInlineKinds.contains(.underline)
                 ) { wrapSelection("<u>", "</u>"); dismiss() }
 
                 FormatButton(
                     systemName: "strikethrough",
                     tooltip: "Strikethrough (⌘⇧X)",
                     accessibilityLabel: "Strikethrough",
-                    isActive: activeInlineKind == .strikethrough
+                    isActive: activeInlineKind == .strikethrough || armedInlineKinds.contains(.strikethrough)
                 ) { wrapSelection("~~", "~~"); dismiss() }
             }
             .padding(.horizontal, 8)

@@ -70,6 +70,17 @@ final class HybridEditorController: ObservableObject {
     /// writes for the same reason as the other publishers.
     @Published var activeLinePrefix: FormattingToolbarView.LinePrefix?
 
+    /// Set of inline kinds currently armed on an empty selection (Cmd+B /
+    /// Cmd+I / Cmd+U / Cmd+⇧X / Cmd+⌥C with no selected text). Drives the
+    /// OR-ed `isActive` highlight on the toolbar's inline buttons —
+    /// active = either "caret is inside an existing pair" (activeInlineKind)
+    /// or "armed for next-typed character" (armedInlineKinds.contains(...)).
+    ///
+    /// Written by HybridTextView via the weak back-pointer; coalesced
+    /// (the text view only republishes when the value changes) for the
+    /// same SwiftUI re-render reason as the other publishers.
+    @Published var armedInlineKinds: Set<FormattingToolbarView.InlineKind> = []
+
     /// Fired when the user presses Shift-Tab with the caret at body
     /// offset 0 — counterpart to title→body Tab. EditorPaneView wires
     /// this to flip SwiftUI focus back to the title field. nil means
