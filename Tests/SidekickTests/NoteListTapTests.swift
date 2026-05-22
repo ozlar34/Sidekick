@@ -2,6 +2,32 @@ import XCTest
 import SwiftUI
 @testable import Sidekick
 
+/// Smoke tests for the *closure and predicate logic* used by `NoteListView`'s
+/// per-row tap handling — NOT a regression guard for the NAV-01 bug itself.
+///
+/// IN-03 coverage-gap disclosure (read before extending this file):
+///
+/// The NAV-01 root cause was an AppKit interaction: `List(selection:)` is
+/// backed by `NSTableView`, which absorbs the first click as a
+/// first-responder/focus event inside a `.nonactivatingPanel`, so the first
+/// click never reached the SwiftUI selection binding. The fix replaced
+/// `List(selection:)` with a plain `List` + per-row `.onTapGesture`.
+///
+/// That AppKit first-responder behaviour is NOT unit-testable: it lives in
+/// `NSTableView`'s event handling inside a nonactivating panel and requires a
+/// real window, panel style mask, and mouse event to reproduce. The tests
+/// below therefore only verify the two pieces of logic the fix introduced:
+///   - Test A: the `.onTapGesture` body (`selectedID = note.id`) writes the
+///     binding — trivially-true Swift `Binding` semantics.
+///   - Test B: the `.background` highlight predicate (`note.id == selectedID`)
+///     matches exactly the selected row — trivially-true `filter` semantics.
+///
+/// KNOWN GAP: if a future refactor reintroduces `List(selection:)`, these
+/// tests stay green while the first-click bug returns. The `List` vs
+/// `List(selection:)` distinction is verified MANUALLY (click a note in the
+/// pinned panel as the first interaction after the panel gains focus). If a UI
+/// test harness is added later, port that manual check here and delete this
+/// disclosure.
 final class NoteListTapTests: XCTestCase {
 
     private func makeNote(_ id: UUID, _ filename: String) -> Note {
