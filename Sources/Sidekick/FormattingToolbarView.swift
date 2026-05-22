@@ -936,6 +936,111 @@ struct FormattingToolbarView: View {
         return true
     }
 
+    /// EDIT-03 — Backspace on a checklist line. Handles Paths A, B, E.
+    /// Returns true if the keystroke was consumed (prefix stripped); false to
+    /// fall through to NSTextView's default single-character delete.
+    static func handleChecklistBackspace(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+
+        // Path E: a non-empty selection that overlaps the checklist prefix.
+        if selection.length > 0 {
+            let lineRange = nsBody.lineRange(for: selection)
+            guard lineRange.length >= 6 else { return false }
+            let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+            let prefixNS = prefix as NSString
+            guard prefixNS.character(at: 0) == 0x2D,
+                  prefixNS.character(at: 1) == 0x20,
+                  prefixNS.character(at: 2) == 0x5B,
+                  (prefixNS.character(at: 3) == 0x20
+                    || prefixNS.character(at: 3) == 0x78
+                    || prefixNS.character(at: 3) == 0x58),
+                  prefixNS.character(at: 4) == 0x5D,
+                  prefixNS.character(at: 5) == 0x20 else { return false }
+            // Only intercept if the selection starts within the 6-char prefix zone.
+            let prefixEnd = lineRange.location + 6
+            guard selection.location < prefixEnd else { return false }
+            // Union: from line start through the end of the original selection.
+            let unionEnd = selection.location + selection.length
+            let unionRange = NSRange(location: lineRange.location,
+                                     length: unionEnd - lineRange.location)
+            guard textView.shouldChangeText(in: unionRange, replacementString: "") else { return false }
+            textView.replaceCharacters(in: unionRange, with: "")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        // Caret-only — Paths A and B collapse to one branch.
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B,
+              (prefixNS.character(at: 3) == 0x20
+                || prefixNS.character(at: 3) == 0x78
+                || prefixNS.character(at: 3) == 0x58),
+              prefixNS.character(at: 4) == 0x5D,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        // D-05 (Path A) and D-06 (Path B): caret exactly at lineStart + 6 → strip prefix.
+        guard selection.location == lineRange.location + 6 else { return false }
+        let stripRange = NSRange(location: lineRange.location, length: 6)
+        guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: stripRange, with: "")
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+        return true
+    }
+
+    /// EDIT-03 — Forward-delete (fn+Delete) on a checklist line. Handles Path C.
+    /// Path D (forward-delete from content start) is intentionally NOT intercepted —
+    /// it is already clean, so this helper only fires when the caret is at line start.
+    static func handleChecklistForwardDelete(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }   // selections handled by Backspace path
+
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B,
+              (prefixNS.character(at: 3) == 0x20
+                || prefixNS.character(at: 3) == 0x78
+                || prefixNS.character(at: 3) == 0x58),
+              prefixNS.character(at: 4) == 0x5D,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        // Path C: caret AT line start. Forward-delete would remove `-` and break the
+        // prefix — strip all 6 chars instead. Path D (caret at lineStart+6) is left alone.
+        guard selection.location == lineRange.location else { return false }
+        let stripRange = NSRange(location: lineRange.location, length: 6)
+        guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: stripRange, with: "")
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+        return true
+    }
+
     /// Enter continuation for bulleted-list lines (`- ` or `* `). Mirrors
     /// `handleChecklistReturn`: continue with `\n- ` (or `\n* `, preserving the
     /// original marker char) on a non-empty line; strip the prefix and exit

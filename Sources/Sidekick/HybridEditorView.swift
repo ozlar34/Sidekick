@@ -498,6 +498,12 @@ struct HybridEditorView: NSViewRepresentable {
                 if FormattingToolbarView.handleNumberedReturn(in: textView) { return true }
                 return false
             }
+            if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                if FormattingToolbarView.handleChecklistBackspace(in: textView) { return true }
+            }
+            if commandSelector == #selector(NSResponder.deleteForward(_:)) {
+                if FormattingToolbarView.handleChecklistForwardDelete(in: textView) { return true }
+            }
             // Shift-Tab at body offset 0 → return focus to the title field
             // (counterpart to title→body Tab in EditorPaneView). Anywhere else
             // in the body, fall through to NSTextView's default backtab.
