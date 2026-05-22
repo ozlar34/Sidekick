@@ -17,17 +17,7 @@ struct NoteListView: View {
         List {
             if !pinnedNotes.isEmpty {
                 Section("Pinned") {
-                    ForEach(pinnedNotes) { note in
-                        NoteRowView(note: note, store: store, selectedID: $selectedID)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(note.id == selectedID
-                                          ? Color.accentColor.opacity(0.15)
-                                          : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedID = note.id }
-                    }
+                    ForEach(pinnedNotes) { row($0) }
                     .onMove { source, destination in
                         var pinnedIDs = pinnedNotes.map(\.id)
                         pinnedIDs.move(fromOffsets: source, toOffset: destination)
@@ -38,17 +28,7 @@ struct NoteListView: View {
                 }
             }
             if pinnedNotes.isEmpty {
-                ForEach(regularNotes) { note in
-                    NoteRowView(note: note, store: store, selectedID: $selectedID)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(note.id == selectedID
-                                      ? Color.accentColor.opacity(0.15)
-                                      : Color.clear)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture { selectedID = note.id }
-                }
+                ForEach(regularNotes) { row($0) }
                 .onMove { source, destination in
                     var regularIDs = regularNotes.map(\.id)
                     regularIDs.move(fromOffsets: source, toOffset: destination)
@@ -56,17 +36,7 @@ struct NoteListView: View {
                 }
             } else {
                 Section("Notes") {
-                    ForEach(regularNotes) { note in
-                        NoteRowView(note: note, store: store, selectedID: $selectedID)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(note.id == selectedID
-                                          ? Color.accentColor.opacity(0.15)
-                                          : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture { selectedID = note.id }
-                    }
+                    ForEach(regularNotes) { row($0) }
                     .onMove { source, destination in
                         var regularIDs = regularNotes.map(\.id)
                         regularIDs.move(fromOffsets: source, toOffset: destination)
@@ -81,4 +51,27 @@ struct NoteListView: View {
         .scrollContentBackground(.hidden)   // RESEARCH Pitfall 5 — let sidebar vibrancy show through
         .animation(.easeInOut(duration: 0.15), value: selectedID)
     }
+
+    // WR-02 fix: the row body (NoteRowView + selection-highlight background +
+    // contentShape + onTapGesture) was previously duplicated verbatim across
+    // three ForEach blocks. Extracting a single builder keeps styling and tap
+    // behaviour in one place, so a future change cannot diverge between pinned
+    // and regular rows. Each ForEach now only differs in its onMove closure.
+    @ViewBuilder
+    private func row(_ note: Note) -> some View {
+        NoteRowView(note: note, store: store, selectedID: $selectedID)
+            .background(
+                RoundedRectangle(cornerRadius: Self.highlightCornerRadius)
+                    .fill(note.id == selectedID
+                          ? Color.accentColor.opacity(Self.highlightOpacity)
+                          : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { selectedID = note.id }
+    }
+
+    // IN-01: named constants for the selection-highlight visual identity,
+    // previously inline literals repeated across the three row blocks.
+    private static let highlightCornerRadius: CGFloat = 6
+    private static let highlightOpacity: Double = 0.15
 }
