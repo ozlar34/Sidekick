@@ -24,6 +24,34 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// Pill corner radius.
     private static let chipCorner: CGFloat = 4
 
+    /// Horizontal advance reserved for a checklist marker. The marker char is
+    /// laid out as a control glyph (same mechanism as the link-chip anchor):
+    /// the underlying `-` glyph is suppressed entirely and this width is what
+    /// the typesetter reserves on the line. Sized to seat the 11pt drawn square
+    /// (see `drawBackground`) with clear air before it; the remaining gap to the
+    /// item text comes from the trailing space char. `checklistParagraphStyle`'s
+    /// `headIndent` is matched to this width so wrapped lines align under the
+    /// first-line content.
+    static let checklistMarkerWidth: CGFloat = 14
+
+    /// Frame of the drawn checklist square, in the marker glyph's line-fragment
+    /// coordinate space. Single source of truth shared by `drawBackground`
+    /// (painting) and `HybridTextView.mouseDown` (hit-testing) so the painted
+    /// square and the tap zone can never drift apart.
+    ///
+    /// The square is centered on the text **cap-height** band rather than the
+    /// full 20pt line box — centering on the line box leaves the square sitting
+    /// visibly low relative to the adjacent content.
+    static func checklistSquareRect(lineFragmentRect: NSRect,
+                                    glyphLocation: NSPoint,
+                                    markerFont: NSFont) -> NSRect {
+        let squareSide: CGFloat = 11
+        let x = lineFragmentRect.origin.x + glyphLocation.x
+        let baselineY = lineFragmentRect.origin.y + glyphLocation.y
+        let y = baselineY - markerFont.capHeight / 2 - squareSide / 2
+        return NSRect(x: x, y: y, width: squareSide, height: squareSide)
+    }
+
     override init() {
         super.init()
         self.delegate = self
@@ -76,9 +104,13 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     // if the same char also carries .sidekickHiddenMarker.
                     prop.insert(.controlCharacter)
                 } else if attrs[.sidekickChecklistMarker] != nil {
-                    // Marker glyph stays visible (non-null) so the typesetter reserves
-                    // its advance width. The custom square is painted in drawBackground.
-                    // D-03a: do NOT set .null; do NOT substitute glyph.
+                    // Treat the marker char as a control glyph — same mechanism
+                    // as the link-chip anchor. `.whitespace` (see `shouldUse`)
+                    // suppresses the underlying `-` glyph entirely (so it no
+                    // longer shows through the drawn square) and lets
+                    // `boundingBoxForControlGlyphAt` reserve an exact advance
+                    // width for the square plus its gap to the content.
+                    prop.insert(.controlCharacter)
                 } else if attrs[.sidekickBulletMarker] != nil {
                     // Substitute the dash/star glyph with a bullet glyph.
                     // Keep visible — do NOT set .null.
@@ -109,7 +141,10 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = self.textStorage,
               charIndex < storage.length else { return action }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
-        if attrs[.sidekickLinkChip] != nil {
+        // Both the link-chip anchor and the checklist marker are laid out as
+        // control glyphs. `.whitespace` is the action that makes the typesetter
+        // consult `boundingBoxForControlGlyphAt` for a custom advance width.
+        if attrs[.sidekickLinkChip] != nil || attrs[.sidekickChecklistMarker] != nil {
             return .whitespace
         }
         return action
@@ -130,6 +165,14 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = self.textStorage,
               charIndex < storage.length else { return .zero }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
+
+        // Checklist marker: reserve a fixed advance for the drawn square. The
+        // box is anchored at the glyph origin; height matches the line so the
+        // square (painted in `drawBackground`) seats inside the line box.
+        if attrs[.sidekickChecklistMarker] != nil {
+            return CGRect(x: 0, y: 0, width: Self.checklistMarkerWidth, height: proposedRect.height)
+        }
+
         guard let display = attrs[.sidekickLinkChip] as? String else { return .zero }
 
         let attrStr = NSAttributedString(
@@ -215,15 +258,18 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 effectiveRange: nil
             )
             let glyphLocation = self.location(forGlyphAt: glyphRange.location)
+            let markerFont = (storage.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
+                ?? NSFont.systemFont(ofSize: 15)
 
-            // UI-SPEC geometry (locked): 11×11pt square, 2pt corner radius
-            let squareSide: CGFloat = 11
+            // UI-SPEC geometry (locked): 11×11pt square, 2pt corner radius.
+            // Frame comes from the shared helper so painting and hit-testing
+            // (HybridTextView.mouseDown) use identical geometry.
             let cornerRadius: CGFloat = 2
-            let squareX = origin.x + lineRect.origin.x + glyphLocation.x
-            // Center vertically in the 20pt line box (bulletParagraphStyle min/maxLineHeight = 20)
-            let baselineY = origin.y + lineRect.origin.y + glyphLocation.y
-            let squareY = baselineY - squareSide * 0.75   // visual center; tune via manual test
-            let squareRect = NSRect(x: squareX, y: squareY, width: squareSide, height: squareSide)
+            let squareRect = Self.checklistSquareRect(
+                lineFragmentRect: lineRect,
+                glyphLocation: glyphLocation,
+                markerFont: markerFont
+            ).offsetBy(dx: origin.x, dy: origin.y)
 
             NSGraphicsContext.current?.saveGraphicsState()
 

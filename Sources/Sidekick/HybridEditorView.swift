@@ -75,12 +75,17 @@ final class HybridTextView: NSTextView {
                                      effectiveRange: nil) != nil {
                     let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
                     let glyphLocation = lm.location(forGlyphAt: glyphIdx)
-                    let squareSide: CGFloat = 11
-                    let squareX = lineRect.origin.x + glyphLocation.x
-                    let baselineY = lineRect.origin.y + glyphLocation.y
-                    let squareY = baselineY - squareSide * 0.75
-                    let squareRect = NSRect(x: squareX, y: squareY, width: squareSide, height: squareSide)
+                    let markerFont = (storage.attribute(.font, at: charIdx, effectiveRange: nil) as? NSFont)
+                        ?? NSFont.systemFont(ofSize: 15)
+                    // Shared geometry with MarkdownLayoutManager.drawBackground so
+                    // the tap zone always tracks the painted square.
+                    let squareRect = MarkdownLayoutManager.checklistSquareRect(
+                        lineFragmentRect: lineRect,
+                        glyphLocation: glyphLocation,
+                        markerFont: markerFont
+                    )
                     // UI-SPEC: minimum 20×20pt tap zone centered on the drawn square.
+                    let squareSide: CGFloat = 11
                     let tapZone = squareRect.insetBy(dx: -(20 - squareSide) / 2, dy: -(20 - squareSide) / 2)
                     if tapZone.contains(textPoint) {
                         if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
