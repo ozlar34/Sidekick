@@ -1,4 +1,4 @@
-/// Settings form — five rows: Global Shortcut, Notes Folder, Default Width, Title from Heading, Launch at Login.
+/// Settings form — five rows: Global Shortcut, Notes Folder, Default Width, Show in Dock, Launch at Login.
 ///
 /// Pattern sources:
 ///   - CONTEXT.md: S-03 (five-row flat form), S-05 (conflict warning), LL-01 (SMAppService)
@@ -38,7 +38,7 @@ private func isShortcutTakenBySystem(_ shortcut: KeyboardShortcuts.Shortcut) -> 
 struct SettingsView: View {
     @AppStorage(Defaults.notesFolder) private var notesFolder: String = ""
     @AppStorage(Defaults.panelWidth) private var panelWidth: Double = 380
-    @AppStorage(Defaults.filenameFollowsTitle) private var filenameFollowsTitle: Bool = true
+    @AppStorage(Defaults.showInDock) private var showInDock: Bool = true
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
     // HOTKEY-06: Conflict detection state.
@@ -80,7 +80,10 @@ struct SettingsView: View {
                     Text("pt").foregroundStyle(.secondary)
                 }
             }
-            Toggle("Title from Heading", isOn: $filenameFollowsTitle)
+            Toggle("Show in Dock", isOn: $showInDock)
+                .onChange(of: showInDock) { _, newValue in
+                    applyDockVisibility(newValue)
+                }
             Toggle("Launch at Login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in
                     setLaunchAtLogin(newValue)
@@ -150,5 +153,14 @@ struct SettingsView: View {
             NSLog("[Sidekick] SMAppService error: \(error.localizedDescription)")
             launchAtLogin = (SMAppService.mainApp.status == .enabled)
         }
+    }
+
+    private func applyDockVisibility(_ show: Bool) {
+        // Live effect: if the panel is currently open, apply immediately.
+        if let ctrl = (NSApp.delegate as? AppDelegate)?.panelController,
+           ctrl.panel?.isVisible == true {
+            NSApp.setActivationPolicy(show ? .regular : .accessory)
+        }
+        NSLog("[Sidekick] Show in Dock set to \(show)")
     }
 }
