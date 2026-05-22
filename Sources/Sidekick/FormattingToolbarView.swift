@@ -314,6 +314,106 @@ struct FormattingToolbarView: View {
         }
     }
 
+    // MARK: - Armed inline-format helpers (hide-markers-on-empty-selection)
+    //
+    // These power the "Cmd+B with empty selection does NOT insert ****; it arms
+    // the next-typed character" UX. Pure state-transition + string-composition
+    // math, no AppKit deps — see ArmedInlineFormatTests for the contract.
+
+    /// Bold/italic/code are mutually exclusive (CommonMark forbids composed
+    /// triple-asterisk in this codebase — see comment on applyMarkdownWrap's
+    /// mutex set at line 159). Underline + strikethrough are orthogonal: they
+    /// can stack with each other and with any one mutex kind.
+    private static let mutexInlineKinds: Set<InlineKind> = [.bold, .italic, .code]
+
+    /// Wrap markers per inline kind. Single source of truth shared with the
+    /// `inlineKind(forPrefix:)` table above.
+    private static func prefixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "<u>"
+        }
+    }
+
+    private static func suffixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "</u>"
+        }
+    }
+
+    /// Pure state-transition for arming an inline kind on an empty selection.
+    ///
+    /// Rules (from locked decisions for quick-29t):
+    ///   1. If `requestedKind` is already armed → toggle off (remove from BOTH
+    ///      `set` and `order`).
+    ///   2. Else if `requestedKind` is in the bold/italic/code mutex set AND a
+    ///      different mutex kind is currently armed → replace that mutex kind
+    ///      in place. Both `set` and `order` are updated; the requested kind
+    ///      takes the existing mutex kind's slot in `order` so orthogonal
+    ///      neighbours (underline / strikethrough) keep their positions.
+    ///   3. Else → append `requestedKind` to `order` (becomes the new
+    ///      outermost / last-armed) and insert into `set`. This covers both
+    ///      "first arm" and "orthogonal stack" cases.
+    ///
+    /// Inputs are not mutated; a fresh tuple is returned.
+    internal static func armedInlineKindsAfterArm(
+        current: (set: Set<InlineKind>, order: [InlineKind]),
+        requestedKind: InlineKind
+    ) -> (set: Set<InlineKind>, order: [InlineKind]) {
+        // Rule 1: re-arming the same kind toggles off.
+        if current.set.contains(requestedKind) {
+            var newSet = current.set
+            newSet.remove(requestedKind)
+            let newOrder = current.order.filter { $0 != requestedKind }
+            return (newSet, newOrder)
+        }
+
+        // Rule 2: mutex-replace. If the requested kind is in the mutex set
+        // and another mutex kind is already armed, swap in-place.
+        if mutexInlineKinds.contains(requestedKind),
+           let existingMutex = current.order.first(where: { mutexInlineKinds.contains($0) }) {
+            var newSet = current.set
+            newSet.remove(existingMutex)
+            newSet.insert(requestedKind)
+            var newOrder = current.order
+            if let idx = newOrder.firstIndex(of: existingMutex) {
+                newOrder[idx] = requestedKind
+            }
+            return (newSet, newOrder)
+        }
+
+        // Rule 3: append (first arm OR orthogonal stack).
+        var newSet = current.set
+        newSet.insert(requestedKind)
+        var newOrder = current.order
+        newOrder.append(requestedKind)
+        return (newSet, newOrder)
+    }
+
+    /// Pure composition: given the `order` of armed kinds (innermost first,
+    /// outermost last), build the (prefix, suffix) pair that wraps a single
+    /// typed character.
+    ///
+    /// Reading left-to-right, the OUTER prefix comes first. Example for
+    /// `order = [.bold, .underline]` (bold armed first, underline second):
+    ///   prefix = "<u>**"   (outer <u> then inner **)
+    ///   suffix = "**</u>"  (inner ** then outer </u>)
+    /// Wrapping "X" gives `<u>**X**</u>`, which renders as bold-and-underlined.
+    internal static func composeArmedWrap(
+        order: [InlineKind]
+    ) -> (prefix: String, suffix: String) {
+        let prefix = order.reversed().map { prefixFor($0) }.joined()
+        let suffix = order.map { suffixFor($0) }.joined()
+        return (prefix, suffix)
+    }
+
     /// Find any inline-kind marker pair (bold / italic / code) on the line
     /// containing the selection whose whole span (open + content + close)
     /// overlaps or contains the selection. Returns (kind, whole, inner) in
