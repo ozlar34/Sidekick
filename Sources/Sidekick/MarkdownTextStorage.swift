@@ -789,7 +789,7 @@ final class MarkdownTextStorage: NSTextStorage {
         }
     }
 
-    /// Apply thematic-break styling: tag the dash/asterisk/underscore line with
+    /// Apply thematic-break styling: tag the `---` line with
     /// `.sidekickThematicBreak` (read by the layout manager's drawBackground
     /// override to paint the hairline) AND with `.sidekickHiddenMarker` so the
     /// glyphs collapse to zero width — the raw `---` source chars survive in

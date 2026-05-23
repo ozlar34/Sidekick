@@ -154,12 +154,14 @@ enum MarkdownInlineParser {
         pattern: "^> ",
         options: []
     )
-    // Thematic break: a line consisting only of three or more `-`, `*`, or `_`
-    // characters (mixed not allowed per CommonMark), with optional surrounding
-    // whitespace. The regex is run against single-line text (newline stripped
-    // before matching) so `^…$` anchors the whole line.
+    // Thematic break: a line consisting only of three or more `-` characters,
+    // with optional surrounding whitespace. CommonMark also permits `*` and
+    // `_` runs, but we intentionally restrict to dashes — `***` collides with
+    // bold-italic typing (`**` + `**`) and produced surprise horizontal rules.
+    // The regex is run against single-line text (newline stripped before
+    // matching) so `^…$` anchors the whole line.
     private static let thematicBreakRegex = try! NSRegularExpression(
-        pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$",
+        pattern: "^[ \\t]*-{3,}[ \\t]*$",
         options: []
     )
     private static let fenceRegex = try! NSRegularExpression(
@@ -546,12 +548,14 @@ enum MarkdownInlineParser {
         return results
     }
 
-    // MARK: Thematic breaks (`---` / `***` / `___`)
+    // MARK: Thematic breaks (`---`)
 
     /// Returns the line-content NSRange (no trailing newline) for every
     /// thematic-break line in `string`. A thematic break is a line containing
-    /// only three-or-more `-`, `*`, or `_` characters (single character class —
-    /// mixed not allowed) with optional surrounding spaces/tabs.
+    /// only three-or-more `-` characters with optional surrounding spaces/tabs.
+    /// CommonMark also accepts `***` and `___`, but we restrict to dashes —
+    /// `***` collides with bold-italic typing (`**` + `**`) and produced
+    /// surprise rules.
     ///
     /// To rule out heading underlines (`Title\n---`) and table separators,
     /// callers (MarkdownTextStorage.applyThematicBreak) should additionally

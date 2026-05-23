@@ -375,11 +375,18 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertTrue(matches.isEmpty, "Dashes directly under a non-empty line are setext H2 — must skip")
     }
 
-    func test_thematicBreak_asterisksAndUnderscores() {
-        // CommonMark: 3+ of the same char (`-`, `*`, `_`) all qualify.
-        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "***\n").count, 1)
-        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "___\n").count, 1)
-        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "----\n").count, 1, "Four dashes still qualify")
+    func test_thematicBreak_dashesOnly_asterisksAndUnderscoresExcluded() {
+        // We deliberately diverge from CommonMark: only `-` runs create an HR.
+        // `***` was indistinguishable from a bold-italic transition (`**` +
+        // `**`) and produced surprise rules.
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "***\n").isEmpty,
+                      "Asterisks must NOT create a thematic break")
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "****\n").isEmpty,
+                      "Four asterisks must NOT create a thematic break")
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "___\n").isEmpty,
+                      "Underscores must NOT create a thematic break")
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "----\n").count, 1,
+                       "Four dashes still qualify")
     }
 
     func test_thematicBreak_mixedChars_doesNotMatch() {
