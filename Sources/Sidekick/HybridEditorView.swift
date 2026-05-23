@@ -755,9 +755,11 @@ struct HybridEditorView: NSViewRepresentable {
                 return false
             }
             if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                if FormattingToolbarView.handleAtomicMarkerBackspace(in: textView) { return true }    // quick-260524-0ia: atomic inline-format marker pair delete
                 if FormattingToolbarView.handleChecklistBackspace(in: textView) { return true }
             }
             if commandSelector == #selector(NSResponder.deleteForward(_:)) {
+                if FormattingToolbarView.handleAtomicMarkerForwardDelete(in: textView) { return true } // quick-260524-0ia: atomic inline-format marker pair delete
                 if FormattingToolbarView.handleChecklistForwardDelete(in: textView) { return true }
             }
             // Shift-Tab at body offset 0 → return focus to the title field
