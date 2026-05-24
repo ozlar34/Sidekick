@@ -1920,6 +1920,19 @@ struct FormattingToolbarView: View {
     static func performInsertThematicBreak(in textView: NSTextView) {
         let nsBody = textView.string as NSString
         let range = textView.selectedRange()
+
+        // Bail when the caret is inside a fenced code block — inserting `---`
+        // there would (a) be semantically wrong (HR inside code), and (b) the
+        // leading `\n` we'd prepend would manufacture the blank-line precondition
+        // for the parser's thematic-break match, drawing a hairline through code.
+        // Silent `return` matches the existing toolbar bail convention in this
+        // file (no NSBeep — see lines ~1530/1550).
+        let fenceContentRanges = MarkdownInlineParser.findFencedCodeBlocks(in: textView.string)
+            .map(\.contentRange)
+        if fenceContentRanges.contains(where: { NSLocationInRange(range.location, $0) }) {
+            return
+        }
+
         let lineRange = nsBody.lineRange(for: range)
         let lineEnd = lineRange.location + lineRange.length
         let lineText = lineRange.length > 0 ? nsBody.substring(with: lineRange) : ""
