@@ -395,4 +395,44 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "--\n").isEmpty,
                       "Two dashes is not enough — minimum is three")
     }
+
+    // MARK: - Thematic breaks — fenced-code-block fence awareness (260524-hul)
+
+    func test_thematicBreak_insideFence_blankLineBefore_doesNotMatch() {
+        // Exact repro shape from the bug report: a fenced code block whose
+        // content contains a blank line followed by `---`. The parser must
+        // NOT tag the `---` as a thematic break — it is source text inside
+        // a code block. Pre-fix this returned 1 range and the storage layer
+        // drew a hairline through the code block.
+        let body = "```\ncode\n\n---\nmore code\n```\n"
+        let matches = MarkdownInlineParser.findThematicBreaks(in: body)
+        XCTAssertTrue(matches.isEmpty,
+                      "`---` inside a fence content range must not be a thematic break")
+    }
+
+    func test_thematicBreak_outsideFence_stillMatches_aroundFence() {
+        // Closing fence, blank line, then `---`. The filter only excludes
+        // fence *content*, so a `---` that lives strictly after the closing
+        // fence line must still be tagged as a thematic break.
+        let body = "```\ncode\n```\n\n---\n"
+        let matches = MarkdownInlineParser.findThematicBreaks(in: body)
+        XCTAssertEqual(matches.count, 1,
+                       "`---` after the closing fence must still match — filter only excludes fence *content*")
+        // `---` starts at offset 13: "```\ncode\n```\n\n" = 4 + 5 + 4 + 1 = 14? Recompute:
+        // "```\n" = 4, "code\n" = 5, "```\n" = 4, "\n" = 1 → total before `---` = 14? Let's compute UTF-16 length precisely.
+        // ns.length of prefix "```\ncode\n```\n\n" = 14. So `---` at 14.
+        XCTAssertEqual(matches[0], NSRange(location: 14, length: 3),
+                       "Range covers `---` line content after the closing fence")
+    }
+
+    func test_thematicBreak_unterminatedFence_blankDashLine_stillMatches() {
+        // Per findFencedCodeBlocks doc (line 791), an unterminated fence
+        // yields NO match. The thematic-break filter therefore has nothing
+        // to subtract, and the `---` is still an HR. Consistent with how
+        // findTableBlocks (line ~875) treats unterminated fences.
+        let body = "```\n\n---\n"
+        let matches = MarkdownInlineParser.findThematicBreaks(in: body)
+        XCTAssertEqual(matches.count, 1,
+                       "Unterminated fence yields no FencedCodeMatch → `---` outside any tracked fence is still a thematic break")
+    }
 }

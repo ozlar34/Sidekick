@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Sidekick
 
 /// Pins the pure string-transformation contract that backs the
@@ -756,5 +757,81 @@ final class FormattingToolbarTests: XCTestCase {
             range: NSRange(location: 5, length: 0)
         )
         XCTAssertEqual(result.newBody, body, "Strikethrough wrap also inert inside fence")
+    }
+
+    // MARK: - performInsertThematicBreak fence awareness (260524-hul)
+
+    /// Builds the minimum TextKit assembly so `performInsertThematicBreak`
+    /// can be invoked against a real NSTextView. Mirrors the wiring used by
+    /// `EditorInteractionTests.makeStack` (storage + MarkdownLayoutManager +
+    /// container + NSTextView; `isRichText = false`).
+    @MainActor
+    private func makeTextViewStack(body: String, selection: NSRange) -> NSTextView {
+        let storage = MarkdownTextStorage()
+        let layoutManager = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 400, height: 400))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        let textView = NSTextView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 400),
+            textContainer: container
+        )
+        textView.isRichText = false
+        if !body.isEmpty {
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: body)
+        }
+        textView.setSelectedRange(selection)
+        return textView
+    }
+
+    @MainActor
+    func test_performInsertThematicBreak_caretInsideFence_noEdit() {
+        // Caret placed inside the fence content (between `code` and the
+        // closing fence). The toolbar HR button must be a silent no-op —
+        // no string change, no selection change. Pre-fix, this manufactured
+        // the bug by inserting `\n---\n\n`, which the parser then tagged
+        // as an HR straight through the code block.
+        let body = "```\ncode\n```\n"
+        // contentRange covers "code\n" at offsets 4..9. Place caret at 8
+        // (end of "code", before its trailing newline) — squarely inside.
+        let caret = NSRange(location: 8, length: 0)
+        let textView = makeTextViewStack(body: body, selection: caret)
+
+        let stringBefore = textView.string
+        let selectionBefore = textView.selectedRange()
+
+        FormattingToolbarView.performInsertThematicBreak(in: textView)
+
+        XCTAssertEqual(textView.string, stringBefore,
+                       "Caret inside fence: no body mutation")
+        XCTAssertEqual(textView.selectedRange(), selectionBefore,
+                       "Caret inside fence: no selection mutation")
+    }
+
+    @MainActor
+    func test_performInsertThematicBreak_caretOutsideFence_stillInserts() {
+        // Caret at the end of the closing-fence line (location 12, just
+        // before the trailing newline). Outside every fence content range
+        // (contentRange spans offsets 4..<9), so normal insertion proceeds.
+        // Pins no regression on the happy path.
+        //   "```\n"  = 0..<4
+        //   "code\n" = 4..<9   ← contentRange
+        //   "```"   = 9..<12   ← closing fence line text
+        //   "\n"    = 12..<13
+        let body = "```\ncode\n```\n"
+        let caret = NSRange(location: 12, length: 0)
+        let textView = makeTextViewStack(body: body, selection: caret)
+
+        let lengthBefore = (textView.string as NSString).length
+
+        FormattingToolbarView.performInsertThematicBreak(in: textView)
+
+        XCTAssertTrue(textView.string.contains("---"),
+                      "Caret outside fence: `---` must be inserted")
+        // Closing fence line has content + trailing newline → insertion is
+        // "\n---\n\n" (length 6).
+        let lengthAfter = (textView.string as NSString).length
+        XCTAssertEqual(lengthAfter - lengthBefore, 6,
+                       "Insertion shape `\\n---\\n\\n` adds exactly 6 UTF-16 units")
     }
 }
