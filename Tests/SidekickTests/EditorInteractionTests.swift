@@ -193,18 +193,22 @@ final class EditorInteractionTests: XCTestCase {
                        "Caret jumps to end of empty separator line above the HR")
     }
 
-    func test_thematicBreakReturn_caretMidDashes_alsoMovesCaretAbove() {
+    func test_thematicBreakReturn_caretMidDashes_treatedAsRightEdge() {
         // Caret at offset 2 (between first and second dash) — drawInsertionPoint
-        // shifts this visually to the right edge of the hairline, but the
-        // handler treats the entire HR line as an atomic boundary.
+        // shifts this visually to the right edge of the hairline. Right-edge
+        // semantics: Enter is end-of-block → insert a blank line BELOW the HR.
+        // (Pre-fix the handler escaped UP regardless of offset; that felt
+        // wrong on the right edge and is what this test now pins against.)
         let stack = makeStack(body: "\n---\n\n", selection: NSRange(location: 2, length: 0))
         let handled = stack.coordinator.textView(
             stack.textView,
             doCommandBy: #selector(NSResponder.insertNewline(_:))
         )
         XCTAssertTrue(handled)
-        XCTAssertEqual(stack.textView.string, "\n---\n\n")
-        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+        XCTAssertEqual(stack.textView.string, "\n---\n\n\n",
+                       "Right-edge Enter inserts `\\n` at lineEnd (one past the HR's trailing `\\n`)")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 5, length: 0),
+                       "Caret parks on the new blank line below the HR")
     }
 
     func test_thematicBreakReturn_hrAtDocStart_opensBlankLineAbove() {

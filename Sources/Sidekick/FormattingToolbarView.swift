@@ -1865,10 +1865,26 @@ struct FormattingToolbarView: View {
     /// stacks new hairlines per keystroke: the inserted `\n` inherits
     /// `.sidekickThematicBreak` from typing attributes (or survives the
     /// paragraph-scoped reparse) and the layout manager paints one hairline
-    /// per contiguous TB run. Treat the HR as an atomic block boundary
-    /// instead — Enter escapes upward to the empty separator line above
-    /// (parser guarantees it exists per MarkdownInlineParser.swift
-    /// `prevLineIsEmpty`). Returns true when handled.
+    /// per contiguous TB run.
+    ///
+    /// Branch on caret offset within the HR line, because the caret-shift
+    /// trick in `HybridTextView.drawInsertionPoint` makes offset 0 vs
+    /// offset>0 visually distinguishable (left edge vs right edge of the
+    /// hairline) and the user mental model differs for each:
+    ///   • offset 0 (left edge): the caret is at the boundary entering the
+    ///     HR from above — escape UP to the empty separator (parser
+    ///     guarantees it exists per MarkdownInlineParser.swift
+    ///     `prevLineIsEmpty`). Doc-start HR has no separator above, so open
+    ///     one with a clean `\n` and place the caret on it.
+    ///   • offset > 0 (right edge): the caret is past the HR — Enter is
+    ///     end-of-block, insert a `\n` AFTER the HR's trailing `\n` (i.e.
+    ///     at `lineEnd`) and park the caret on the new blank line. Safe
+    ///     from hairline stacking: the insertion is in a NEW paragraph
+    ///     adjacent to the HR's `\n` (no TB attr), and the markdown
+    ///     reparse only re-applies `.sidekickThematicBreak` to the `---`
+    ///     range itself.
+    ///
+    /// Returns true when handled.
     static func handleThematicBreakReturn(in textView: NSTextView) -> Bool {
         let body = textView.string
         let nsBody = body as NSString
@@ -1883,10 +1899,26 @@ struct FormattingToolbarView: View {
                                 at: lineRange.location,
                                 effectiveRange: nil) != nil else { return false }
 
-        // Doc-start HR has no separator line above. Open one with a clean
-        // `\n` (no TB attrs via shouldChangeText sandwich → typingAttributes
-        // path; at location 0 there is no preceding TB-tagged char to
-        // inherit from) and place the caret on it.
+        let offsetInLine = selection.location - lineRange.location
+
+        // RIGHT EDGE (offset > 0): escape DOWN. Insert `\n` at lineEnd
+        // (one past the HR's trailing `\n`, or at storage.length if the HR
+        // is the final block with no trailing `\n`) and place the caret on
+        // the new blank line.
+        if offsetInLine > 0 {
+            let lineEnd = lineRange.location + lineRange.length
+            let editRange = NSRange(location: lineEnd, length: 0)
+            guard textView.shouldChangeText(in: editRange, replacementString: "\n") else { return false }
+            textView.replaceCharacters(in: editRange, with: "\n")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineEnd, length: 0))
+            return true
+        }
+
+        // LEFT EDGE, doc-start HR: no separator line above. Open one with
+        // a clean `\n` (no TB attrs via shouldChangeText sandwich →
+        // typingAttributes path; at location 0 there is no preceding
+        // TB-tagged char to inherit from) and place the caret on it.
         if lineRange.location == 0 {
             let editRange = NSRange(location: 0, length: 0)
             guard textView.shouldChangeText(in: editRange, replacementString: "\n") else { return false }
@@ -1896,10 +1928,11 @@ struct FormattingToolbarView: View {
             return true
         }
 
-        // Pure caret move — no text mutation, no shouldChangeText needed.
-        // Position `lineRange.location - 1` is the `\n` of the line above;
-        // selecting that location places the caret at the END of that line
-        // (which is the empty separator), ready for typing.
+        // LEFT EDGE, normal HR: pure caret move — no text mutation, no
+        // shouldChangeText needed. Position `lineRange.location - 1` is
+        // the `\n` of the line above; selecting that location places the
+        // caret at the END of that line (which is the empty separator),
+        // ready for typing.
         textView.setSelectedRange(NSRange(location: lineRange.location - 1, length: 0))
         return true
     }
