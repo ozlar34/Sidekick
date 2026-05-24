@@ -559,12 +559,21 @@ enum MarkdownInlineParser {
     ///
     /// To rule out heading underlines (`Title\n---`) and table separators,
     /// callers (MarkdownTextStorage.applyThematicBreak) should additionally
-    /// check that the previous line is empty. Fenced-code-block expansion is
-    /// handled at the storage layer (the reparse range subsumes the fence).
+    /// check that the previous line is empty. Lines whose range intersects a
+    /// fenced-code-block content range are excluded — `---` inside a fence is
+    /// source text, not an HR (mirrors the `findTableBlocks` fence filter).
     static func findThematicBreaks(in string: String) -> [NSRange] {
         let ns = string as NSString
         let fullLength = ns.length
         guard fullLength > 0 else { return [] }
+
+        // Lines inside a fenced code block are claimed by the fence and must
+        // not be re-interpreted as a thematic break (mirrors the
+        // `findTableBlocks` fence filter at line ~875).
+        let fenceContentRanges = findFencedCodeBlocks(in: string).map(\.contentRange)
+        func intersectsFence(_ r: NSRange) -> Bool {
+            fenceContentRanges.contains { NSIntersectionRange($0, r).length > 0 }
+        }
 
         var results: [NSRange] = []
         var lineStart = 0
@@ -600,7 +609,10 @@ enum MarkdownInlineParser {
                     prevLineIsEmpty = prevText.isEmpty
                 }
                 if prevLineIsEmpty {
-                    results.append(NSRange(location: lineRange.location, length: matchLength))
+                    let candidate = NSRange(location: lineRange.location, length: matchLength)
+                    if !intersectsFence(candidate) {
+                        results.append(candidate)
+                    }
                 }
             }
 
