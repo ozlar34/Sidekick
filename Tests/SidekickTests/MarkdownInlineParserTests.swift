@@ -367,12 +367,15 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertEqual(matches[0], NSRange(location: 12, length: 3))
     }
 
-    func test_thematicBreak_setextHeading_doesNotMatch() {
-        // `Title\n---` is a setext H2 underline (paragraph immediately above).
-        // We don't render setext headings, but we also shouldn't render the
-        // dashes as a thematic break — the visual ambiguity wins.
+    func test_thematicBreak_underNonEmptyLine_stillMatches() {
+        // CommonMark would treat `Title\n---` as a setext H2 underline, but
+        // Sidekick does not render setext headings — and a user-visible bug
+        // (HR appears then vanishes on note switch) followed from the earlier
+        // prev-line-empty guard. We now treat any qualifying `---` line as
+        // an HR regardless of what's above.
         let matches = MarkdownInlineParser.findThematicBreaks(in: "Title\n---\n")
-        XCTAssertTrue(matches.isEmpty, "Dashes directly under a non-empty line are setext H2 — must skip")
+        XCTAssertEqual(matches.count, 1, "`---` under a non-empty line must still match (no setext-H2 guard)")
+        XCTAssertEqual(matches[0], NSRange(location: 6, length: 3))
     }
 
     func test_thematicBreak_dashesOnly_asterisksAndUnderscoresExcluded() {

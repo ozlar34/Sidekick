@@ -557,11 +557,17 @@ enum MarkdownInlineParser {
     /// `***` collides with bold-italic typing (`**` + `**`) and produced
     /// surprise rules.
     ///
-    /// To rule out heading underlines (`Title\n---`) and table separators,
-    /// callers (MarkdownTextStorage.applyThematicBreak) should additionally
-    /// check that the previous line is empty. Lines whose range intersects a
-    /// fenced-code-block content range are excluded — `---` inside a fence is
-    /// source text, not an HR (mirrors the `findTableBlocks` fence filter).
+    /// Lines whose range intersects a fenced-code-block content range are
+    /// excluded — `---` inside a fence is source text, not an HR (mirrors
+    /// the `findTableBlocks` fence filter).
+    ///
+    /// NO previous-line-empty guard: CommonMark's setext-H2 disambiguation
+    /// (`Title\n---` is a heading underline, not a thematic break) does not
+    /// apply here because Sidekick does not render setext headings. Users
+    /// expect a `---` line to draw a hairline regardless of what's above.
+    /// The earlier guard also caused a paragraph-scope vs full-doc parsing
+    /// asymmetry that produced a "HR appears, then vanishes on note switch"
+    /// bug.
     static func findThematicBreaks(in string: String) -> [NSRange] {
         let ns = string as NSString
         let fullLength = ns.length
@@ -595,24 +601,19 @@ enum MarkdownInlineParser {
             let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
 
             if Self.thematicBreakRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
-                // Heading-underline guard: a `---` line directly under a non-
-                // empty line is a setext H2 underline, not a thematic break.
-                // Same for `===`. We don't support setext headings, but the
-                // visual ambiguity is enough to skip the hairline render — the
-                // user expects the dashes to read as text in that case.
-                let prevLineIsEmpty: Bool
-                if lineRange.location == 0 {
-                    prevLineIsEmpty = true
-                } else {
-                    let prevLineRange = ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
-                    let prevText = ns.substring(with: prevLineRange).trimmingCharacters(in: .whitespacesAndNewlines)
-                    prevLineIsEmpty = prevText.isEmpty
-                }
-                if prevLineIsEmpty {
-                    let candidate = NSRange(location: lineRange.location, length: matchLength)
-                    if !intersectsFence(candidate) {
-                        results.append(candidate)
-                    }
+                // The previous-line-empty guard (CommonMark setext-H2
+                // disambiguation) was removed: Sidekick doesn't render
+                // setext headings, and users expect a `---` line to render
+                // as a hairline regardless of what's above it. The previous
+                // guard also produced a substring-scoping bug — paragraph-
+                // scoped reparses saw the `---` at substring-offset 0 and
+                // accepted it, while full-doc reparses correctly rejected,
+                // making the HR appear briefly and then vanish on note
+                // switch. Treating `---` as HR unconditionally is consistent
+                // across both reparse scopes.
+                let candidate = NSRange(location: lineRange.location, length: matchLength)
+                if !intersectsFence(candidate) {
+                    results.append(candidate)
                 }
             }
 

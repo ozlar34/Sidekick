@@ -269,25 +269,99 @@ class HybridTextView: NSTextView {
         super.setConstrainedFrameSize(size)
     }
 
-    /// Tracks the last rect we drew a shifted HR-line caret at, so we can
-    /// invalidate it on the next selection change. NSTextView caches the
-    /// *unshifted* caret rect for its own setNeedsDisplay invalidation, so
-    /// if we don't manually invalidate the shifted position, the caret
-    /// pixel persists as a ghost when the caret moves away.
-    private var lastShiftedCaretRect: NSRect?
-
-    /// Selection changes are the trigger for HR-caret ghost cleanup. We
-    /// override the most-primitive selection setter (multi-range form) so
-    /// every path — keyboard, mouse, programmatic — invalidates the prior
-    /// shifted rect before NSTextView updates internal state.
+    /// Compute the position to snap a caret to when `target` lands on a
+    /// thematic-break line. Returns `nil` if no snap is needed (target is
+    /// not on an HR line, or the line is the entire document so there is
+    /// nowhere to go).
     ///
-    /// quick-260523-29t: also the trigger for armed-inline cancel. Any non-
-    /// still-selecting selection change clears the armed set UNLESS the
-    /// one-shot `suppressArmedClearOnNextSelectionChange` flag is set (which
-    /// `insertText` raises around its own programmatic caret-placement call).
-    /// `stillSelecting == true` means a drag is in progress — don't clear
-    /// arming mid-drag; AppKit will fire one final `stillSelecting == false`
-    /// call when the drag ends and THAT clears.
+    /// HR lines are uninhabitable by design: the dash glyphs are zero-width
+    /// (`.sidekickHiddenMarker` ORs `.null` into the glyph property), so
+    /// every caret position INSIDE the line collapses to a single visual
+    /// point. Letting the caret rest there produces a misleading position
+    /// — natural NSTextView puts it at x=0 (left edge), older overrides
+    /// shifted it to the right edge of the hairline; both lie about where
+    /// the next typed character will visually land. Pushing the caret to
+    /// the line above or below keeps user mental model coherent (matches
+    /// Bear / iA Writer).
+    ///
+    /// Direction inferred from `previous`:
+    ///   * `target > previous` → caret moving forward, snap DOWN to the
+    ///     start of the line below HR.
+    ///   * `target ≤ previous` → moving backward, snap UP to the end of
+    ///     the line above HR.
+    /// If only one neighbor exists, that wins regardless of direction.
+    /// If neither exists (HR is the whole document), return `nil` and
+    /// leave the caret alone — degenerate case, no good answer.
+    private func snapCaretOutOfHR(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target >= 0, target <= n else { return nil }
+
+        // lineRange wants an index INSIDE the string. Clamp at n-1 for
+        // the end-of-doc case where target == n (one past last char).
+        let probeLoc = min(target, n - 1)
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: probeLoc, length: 0))
+        guard lineRange.length > 0 else { return nil }
+
+        var foundHR = false
+        storage.enumerateAttribute(
+            .sidekickThematicBreak,
+            in: lineRange,
+            options: []
+        ) { value, _, stop in
+            if (value as? Bool) == true {
+                foundHR = true
+                stop.pointee = true
+            }
+        }
+        guard foundHR else { return nil }
+
+        // Same-line exemption: if `previous` was on the SAME line as
+        // `target`, the user is moving within the line (typing, or
+        // intra-line navigation that landed on a freshly-converted HR).
+        // Don't snap — they haven't crossed a line boundary, and yanking
+        // them off the line they just typed on would be jarring. Snap
+        // only takes effect when caret crosses a line boundary INTO HR
+        // (arrow keys, clicks from another line, etc.).
+        let prevProbe = min(max(previous, 0), n - 1)
+        if prevProbe >= 0 {
+            let prevLineRange = ns.lineRange(for: NSRange(location: prevProbe, length: 0))
+            if NSEqualRanges(prevLineRange, lineRange) {
+                return nil
+            }
+        }
+
+        let hasAbove = lineRange.location > 0
+        let lineEndsWithNewline =
+            ns.character(at: lineRange.location + lineRange.length - 1) == 0x0A
+        let hasBelow = lineEndsWithNewline
+
+        let aboveLoc = lineRange.location - 1
+        let belowLoc = lineRange.location + lineRange.length
+
+        if !hasAbove && !hasBelow { return nil }
+        if !hasAbove { return belowLoc }
+        if !hasBelow { return aboveLoc }
+        return target > previous ? belowLoc : aboveLoc
+    }
+
+    /// Selection-change funnel — every keyboard, mouse, and programmatic
+    /// selection change reaches this override.
+    ///
+    /// Two responsibilities:
+    ///   1. quick-260523-29t armed-inline cancel: any non-still-selecting
+    ///      change clears the armed set, UNLESS the one-shot
+    ///      `suppressArmedClearOnNextSelectionChange` flag is set (which
+    ///      `insertText` raises around its own programmatic caret-placement
+    ///      call). `stillSelecting == true` is a drag-in-progress — don't
+    ///      clear arming mid-drag; AppKit fires a final `stillSelecting ==
+    ///      false` when the drag ends and THAT clears.
+    ///   2. HR-line caret-skip: when the proposed selection is a single
+    ///      zero-length caret landing on a thematic-break line, redirect
+    ///      it to the nearest non-HR neighbor before passing to super.
+    ///      Range selections (length > 0) are left alone so a user can
+    ///      shift-select across an HR.
     override func setSelectedRanges(
         _ ranges: [NSValue],
         affinity: NSSelectionAffinity,
@@ -302,46 +376,20 @@ class HybridTextView: NSTextView {
                 republishArmedKinds()
             }
         }
-        if let prev = lastShiftedCaretRect {
-            setNeedsDisplay(prev.insetBy(dx: -2, dy: -2))
-            lastShiftedCaretRect = nil
-        }
-        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-    }
 
-    /// On a thematic-break line the `---` source glyphs are zero-width
-    /// (.null), so NSTextView's natural caret rect lands at x=0 for every
-    /// position inside the line. Visually, the user sees the caret stuck
-    /// at the left edge regardless of arrow-key movement. We detect a
-    /// caret whose preceding character carries `.sidekickThematicBreak`
-    /// and shift the draw rect to the right edge of the hairline — where
-    /// the rendered horizontal rule visually ends.
-    ///
-    /// Position 0 of an HR line (probe char has no thematic break attr)
-    /// stays at the left edge so down-arrow from above lands sensibly.
-    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        if let storage = textStorage,
-           let tc = textContainer,
-           selectedRange().length == 0 {
-            let caret = selectedRange().location
-            let n = storage.length
-            if caret > 0,
-               caret - 1 < n,
-               storage.attribute(.sidekickThematicBreak,
-                                 at: caret - 1,
-                                 effectiveRange: nil) != nil {
-                let inset = tc.lineFragmentPadding
-                let caretWidth = max(rect.width, 1)
-                var shifted = rect
-                shifted.origin.x = textContainerOrigin.x + tc.size.width - inset - caretWidth
-                super.drawInsertionPoint(in: shifted, color: color, turnedOn: flag)
-                if flag {
-                    lastShiftedCaretRect = shifted
-                }
-                return
-            }
+        var effectiveRanges = ranges
+        if !stillSelecting,
+           ranges.count == 1,
+           let proposed = ranges.first?.rangeValue,
+           proposed.length == 0,
+           let snapped = snapCaretOutOfHR(
+               target: proposed.location,
+               previous: selectedRange().location
+           ) {
+            effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
         }
-        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+
+        super.setSelectedRanges(effectiveRanges, affinity: affinity, stillSelecting: stillSelecting)
     }
 
     override func viewDidMoveToSuperview() {

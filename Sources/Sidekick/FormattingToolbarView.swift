@@ -1858,31 +1858,22 @@ struct FormattingToolbarView: View {
         }
     }
 
-    /// Enter handler for thematic-break lines. The HR's `---` glyphs are
-    /// rendered zero-width with a hairline drawn over them, so the caret can
-    /// land at positions 0..lineLen of an HR line while looking like it's on
-    /// the hairline. Letting AppKit's default `insertNewline:` fire there
-    /// stacks new hairlines per keystroke: the inserted `\n` inherits
-    /// `.sidekickThematicBreak` from typing attributes (or survives the
-    /// paragraph-scoped reparse) and the layout manager paints one hairline
-    /// per contiguous TB run.
+    /// Enter handler for thematic-break lines. Defense-in-depth: production
+    /// code paths can't reach this anymore because `HybridTextView.snapCaretOutOfHR`
+    /// prevents the caret from landing on an HR line in the first place.
+    /// The handler stays for direct programmatic invocations and unit-test
+    /// coverage of the underlying invariant — "Enter on an HR line must not
+    /// fall through to default `insertNewline:`, which would inherit
+    /// `.sidekickThematicBreak` via typing attributes and stack hairlines."
     ///
-    /// Branch on caret offset within the HR line, because the caret-shift
-    /// trick in `HybridTextView.drawInsertionPoint` makes offset 0 vs
-    /// offset>0 visually distinguishable (left edge vs right edge of the
-    /// hairline) and the user mental model differs for each:
-    ///   • offset 0 (left edge): the caret is at the boundary entering the
-    ///     HR from above — escape UP to the empty separator (parser
-    ///     guarantees it exists per MarkdownInlineParser.swift
-    ///     `prevLineIsEmpty`). Doc-start HR has no separator above, so open
-    ///     one with a clean `\n` and place the caret on it.
-    ///   • offset > 0 (right edge): the caret is past the HR — Enter is
-    ///     end-of-block, insert a `\n` AFTER the HR's trailing `\n` (i.e.
-    ///     at `lineEnd`) and park the caret on the new blank line. Safe
-    ///     from hairline stacking: the insertion is in a NEW paragraph
-    ///     adjacent to the HR's `\n` (no TB attr), and the markdown
-    ///     reparse only re-applies `.sidekickThematicBreak` to the `---`
-    ///     range itself.
+    /// Branches on caret offset within the HR line:
+    ///   • offset 0: escape UP — pure caret move to the line above (or
+    ///     open a fresh `\n` at the doc-start case where there is none).
+    ///   • offset > 0: escape DOWN — insert a `\n` AFTER the HR's trailing
+    ///     `\n` (at `lineEnd`) and park the caret on the new blank line.
+    ///     Safe from hairline stacking: the insertion is in a NEW paragraph
+    ///     adjacent to the HR's `\n` (no TB attr), and the reparse only
+    ///     re-applies `.sidekickThematicBreak` to the `---` range itself.
     ///
     /// Returns true when handled.
     static func handleThematicBreakReturn(in textView: NSTextView) -> Bool {
