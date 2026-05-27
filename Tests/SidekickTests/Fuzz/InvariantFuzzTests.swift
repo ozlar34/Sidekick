@@ -19,10 +19,25 @@ import AppKit
 final class InvariantFuzzTests: XCTestCase {
 
     // MARK: - Tunables
+    //
+    // Env-var overrides for deeper scans:
+    //   SIDEKICK_FUZZ_SEEDS=5000 SIDEKICK_FUZZ_BUDGET=120 swift test --filter InvariantFuzzTests
+    // SIDEKICK_FUZZ_STEPS overrides maxStepsPerSeed (default 30).
 
-    private static let seedCount: Int = 200
-    private static let maxStepsPerSeed: Int = 30
+    private static let defaultSeedCount: Int = 200
+    private static let defaultMaxStepsPerSeed: Int = 30
+    private static let defaultBudgetSeconds: Int = 10
     private static let minStepsPerSeed: Int = 10
+
+    private static func envInt(_ key: String, default fallback: Int) -> Int {
+        guard let raw = ProcessInfo.processInfo.environment[key],
+              let n = Int(raw), n > 0 else { return fallback }
+        return n
+    }
+
+    private static var seedCount: Int { envInt("SIDEKICK_FUZZ_SEEDS", default: defaultSeedCount) }
+    private static var maxStepsPerSeed: Int { envInt("SIDEKICK_FUZZ_STEPS", default: defaultMaxStepsPerSeed) }
+    private static var budgetSeconds: Int { envInt("SIDEKICK_FUZZ_BUDGET", default: defaultBudgetSeconds) }
 
     // MARK: - Seeded RNG (xorshift64)
     //
@@ -264,13 +279,14 @@ final class InvariantFuzzTests: XCTestCase {
         }
 
         let elapsed = ContinuousClock.now - start
-        // Generous 10s budget so CI noise doesn't flake. Tune `seedCount`
-        // / `maxStepsPerSeed` at the top of this file if this trips.
+        // Generous 10s default budget so CI noise doesn't flake. Tune via
+        // SIDEKICK_FUZZ_BUDGET env var or the defaults at the top of this file.
         // Measured on M1 (2026-05-27): 0.624s typical for 200×30.
+        let budget = Self.budgetSeconds
         XCTAssertLessThan(
             elapsed,
-            .seconds(10),
-            "Fuzzer budget overrun (\(elapsed)) — reduce seedCount or maxStepsPerSeed at the top of this file"
+            .seconds(budget),
+            "Fuzzer budget overrun (\(elapsed) > \(budget)s) — raise SIDEKICK_FUZZ_BUDGET or reduce SIDEKICK_FUZZ_SEEDS / SIDEKICK_FUZZ_STEPS"
         )
     }
 

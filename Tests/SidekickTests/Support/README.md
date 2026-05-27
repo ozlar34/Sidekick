@@ -43,12 +43,26 @@ so the suite stays green.
 
 ## Tuning the fuzzer
 
-The tunables block sits at the top of
-`Tests/SidekickTests/Fuzz/InvariantFuzzTests.swift`. Defaults: 200 seeds ×
-30 steps each, measured runtime ~0.6s on M1 with a 10s budget guard. To
-make it faster: lower `seedCount` or `maxStepsPerSeed`. To make it thorough
-for an overnight run: raise `seedCount` to 5000 (the budget guard will
-trip and tell you to relax the assertion).
+Defaults: 200 seeds × up to 30 steps each, measured runtime ~0.6s on M1
+with a 10s budget guard.
+
+**Per-run overrides (preferred — no code edits):**
+
+```bash
+# Standard scan (every swift test invocation)
+swift test --filter InvariantFuzzTests
+
+# Deep scan (~30s on M1)
+SIDEKICK_FUZZ_SEEDS=5000 SIDEKICK_FUZZ_BUDGET=120 swift test --filter InvariantFuzzTests
+
+# Overnight thorough sweep
+SIDEKICK_FUZZ_SEEDS=50000 SIDEKICK_FUZZ_STEPS=60 SIDEKICK_FUZZ_BUDGET=3600 swift test --filter InvariantFuzzTests
+```
+
+Env vars: `SIDEKICK_FUZZ_SEEDS`, `SIDEKICK_FUZZ_STEPS`, `SIDEKICK_FUZZ_BUDGET`
+(seconds). Any zero/invalid value falls back to the default. Permanent changes:
+edit the `default*` constants at the top of
+`Tests/SidekickTests/Fuzz/InvariantFuzzTests.swift`.
 
 ## Why no NSWindow
 
