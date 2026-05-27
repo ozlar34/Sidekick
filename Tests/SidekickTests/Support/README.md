@@ -64,10 +64,55 @@ Env vars: `SIDEKICK_FUZZ_SEEDS`, `SIDEKICK_FUZZ_STEPS`, `SIDEKICK_FUZZ_BUDGET`
 edit the `default*` constants at the top of
 `Tests/SidekickTests/Fuzz/InvariantFuzzTests.swift`.
 
-## Why no NSWindow
+## Why no NSWindow (Layer 1)
 
 The stack assembly mirrors `EditorInteractionTests.makeStack`. AppKit's
 NSTextView works without a window for the delegate/storage/layout paths
 we test (delegate dispatch, text mutation, attribute application, parser
 re-runs). UI rendering and gesture paths are NOT covered by this harness
-— use SwiftUI previews / interactive runs for those.
+— use Layer 4 (below) or SwiftUI previews / interactive runs for those.
+
+## Layer 4 — HostedEditorRunner + AttributeSnapshot
+
+`HostedEditorRunner` wraps a `KeystrokeRunner` inside a real `NSWindow` +
+`NSScrollView` with the text view as first responder. Same `type/key/select`
+API plus:
+
+- `attributedString` — immutable copy of the storage, snapshot-ready.
+- `renderImage()` / `writePNG(to:)` — ad-hoc visual capture (not yet wired
+  into automated diffs).
+
+`AttributeSnapshot.serialize(_:)` emits a deterministic per-run textual
+dump (sorted attribute keys, system-color identity, font postscript name
++ traits, paragraph-style fields only when they differ from default).
+Captures the styling surface where view-layer bugs live: marker glyph
+substitution signal, font traits, link / foreground / background colors,
+line-height + alignment, the six `sidekick*` custom marker attributes.
+
+```swift
+@MainActor final class MyVisualTests: XCTestCase {
+    func test_someStyling() {
+        let runner = HostedEditorRunner()
+        runner.type("# Hello")
+        let snap = AttributeSnapshot.serialize(runner.attributedString)
+        assertAttributeSnapshot(snap, named: "after-type", testCase: self)
+    }
+}
+```
+
+Baselines live at:
+
+```
+Tests/SidekickTests/__Snapshots__/<TestClass>/<testMethod>.<name>.snap
+```
+
+Re-record after an intentional change:
+
+```bash
+SIDEKICK_RECORD_SNAPSHOTS=1 swift test --filter HostedEditorSnapshotTests
+```
+
+Use Layer 4 when the bug being hunted lives in the view layer (marker
+glyph rendered wrong, color attribute wrong, paragraph spacing drifted,
+hidden-marker boundary off-by-one). Use Layer 1 (`KeystrokeRunner`
+alone) for body-string + selection assertions — faster and has no window.
