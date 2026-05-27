@@ -1,0 +1,3 @@
+SNAPSHOT v1 length=7
+[0,2) "# " NSColor=system:textColor NSFont={name=.SFNS-Regular,pt=15.0,traits=[]} NSParagraphStyle={paragraphSpacing=4.0,minimumLineHeight=32.0,maximumLineHeight=32.0} sidekickHiddenMarker=true
+[2,7) "Hello" NSColor=system:textColor NSFont={name=.SFNS-Semibold,pt=28.0,traits=[bold]} NSParagraphStyle={paragraphSpacing=4.0,minimumLineHeight=32.0,maximumLineHeight=32.0}

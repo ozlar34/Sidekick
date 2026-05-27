@@ -1,0 +1,4 @@
+SNAPSHOT v1 length=17
+[0,1) "-" NSColor=system:textColor NSFont={name=.SFNS-Semibold,pt=15.0,traits=[bold]} NSParagraphStyle={paragraphSpacing=7.0,headIndent=18.0,minimumLineHeight=20.0,maximumLineHeight=20.0} sidekickChecklistMarker=false
+[1,5) " [ ]" NSColor=system:textColor NSFont={name=.SFNS-Regular,pt=15.0,traits=[]} NSParagraphStyle={paragraphSpacing=7.0,headIndent=18.0,minimumLineHeight=20.0,maximumLineHeight=20.0} sidekickHiddenMarker=true
+[5,17) " write tests" NSColor=system:textColor NSFont={name=.SFNS-Regular,pt=15.0,traits=[]} NSParagraphStyle={paragraphSpacing=7.0,headIndent=18.0,minimumLineHeight=20.0,maximumLineHeight=20.0}
