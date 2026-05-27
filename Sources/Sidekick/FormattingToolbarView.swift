@@ -1929,10 +1929,15 @@ struct FormattingToolbarView: View {
     }
 
     /// Inserts a markdown thematic break (`---`) on its own line below the
-    /// caret line. The parser only treats `---` as a thematic break when the
-    /// preceding line is empty (else it is a setext-H2 underline candidate),
-    /// so non-empty caret lines get an extra blank line inserted between the
-    /// content and the break. One-shot insert — no toggle-off path.
+    /// caret line. One-shot insert — no toggle-off path.
+    ///
+    /// Insertion shape always sandwiches `---` between blank lines so the
+    /// rendered hairline has breathing room above and below — matches the
+    /// Bear / Typora / Notion convention (HR feels like a section break, not
+    /// a divider squeezed against text). The leading blank line is NOT a
+    /// parser requirement: `findThematicBreaks` accepts any line that is
+    /// only dashes regardless of what's above it (the setext-H2
+    /// disambiguation guard was intentionally removed — see parser comment).
     ///
     /// Edit-sandwich pattern matches `performBlockQuote`. Caret lands on a
     /// real empty line BELOW the inserted `---`. Each insertion always
