@@ -295,7 +295,7 @@ final class EditorInteractionTests: XCTestCase {
     }
 
     /// The character on line 2 also needs bodyParagraphStyle so its line box
-    /// is 18pt (body) and not 32pt (h1). Without this the caret on line 2
+    /// is body height and not 32pt (h1). Without this the caret on line 2
     /// remains tall even though the font is body — the paragraph style is
     /// the load-bearing attribute for caret height.
     func test_enterFromH1_thenTypeChar_charHasBodyParagraphStyle() {
@@ -311,8 +311,8 @@ final class EditorInteractionTests: XCTestCase {
         stack.textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
 
         let aStyle = stack.textView.textStorage?.attribute(.paragraphStyle, at: 10, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertEqual(aStyle?.maximumLineHeight, 18,
-            "F-06: line 2 char must use bodyParagraphStyle (line box 18pt), not h1ParagraphStyle (32pt)")
+        XCTAssertEqual(aStyle?.maximumLineHeight, MarkdownTextStorage.bodyParagraphStyle.maximumLineHeight,
+            "F-06: line 2 char must use bodyParagraphStyle line box, not h1ParagraphStyle (32pt)")
     }
 
     // MARK: - F-10 — Title→body Tab handoff
