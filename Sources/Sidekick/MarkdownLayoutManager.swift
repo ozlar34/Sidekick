@@ -220,8 +220,32 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let runGlyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
             guard runGlyphRange.length > 0 else { return }
 
+            // Find the line fragment to draw the hairline in. Anchor on the
+            // HR paragraph's TRAILING newline (the char immediately after the
+            // dash run), not the first dash. Why: in some glyph-layout paths
+            // (notably the full-text-replace path on note switch), the HR's
+            // .null dash glyphs get absorbed into the line fragment of the
+            // PRECEDING empty paragraph instead of starting a new line —
+            // chars `\n---` end up sharing one fragment with the dashes'
+            // trailing `\n` orphaned on its own next-line fragment. Anchoring
+            // on the trailing `\n` follows the HR's true paragraph and
+            // sidesteps that layout quirk. In the typed-incrementally path
+            // (where dashes generate their own line fragment normally), the
+            // trailing `\n` is in the SAME fragment as the dashes, so the
+            // anchor yields identical geometry. Either way the hairline lands
+            // on the HR's own line, never the line above.
+            let trailingNewlineChar = attrRange.location + attrRange.length
+            let anchorGlyphIndex: Int
+            if trailingNewlineChar < storage.length {
+                anchorGlyphIndex = self.glyphIndexForCharacter(at: trailingNewlineChar)
+            } else {
+                // HR is at end-of-buffer with no trailing newline — fall back
+                // to the dash run's own first glyph.
+                anchorGlyphIndex = runGlyphRange.location
+            }
+
             let lineRect = self.lineFragmentUsedRect(
-                forGlyphAt: runGlyphRange.location,
+                forGlyphAt: anchorGlyphIndex,
                 effectiveRange: nil
             )
             let inset = container.lineFragmentPadding
