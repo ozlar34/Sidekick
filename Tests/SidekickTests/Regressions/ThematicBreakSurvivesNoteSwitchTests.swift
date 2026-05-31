@@ -85,6 +85,84 @@ final class ThematicBreakSurvivesNoteSwitchTests: XCTestCase {
         assertDrawBackgroundFindsHR(runner: runner, charLocation: hrLocation, label: "after round trip (minimal)")
     }
 
+    // MARK: - Byte-preservation for `***` and `___` marker types
+
+    /// Byte-preservation guarantee: a `***` thematic break survives a full
+    /// note-switch round trip with its exact bytes intact — never normalized to `---`.
+    func test_asteriskRule_survivesRoundTrip_bytesPreserved() throws {
+        let noteA = "alpha\n\n***\n\nbeta"
+        let noteB = "no rule here"
+
+        let runner = HostedEditorRunner(initialBody: noteA)
+
+        // The `***` occupies chars 7..9 ("alpha\n\n" = 7 chars).
+        let hrLocation = (noteA as NSString).range(of: "***").location
+        XCTAssertEqual(hrLocation, 7, "Test setup sanity: *** starts at offset 7")
+
+        // Baseline: HR attribute stamped on the asterisk run after initial mount.
+        assertHRStamped(runner.attributedString, at: hrLocation, label: "initial mount")
+        XCTAssertTrue(runner.body.contains("***"),
+                      "Body must contain *** verbatim after initial mount")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "Body must NOT be normalized to --- after initial mount")
+
+        // Simulate note-switch to note B (no HR).
+        swapBody(runner, to: noteB)
+        XCTAssertFalse(
+            attributedStringHasAnyThematicBreak(runner.attributedString),
+            "Note B has no HR — no thematic-break attribute should exist anywhere"
+        )
+
+        // Simulate return to note A.
+        swapBody(runner, to: noteA)
+
+        // Round-trip assertion: HR re-stamped on the asterisk run.
+        assertHRStamped(runner.attributedString, at: hrLocation, label: "after round trip")
+        // Byte-preservation: the literal *** chars survived verbatim.
+        XCTAssertTrue(runner.body.contains("***"),
+                      "Body must still contain *** verbatim after round trip (no normalization)")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "Body must NOT be normalized to --- after round trip")
+    }
+
+    /// Byte-preservation guarantee: a `___` thematic break survives a full
+    /// note-switch round trip with its exact bytes intact — never normalized to `---`.
+    func test_underscoreRule_survivesRoundTrip_bytesPreserved() throws {
+        let noteA = "alpha\n\n___\n\nbeta"
+        let noteB = "no rule here"
+
+        let runner = HostedEditorRunner(initialBody: noteA)
+
+        // The `___` occupies chars 7..9 ("alpha\n\n" = 7 chars).
+        let hrLocation = (noteA as NSString).range(of: "___").location
+        XCTAssertEqual(hrLocation, 7, "Test setup sanity: ___ starts at offset 7")
+
+        // Baseline: HR attribute stamped on the underscore run after initial mount.
+        assertHRStamped(runner.attributedString, at: hrLocation, label: "initial mount")
+        XCTAssertTrue(runner.body.contains("___"),
+                      "Body must contain ___ verbatim after initial mount")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "Body must NOT be normalized to --- after initial mount")
+
+        // Simulate note-switch to note B (no HR).
+        swapBody(runner, to: noteB)
+        XCTAssertFalse(
+            attributedStringHasAnyThematicBreak(runner.attributedString),
+            "Note B has no HR — no thematic-break attribute should exist anywhere"
+        )
+
+        // Simulate return to note A.
+        swapBody(runner, to: noteA)
+
+        // Round-trip assertion: HR re-stamped on the underscore run.
+        assertHRStamped(runner.attributedString, at: hrLocation, label: "after round trip")
+        // Byte-preservation: the literal ___ chars survived verbatim.
+        XCTAssertTrue(runner.body.contains("___"),
+                      "Body must still contain ___ verbatim after round trip (no normalization)")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "Body must NOT be normalized to --- after round trip")
+    }
+
     // MARK: - Helpers
 
     /// Drive the storage through the same begin/replace/end pattern that

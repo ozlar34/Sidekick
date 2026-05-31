@@ -154,14 +154,17 @@ enum MarkdownInlineParser {
         pattern: "^> ",
         options: []
     )
-    // Thematic break: a line consisting only of three or more `-` characters,
-    // with optional surrounding whitespace. CommonMark also permits `*` and
-    // `_` runs, but we intentionally restrict to dashes — `***` collides with
-    // bold-italic typing (`**` + `**`) and produced surprise horizontal rules.
+    // Thematic break: a line consisting only of three or more `-`, `*`, or `_`
+    // characters (a single marker class, no mixing), with optional surrounding
+    // whitespace. The alternation `(?:-{3,}|\*{3,}|_{3,})` requires all
+    // markers to be the same character, so `-*-` never matches. Whole-line
+    // anchoring (`^…$`) means any content character (e.g. letters in `**bold**`
+    // or `***bolditalic***`) breaks the match — this is the bold-italic
+    // disambiguation: those lines have non-marker text and cannot match.
     // The regex is run against single-line text (newline stripped before
     // matching) so `^…$` anchors the whole line.
     private static let thematicBreakRegex = try! NSRegularExpression(
-        pattern: "^[ \\t]*-{3,}[ \\t]*$",
+        pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$",
         options: []
     )
     private static let fenceRegex = try! NSRegularExpression(
@@ -548,14 +551,14 @@ enum MarkdownInlineParser {
         return results
     }
 
-    // MARK: Thematic breaks (`---`)
+    // MARK: Thematic breaks (`---` / `***` / `___`)
 
     /// Returns the line-content NSRange (no trailing newline) for every
     /// thematic-break line in `string`. A thematic break is a line containing
-    /// only three-or-more `-` characters with optional surrounding spaces/tabs.
-    /// CommonMark also accepts `***` and `___`, but we restrict to dashes —
-    /// `***` collides with bold-italic typing (`**` + `**`) and produced
-    /// surprise rules.
+    /// only three-or-more `-`, `*`, or `_` characters (single marker class,
+    /// no mixing) with optional surrounding spaces/tabs. Whole-line anchoring
+    /// makes `*`/`_` runs unambiguous from inline emphasis: `**bold**` has
+    /// content characters between markers and cannot match.
     ///
     /// Lines whose range intersects a fenced-code-block content range are
     /// excluded — `---` inside a fence is source text, not an HR (mirrors

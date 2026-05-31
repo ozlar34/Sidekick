@@ -61,12 +61,14 @@ extension NSAttributedString.Key {
     /// the hidden chars one at a time (D-MH-03).
     static let sidekickLinkChip = NSAttributedString.Key("sidekickLinkChip")
 
-    /// Marks a markdown thematic-break line (`---` standalone — we restrict
-    /// to dashes; `***` would collide with bold-italic typing).
+    /// Marks a markdown thematic-break line (`---`, `***`, or `___` standalone —
+    /// three or more of a single marker class on its own line). Whole-line
+    /// anchoring makes `*`/`_` unambiguous from inline emphasis (`**bold**`
+    /// has content between the markers and cannot match).
     /// Value is `Bool` (`true`). MarkdownTextStorage tags the line content
     /// range and dims it to tertiary; MarkdownLayoutManager reads this attribute
     /// in `drawBackground(forGlyphRange:at:)` to draw a 1pt hairline horizontally
-    /// across the line's used rect. Source bytes stay intact — the dashes still
+    /// across the line's used rect. Source bytes stay intact — the marker chars
     /// round-trip to disk (D-T-03), they're just visually muted underneath the
     /// rendered hairline.
     static let sidekickThematicBreak = NSAttributedString.Key("sidekickThematicBreak")
