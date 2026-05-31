@@ -5,138 +5,115 @@ import AppKit
 // Why this file lives in Regressions/:
 // HR research surfaced R15/R16/R17 (delete behavior around HRs) as a test
 // gap — production behavior was inferred-correct but unpinned. These tests
-// lock in the current behavior so any future change to atomic-delete logic,
-// the parser, or the caret-snap surfaces a deliberate diff instead of a
-// silent regression.
+// lock in the CURRENT behavior so any future change to the delete logic, the
+// parser, or the caret-snap surfaces a deliberate diff instead of a silent
+// regression.
+//
+// R15 and R16 were originally written to pin the OLD two-keystroke behavior
+// (first press collapsed the adjacent blank line; HR survived; second press
+// merged text into the HR line and the HR vanished). They were intentionally
+// INVERTED by HR-03 (requirement HR-03), which introduced
+// handleThematicBreakBackspace / handleThematicBreakForwardDelete. Those
+// handlers intercept the first keystroke when the caret sits on an EMPTY line
+// adjacent to an HR and remove the entire HR line (plus the empty line) in
+// one undo step.
 //
 // Current behavior pinned:
-//   • Backspace from the line immediately after HR (R15) — first press
-//     collapses the blank line below the HR; HR survives. Second press
-//     merges "after" content into the HR line; HR vanishes (line no longer
-//     matches the dashes-only regex).
-//   • Forward-delete from the line immediately before HR (R16) — symmetric
-//     with R15: first press collapses the blank above; HR survives. Second
-//     press merges "before" into the HR line; HR vanishes.
-//   • Selection-delete spanning HR (R17) — atomic; HR and surrounding
-//     newlines are removed in a single edit, no orphan blank lines.
-//
-// All three rules fall out of NSTextView's default delete behavior + the
-// storage reparse; there is no HR-specific delete handler. If we ever add
-// one (e.g. "Backspace adjacent to HR deletes the whole HR line atomically"),
-// these tests will fail and force the new behavior to be documented.
+//   • R15 — Backspace from the empty line directly below an HR: ONE keystroke
+//     removes the whole HR line and the empty line together; caret lands at
+//     the start of where the HR was. Non-empty adjacent lines are unaffected.
+//   • R16 — Forward-delete from the empty line directly above an HR: ONE
+//     keystroke removes the empty line and the whole HR line together; caret
+//     stays at its original position.
+//   • R17 — Selection-delete spanning HR: atomic; HR and surrounding
+//     newlines are removed in a single edit, no orphan blank lines (unchanged
+//     from the original file — range selections with length > 0 are not
+//     intercepted by the new caret-only handlers).
 @MainActor
 final class DeleteAroundHRTests: XCTestCase {
 
     /// Body: "before\n\n---\n\nafter"
     ///        b e f o r e \n \n -  -  -  \n \n a  f  t  e  r
     ///        0 1 2 3 4 5  6  7 8  9 10 11 12 13 14 15 16 17
-    /// HR is at chars 8..10 (3 dashes).
+    /// HR line "---\n" occupies chars 8..11.
+    /// Empty line below HR ("\n") is char 12.
+    /// Empty line above HR ("\n") is char 7.
     private let canonicalBody = "before\n\n---\n\nafter"
     private let hrLocation = 8
 
-    // MARK: - R15: Backspace from line after HR
+    // MARK: - R15: Backspace from empty line below HR (one-shot, HR-03)
 
-    /// First Backspace from start of "after" deletes the leading `\n` of
-    /// "after"'s line, collapsing the blank line between HR and "after".
-    /// The HR line itself is untouched, so the dashes-only regex still
-    /// matches and the HR attribute remains stamped.
-    func test_backspace_fromStartOfLineAfterHR_collapsesBlankBelow_hrSurvives() {
+    /// ONE Backspace from the start of the empty line directly below the HR
+    /// removes the entire HR line AND the empty line in a single undo step.
+    /// The caret lands at the start of where the HR was.
+    func test_backspace_onEmptyLineBelowHR_removesWholeRule_inOneKeystroke() {
         let runner = HostedEditorRunner(
             initialBody: canonicalBody,
-            initialSelection: NSRange(location: 13, length: 0)  // start of "after"
+            initialSelection: NSRange(location: 12, length: 0)  // start of empty line below HR
         )
         runner.key(.backspace)
 
         XCTAssertEqual(
-            runner.body, "before\n\n---\nafter",
-            "First backspace must collapse the blank line below HR but leave the `---` line intact"
+            runner.body, "before\n\nafter",
+            "One backspace from empty line below HR must remove the entire HR line and the empty line"
         )
-        assertHRStamped(runner.attributedString, at: hrLocation,
-                        label: "after first backspace")
+        XCTAssertFalse(
+            attributedStringHasAnyThematicBreak(runner.attributedString),
+            "No thematic break attribute should remain after one-shot HR delete"
+        )
         XCTAssertEqual(
-            runner.selection.location, 12,
-            "Caret shifts left by one to follow the deleted char"
+            runner.selection.location, 8,
+            "Caret must land at the start of where the HR was"
         )
     }
 
-    /// Two Backspaces from start of "after": the second one deletes the
-    /// `\n` between HR and "after", merging "after" into the HR line.
-    /// `---after` no longer matches the dashes-only regex, so reparse strips
-    /// the HR attribute. Locks in the parser reparse path; if a future
-    /// change ever protects HR boundaries from cross-line deletes, this
-    /// test fails and forces the new behavior to be deliberate.
-    func test_backspaceTwice_fromStartOfLineAfterHR_mergesIntoHRLine_hrVanishes() {
+    // MARK: - R16: Forward-delete from empty line above HR (one-shot, HR-03)
+
+    /// ONE forward-delete from the start of the empty line directly above the
+    /// HR removes the empty line AND the entire HR line in a single undo step.
+    /// The caret stays at its original position.
+    func test_forwardDelete_onEmptyLineAboveHR_removesWholeRule_inOneKeystroke() {
         let runner = HostedEditorRunner(
             initialBody: canonicalBody,
-            initialSelection: NSRange(location: 13, length: 0)
+            initialSelection: NSRange(location: 7, length: 0)  // the empty line above HR
+        )
+        runner.key(.delete)
+
+        XCTAssertEqual(
+            runner.body, "before\n\nafter",
+            "One forward-delete from empty line above HR must remove the empty line and the entire HR line"
+        )
+        XCTAssertFalse(
+            attributedStringHasAnyThematicBreak(runner.attributedString),
+            "No thematic break attribute should remain after one-shot HR delete"
+        )
+        XCTAssertEqual(
+            runner.selection.location, 7,
+            "Caret must stay at its original position after forward-delete"
+        )
+    }
+
+    // MARK: - Guard: non-empty line adjacent to HR must not trigger one-shot delete
+
+    /// Backspace from a NON-empty line adjacent to an HR must NOT trigger the
+    /// one-shot handler — the handler guards that the caret's own line is empty.
+    /// The `---` line survives (the caret line is non-empty so the handler
+    /// declines and NSTextView's default single-char delete runs).
+    func test_backspace_onNonEmptyLineAdjacentHR_doesNotRemoveWholeRule() {
+        // Body "x\n---\n\nafter": caret after "x" on a non-empty line above the HR.
+        let runner = HostedEditorRunner(
+            initialBody: "x\n---\n\nafter",
+            initialSelection: NSRange(location: 1, length: 0)
         )
         runner.key(.backspace)
-        runner.key(.backspace)
 
-        XCTAssertEqual(
-            runner.body, "before\n\n---after",
-            "Second backspace must merge `after` into the HR line"
-        )
-        assertHRNotStamped(runner.attributedString, at: hrLocation,
-                           label: "after second backspace")
-        XCTAssertEqual(
-            runner.selection.location, 11,
-            "Caret sits at the merge point between dashes and `after`"
+        XCTAssertTrue(
+            runner.body.contains("---"),
+            "Non-empty caret line must NOT trigger one-shot HR delete — dashes must survive"
         )
     }
 
-    // MARK: - R16: Forward-delete from line before HR
-
-    /// First forward-delete from end of "before" deletes the trailing `\n`
-    /// of "before"'s line, collapsing the blank line between "before" and HR.
-    /// The HR line itself is untouched, so the dashes-only regex still
-    /// matches and the HR attribute remains stamped (now at chars 7..9).
-    func test_forwardDelete_fromEndOfLineBeforeHR_collapsesBlankAbove_hrSurvives() {
-        let runner = HostedEditorRunner(
-            initialBody: canonicalBody,
-            initialSelection: NSRange(location: 6, length: 0)  // end of "before"
-        )
-        runner.key(.delete)
-
-        XCTAssertEqual(
-            runner.body, "before\n---\n\nafter",
-            "First forward-delete must collapse the blank line above HR"
-        )
-        // After the delete the dashes shift down by one: 8..10 → 7..9.
-        assertHRStamped(runner.attributedString, at: 7,
-                        label: "after first forward-delete")
-        XCTAssertEqual(
-            runner.selection.location, 6,
-            "Caret stays at end of `before` — forward-delete consumes ahead, not behind"
-        )
-    }
-
-    /// Two forward-deletes from end of "before": the second one deletes the
-    /// `\n` between "before" and HR, merging "before" into the HR line.
-    /// `before---` no longer matches the dashes-only regex, so reparse
-    /// strips the HR attribute.
-    func test_forwardDeleteTwice_fromEndOfLineBeforeHR_mergesIntoHRLine_hrVanishes() {
-        let runner = HostedEditorRunner(
-            initialBody: canonicalBody,
-            initialSelection: NSRange(location: 6, length: 0)
-        )
-        runner.key(.delete)
-        runner.key(.delete)
-
-        XCTAssertEqual(
-            runner.body, "before---\n\nafter",
-            "Second forward-delete must merge `before` into the HR line"
-        )
-        // Dashes now sit at chars 6..8 inside "before---".
-        assertHRNotStamped(runner.attributedString, at: 6,
-                           label: "after second forward-delete")
-        XCTAssertEqual(
-            runner.selection.location, 6,
-            "Caret stays at the merge point between `before` and dashes"
-        )
-    }
-
-    // MARK: - R17: Selection-delete spanning HR
+    // MARK: - R17: Selection-delete spanning HR (unchanged)
 
     /// A selection that spans the blank-line / HR / blank-line block
     /// removes the whole region atomically. The HR vanishes (no dashes
@@ -228,5 +205,24 @@ final class DeleteAroundHRTests: XCTestCase {
                 file: file, line: line
             )
         }
+    }
+
+    /// Returns true if ANY character in `attr` carries `.sidekickThematicBreak`.
+    /// Mirrors `attributedStringHasAnyThematicBreak` in
+    /// ThematicBreakSurvivesNoteSwitchTests (intentional duplicate for
+    /// self-contained regression files).
+    private func attributedStringHasAnyThematicBreak(_ attr: NSAttributedString) -> Bool {
+        var found = false
+        attr.enumerateAttribute(
+            .sidekickThematicBreak,
+            in: NSRange(location: 0, length: attr.length),
+            options: []
+        ) { value, _, stop in
+            if value != nil {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
     }
 }
