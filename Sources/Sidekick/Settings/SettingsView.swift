@@ -36,7 +36,7 @@ private func isShortcutTakenBySystem(_ shortcut: KeyboardShortcuts.Shortcut) -> 
 }
 
 struct SettingsView: View {
-    @AppStorage(Defaults.notesFolder) private var notesFolder: String = ""
+    @AppStorage(Defaults.notesFolder, store: Defaults.store) private var notesFolder: String = ""
     @AppStorage(Defaults.panelWidth) private var panelWidth: Double = 380
     @AppStorage(Defaults.showInDock) private var showInDock: Bool = true
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)

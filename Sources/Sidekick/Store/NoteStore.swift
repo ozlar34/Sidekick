@@ -252,7 +252,14 @@ final class NoteStore: ObservableObject {
             folderMissing = false
         }
 
-        let snapshot = (try? await io.scan()) ?? []
+        // Scan failure = transient folder-access blip. Preserve current in-memory
+        // notes + on-disk index rather than reconciling against a bogus empty
+        // snapshot (which RC1-guards in reconcile, but bailing here also avoids
+        // the needless applyIndex churn). Pairs with the reconcile guard in 1a.
+        guard let snapshot = try? await io.scan() else {
+            NSLog("[Sidekick] reload: io.scan() failed — preserving current notes/index")
+            return
+        }
         let existingIndex = await io.loadIndex()
         let (newIndex, changed) = reconcile(snapshot: snapshot, index: existingIndex)
         if changed { try? await io.saveIndex(newIndex) }
@@ -285,7 +292,7 @@ final class NoteStore: ObservableObject {
 
         // 4. Persist the new path to UserDefaults — inside the rebind —
         //    so there is only one source of truth for "where notes live."
-        UserDefaults.standard.set(newFolder.path, forKey: Defaults.notesFolder)
+        Defaults.store.set(newFolder.path, forKey: Defaults.notesFolder)
 
         // 5. Restart watcher + reload notes from the new folder.
         startWatcher()
@@ -355,7 +362,15 @@ final class NoteStore: ObservableObject {
         var migratedIndex = index
         var didMigrate = false
         for (i, entry) in index.notes.enumerated() {
-            let body = (try? await io.readNote(filename: entry.filename)) ?? ""
+            // On read failure, prefer the last body the app authored
+            // (authoritative), then the current in-memory body, falling back to
+            // "" only for a genuinely new/unreadable note. Prevents a transient
+            // read error from zeroing the model and then propagating "" to disk
+            // on the next save. Mirrors reloadNote's guard.
+            let body = (try? await io.readNote(filename: entry.filename))
+                ?? lastAuthoredBodyByID[entry.id]
+                ?? notes.first(where: { $0.id == entry.id })?.body
+                ?? ""
             let modified = await io.mtime(filename: entry.filename)
             // Seed the echo-suppression baseline for notes the app is adopting
             // for the first time (initial load, rebind, or a newly-discovered

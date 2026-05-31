@@ -398,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StorageLocation.migrateDefaultLocationIfNeeded()
 
         // NoteStore root: read from UserDefaults if set, otherwise the App Support default.
-        let configuredPath = UserDefaults.standard.string(forKey: Defaults.notesFolder)
+        let configuredPath = Defaults.store.string(forKey: Defaults.notesFolder)
         let folder: URL = (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
             ?? StorageLocation.defaultNotesFolder
         do {

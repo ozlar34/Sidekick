@@ -15,7 +15,7 @@ final class NoteStoreRebindTests: XCTestCase {
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: tempRoot)
-        UserDefaults.standard.removeObject(forKey: Defaults.notesFolder)
+        Defaults.store.removeObject(forKey: Defaults.notesFolder)
         try await super.tearDown()
     }
 
@@ -44,7 +44,7 @@ final class NoteStoreRebindTests: XCTestCase {
         XCTAssertEqual(store.notes.count, 1, "store.notes must reflect folder B, not A")
         XCTAssertEqual(store.notes.first?.filename, "hello.md")
         XCTAssertEqual(
-            UserDefaults.standard.string(forKey: Defaults.notesFolder),
+            Defaults.store.string(forKey: Defaults.notesFolder),
             folderB.path,
             "rebind must persist newFolder.path to UserDefaults"
         )
@@ -70,13 +70,13 @@ final class NoteStoreRebindTests: XCTestCase {
     func test_rebind_writesUserDefaultsAtomically() async throws {
         let folderA = try makeFolder("A")
         let folderB = try makeFolder("B")
-        UserDefaults.standard.set(folderA.path, forKey: Defaults.notesFolder)
+        Defaults.store.set(folderA.path, forKey: Defaults.notesFolder)
 
         let store = try NoteStore(folder: folderA)
         try await store.rebind(to: folderB)
 
         XCTAssertEqual(
-            UserDefaults.standard.string(forKey: Defaults.notesFolder),
+            Defaults.store.string(forKey: Defaults.notesFolder),
             folderB.path
         )
     }

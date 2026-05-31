@@ -143,7 +143,7 @@ struct SidebarView: View {
                 panelState.selectedNoteID = store.notes.first?.id
             }
             // Check whether the configured notes folder exists (STORE-04 / MF-01)
-            let configured = UserDefaults.standard.string(forKey: Defaults.notesFolder) ?? ""
+            let configured = Defaults.store.string(forKey: Defaults.notesFolder) ?? ""
             let folder = configured.isEmpty
                 ? StorageLocation.defaultNotesFolder
                 : URL(fileURLWithPath: configured)

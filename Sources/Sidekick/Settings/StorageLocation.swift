@@ -26,7 +26,7 @@ enum StorageLocation {
     /// path in UserDefaults so the app keeps working without data loss.
     /// No-op when the user has explicitly set a custom `notesFolder`.
     static func migrateDefaultLocationIfNeeded() {
-        let configured = UserDefaults.standard.string(forKey: Defaults.notesFolder) ?? ""
+        let configured = Defaults.store.string(forKey: Defaults.notesFolder) ?? ""
         guard configured.isEmpty else { return }
 
         let fm = FileManager.default
@@ -46,7 +46,7 @@ enum StorageLocation {
             NSLog("[Sidekick] migrated notes folder: \(old.path) -> \(new.path)")
         } catch {
             NSLog("[Sidekick] notes folder migration failed: \(error.localizedDescription) — keeping legacy path")
-            UserDefaults.standard.set(old.path, forKey: Defaults.notesFolder)
+            Defaults.store.set(old.path, forKey: Defaults.notesFolder)
         }
     }
 }
