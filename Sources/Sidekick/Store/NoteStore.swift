@@ -26,6 +26,16 @@ final class NoteStore: ObservableObject {
     private var watcherTask: Task<Void, Never>?
     private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
 
+    /// Echo-suppression baseline: the body the app itself last authored to disk
+    /// per note id. `handleExternalChange` flags a note as externally changed
+    /// only when its on-disk body diverges from this value — so the app's own
+    /// writes (and the watcher events they fire ~150ms later) never raise a
+    /// false "File changed on disk" banner. Comparing against the live in-memory
+    /// `notes[i].body` instead raced with in-flight self-writes, which is what
+    /// produced the spurious banner. Seeded from disk on first load, updated on
+    /// every app write (create/update/reloadNote), pruned on delete.
+    private var lastAuthoredBodyByID: [UUID: String] = [:]
+
     /// Designated initializer.
     /// - Parameters:
     ///   - folder: URL of the notes directory (created if absent).
@@ -98,6 +108,7 @@ final class NoteStore: ObservableObject {
 
         let note = Note(id: id, filename: filename, title: "", body: "", pinned: false, order: order, modified: now, createdAt: now)
         notes.append(note)
+        lastAuthoredBodyByID[id] = ""
         return note
     }
 
@@ -130,6 +141,12 @@ final class NoteStore: ObservableObject {
             try await io.saveIndex(currentIndex)
         }
 
+        // Record the authored baseline BEFORE writing so the watcher event this
+        // write triggers can't see a divergence (the in-flight-write race). If we
+        // recorded it after the write, a watcher tick landing during io.writeNote
+        // would compare disk (new) against a stale baseline and flag falsely.
+        lastAuthoredBodyByID[id] = body
+
         // Write body to disk.
         try await io.writeNote(body, filename: newFilename)
 
@@ -157,6 +174,7 @@ final class NoteStore: ObservableObject {
         try await io.saveIndex(currentIndex)
 
         notes.removeAll { $0.id == id }
+        lastAuthoredBodyByID[id] = nil
         // Re-sort to maintain dense order.
         notes.sort { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
     }
@@ -171,6 +189,9 @@ final class NoteStore: ObservableObject {
                 notes[idx].body = body
                 notes[idx].modified = modified
             }
+            // Adopting on-disk content as the new authored baseline: after an
+            // explicit reload the app "owns" this body, so it must not re-flag.
+            lastAuthoredBodyByID[id] = body
         } catch {
             // Preserve in-memory body on read failure so the next auto-save
             // does not overwrite on-disk content with an empty string.
@@ -276,7 +297,6 @@ final class NoteStore: ObservableObject {
     private func handleExternalChange() async {
         // Snapshot current ids to diff AFTER reconcile for externalChanges emission.
         let beforeIds = Set(self.notes.map(\.id))
-        let beforeBodiesByID = Dictionary(uniqueKeysWithValues: self.notes.map { ($0.id, $0.body) })
         await self.reload()
         let afterIds = Set(self.notes.map(\.id))
         let afterBodiesByID = Dictionary(uniqueKeysWithValues: self.notes.map { ($0.id, $0.body) })
@@ -284,7 +304,12 @@ final class NoteStore: ObservableObject {
         // ids that appeared OR disappeared OR changed body
         var changedIDs = beforeIds.symmetricDifference(afterIds)
         for id in beforeIds.intersection(afterIds) {
-            if beforeBodiesByID[id] != afterBodiesByID[id] { changedIDs.insert(id) }
+            // Echo-suppression: a body counts as externally changed only when
+            // disk diverges from what the app itself last authored. The earlier
+            // approach diffed the live in-memory body before/after reload, which
+            // raced with in-flight self-writes and produced the spurious banner;
+            // the authored baseline is timing-independent.
+            if afterBodiesByID[id] != lastAuthoredBodyByID[id] { changedIDs.insert(id) }
         }
         if !changedIDs.isEmpty {
             externallyChangedIDs.formUnion(changedIDs)
@@ -332,6 +357,14 @@ final class NoteStore: ObservableObject {
         for (i, entry) in index.notes.enumerated() {
             let body = (try? await io.readNote(filename: entry.filename)) ?? ""
             let modified = await io.mtime(filename: entry.filename)
+            // Seed the echo-suppression baseline for notes the app is adopting
+            // for the first time (initial load, rebind, or a newly-discovered
+            // external create). Already-tracked ids are left untouched so a
+            // watcher-triggered reload can't overwrite the baseline a genuine
+            // external edit must be detected against.
+            if lastAuthoredBodyByID[entry.id] == nil {
+                lastAuthoredBodyByID[entry.id] = body
+            }
             // One-shot title bootstrap for pre-migration index entries.
             // HeadingExtractor → first meaningful line → "Untitled".
             let title: String
@@ -361,6 +394,11 @@ final class NoteStore: ObservableObject {
             if $0.pinned != $1.pinned { return $0.pinned }
             return $0.order < $1.order
         }
+        // Drop baselines for notes no longer in the index (deleted on disk or
+        // by the app) so the dictionary tracks exactly the live note set.
+        let liveIDs = Set(index.notes.map(\.id))
+        lastAuthoredBodyByID = lastAuthoredBodyByID.filter { liveIDs.contains($0.key) }
+
         // Persist bootstrapped titles so the migration runs once per note.
         if didMigrate {
             try? await io.saveIndex(migratedIndex)
