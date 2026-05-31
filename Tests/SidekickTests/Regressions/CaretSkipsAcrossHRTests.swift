@@ -109,43 +109,169 @@ final class CaretSkipsAcrossHRTests: XCTestCase {
     }
 
     /// Typing the third dash in a non-empty paragraph converts the line to
-    /// HR mid-keystroke. The same-line exemption must prevent the snap from
-    /// yanking the caret off the line the user just typed on.
+    /// HR mid-keystroke. The same-line exemption prevents the snap from
+    /// yanking the caret off the line mid-type. Then the HR-01 escape fires
+    /// (plan 04-04) to append an editable line below the freshly-typed rule,
+    /// so the caret ends up below the HR rather than stranded on it.
+    ///
     /// Body before keystroke: "Foo\n\n--", caret 7.
-    /// Body after keystroke:  "Foo\n\n---", caret 8 — same line as previous.
-    /// Without the same-line exemption, caret would snap UP to 4 (end of
-    /// empty separator), breaking the typing flow.
+    /// Body after keystroke:  "Foo\n\n---\n", caret 9 — one below the HR.
     func test_typingThirdDash_caretStaysWithinFreshlyConvertedHR() {
         let runner = HostedEditorRunner(
             initialBody: "Foo\n\n--",
             initialSelection: NSRange(location: 7, length: 0)
         )
         runner.type("-")
-        XCTAssertEqual(runner.body, "Foo\n\n---",
-                       "Three dashes typed must produce the HR source bytes")
+        XCTAssertEqual(runner.body, "Foo\n\n---\n",
+                       "Three dashes typed must produce the HR source bytes plus a trailing editable line (HR-01)")
         XCTAssertEqual(
-            runner.selection.location, 8,
-            "Caret must remain at end of just-typed HR (same-line exemption)"
+            runner.selection.location, 9,
+            "Caret must be on the editable line below the freshly-typed HR (HR-01 escape)"
         )
     }
 
     /// Arrow-up out of HR after typing it: simulate user pressing up after
-    /// the typing leaves the caret on a freshly-converted HR line. The up-
-    /// arrow target sits on the line above HR, which is OFF the HR line, so
-    /// no snap fires — caret arrives normally.
+    /// the typing leaves the caret on the editable line below a freshly-typed
+    /// HR line (HR-01 escape: body is now "Foo\n\n---\n", caret 9). An arrow
+    /// up targets position 4 (the empty separator between "Foo" and the HR),
+    /// which is NOT on the HR line — no snap fires, caret arrives normally.
     func test_arrowUpFromFreshlyTypedHR_landsAbove() {
         let runner = HostedEditorRunner(
             initialBody: "Foo\n\n--",
             initialSelection: NSRange(location: 7, length: 0)
         )
-        runner.type("-")  // body becomes "Foo\n\n---", caret 8 (on HR)
-        // Up-arrow from column 3 of HR line → column 3 of line above. Line
-        // above is empty (just "\n"), so caret clamps to position 4 (the
-        // start of the empty line, which IS its end).
+        runner.type("-")  // body becomes "Foo\n\n---\n", caret 9 (on editable line below HR)
+        // Up-arrow from the line below HR → targets position 4 (the
+        // start of the empty separator between "Foo" and the HR).
         runner.inner.textView.setSelectedRange(NSRange(location: 4, length: 0))
         XCTAssertEqual(
             runner.inner.textView.selectedRange().location, 4,
             "Caret outside HR — no snap"
         )
+    }
+
+    // MARK: - HR-01: Typed-trailing-HR escape
+
+    /// HR-01: Typing `---` as the final line of an empty doc leaves one
+    /// editable line below the rule. Body must be "---\n" and caret at 4
+    /// (start of the blank line below the rule) so the user can keep typing.
+    func test_typedTrailingDashes_leavesEditableLineBelow() {
+        let runner = HostedEditorRunner(
+            initialBody: "",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        runner.type("---")
+        XCTAssertEqual(runner.body, "---\n",
+                       "Trailing typed `---` must append one editable line below the rule")
+        XCTAssertEqual(runner.selection.location, 4,
+                       "Caret must be at the start of the new editable line below the rule (4)")
+        runner.type("x")
+        XCTAssertEqual(runner.body, "---\nx",
+                       "Typing after the escape must land below the rule, not on it")
+    }
+
+    /// HR-01: `***` is also recognized as a thematic break (Plan 01). Typing
+    /// it as the trailing line must also trigger the escape.
+    func test_typedTrailingAsterisks_leavesEditableLineBelow() {
+        let runner = HostedEditorRunner(
+            initialBody: "",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        runner.type("***")
+        XCTAssertEqual(runner.body, "***\n",
+                       "Trailing typed `***` must append one editable line below the rule")
+        XCTAssertEqual(runner.selection.location, 4,
+                       "Caret must be at start of editable line below the rule (4)")
+    }
+
+    /// HR-01: Typing `---` after some prior content (body "abc\n---", caret
+    /// at 8) leaves an editable line below the rule: body "abc\n---\n", caret 8.
+    func test_typedTrailingDashes_afterContent_leavesEditableLineBelow() {
+        let runner = HostedEditorRunner(
+            initialBody: "abc\n",
+            initialSelection: NSRange(location: 4, length: 0)
+        )
+        runner.type("---")
+        XCTAssertEqual(runner.body, "abc\n---\n",
+                       "Trailing typed `---` after content must append one editable line")
+        XCTAssertEqual(runner.selection.location, 8,
+                       "Caret must be at start of editable line below the rule (8)")
+    }
+
+    /// HR-01 negative: typing only two dashes (`--`) must NOT add a trailing
+    /// newline — `--` is not a thematic break.
+    func test_typedDoubleDash_noEscape() {
+        let runner = HostedEditorRunner(
+            initialBody: "",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        runner.type("--")
+        XCTAssertEqual(runner.body, "--",
+                       "Two dashes are not a thematic break — no escape must fire")
+    }
+
+    // MARK: - HR-04: `/hr` + `/divider` slash quick-insert
+
+    /// HR-04: Typing `/hr` on an otherwise-empty line auto-converts to a rule
+    /// via the canonical performInsertThematicBreak routine. Body must contain
+    /// "---" and must NOT contain "/hr".
+    func test_slashHr_insertsRule() {
+        let runner = HostedEditorRunner(
+            initialBody: "",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        runner.type("/hr")
+        XCTAssertTrue(runner.body.contains("---"),
+                      "Typing `/hr` on an empty line must insert a thematic break")
+        XCTAssertFalse(runner.body.contains("/hr"),
+                       "The `/hr` trigger text must be consumed — must not remain in body")
+    }
+
+    /// HR-04: `/divider` is a synonym for `/hr` — same outcome.
+    func test_slashDivider_insertsRule() {
+        let runner = HostedEditorRunner(
+            initialBody: "",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        runner.type("/divider")
+        XCTAssertTrue(runner.body.contains("---"),
+                      "Typing `/divider` on an empty line must insert a thematic break")
+        XCTAssertFalse(runner.body.contains("/divider"),
+                       "The `/divider` trigger text must be consumed — must not remain in body")
+    }
+
+    /// HR-04 negative: `/hrx` (extra char appended to an existing line that
+    /// already contains "/hrx") must NOT trigger the quick-insert — the line
+    /// content must be exactly "/hr". Note: this cannot be tested purely via
+    /// char-by-char typing (typing "/" then "h" then "r" fires the trigger
+    /// before "x" can be appended — that is correct behavior). Instead, we
+    /// seed the body to "/hr" and then type "x" to verify that with a non-
+    /// empty partial match the trigger does not fire for the final content.
+    ///
+    /// Also verifies "x/hr" (prefix + trigger on a non-blank line) using
+    /// `initialBody: "x"` + typing "/hr" — the line starts non-empty so the
+    /// exact-match guard (line content must be exactly "/hr") blocks the trigger.
+    func test_slashHrx_noInsert() {
+        // Seed "/hrx" directly: set body to "/hrx" and put caret at end.
+        // No typing-trigger can fire on pre-seeded body — only the next
+        // typed character's insertText call checks the helper.
+        let runner = HostedEditorRunner(
+            initialBody: "/hrx",
+            initialSelection: NSRange(location: 4, length: 0)
+        )
+        // Type one more char — at this point line content is "/hrxy", which
+        // is NOT an exact match; no trigger must fire.
+        runner.type("y")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "No rule must be inserted when line is not exactly `/hr`")
+
+        // Also verify: prefix "x" before "/hr" prevents trigger.
+        let runner2 = HostedEditorRunner(
+            initialBody: "x",
+            initialSelection: NSRange(location: 1, length: 0)
+        )
+        runner2.type("/hr")
+        XCTAssertFalse(runner2.body.contains("---"),
+                       "No rule must be inserted when line is `x/hr` — not line-exact")
     }
 }

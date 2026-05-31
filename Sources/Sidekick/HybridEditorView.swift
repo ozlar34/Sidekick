@@ -259,6 +259,136 @@ class HybridTextView: NSTextView {
         }
 
         super.insertText(string, replacementRange: range)
+        // HR-04: Check for `/hr` / `/divider` quick-insert BEFORE the trailing-
+        // HR escape — a completed slash trigger is not an HR line, so the escape
+        // would not fire anyway, but returning early avoids the attribute probe.
+        if handleSlashQuickInsertIfNeeded() { return }
+        // HR-01: After super runs the reparse, ensure any freshly-typed trailing
+        // HR has an editable line below it so the caret never gets stranded above
+        // the rule. Mirrors the always-trailing-blank-line guarantee that
+        // performInsertThematicBreak already provides for the toolbar path.
+        escapeTypedTrailingHRIfNeeded()
+    }
+
+    // MARK: - HR-01: Typed-trailing-HR escape
+
+    /// Appends a `\n` below a freshly-typed trailing thematic-break line so
+    /// the caret always has an editable home below the rule.
+    ///
+    /// HR-01 parity with `performInsertThematicBreak`: the toolbar insertion
+    /// routine always ends with `\n\n` (blank line below the rule + one more
+    /// `\n`), guaranteeing a real editable line below every toolbar-inserted
+    /// HR. The TYPED path (user types `---`, `***`, or `___` as the last line
+    /// of a note) did not have this guarantee — after the third character the
+    /// reparse fires and the line becomes a hairline, but with no `\n` below
+    /// it the snap logic and AppKit both see "HR is the final block; nowhere
+    /// to go below", and the caret effectively gets trapped above the rule.
+    ///
+    /// This helper detects the condition post-insert and appends a single `\n`
+    /// via the standard shouldChangeText/didChangeText sandwich (undo-safe,
+    /// single step) then parks the caret at the start of the new empty line.
+    ///
+    /// Guards (all must pass):
+    ///   • `textStorage` exists and is non-empty
+    ///   • zero-length selection (caret only)
+    ///   • caret's line carries `.sidekickThematicBreak`
+    ///   • that line is the final block (lineEnd == storage.length) — the HR
+    ///     has no `\n` below it yet
+    private func escapeTypedTrailingHRIfNeeded() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return }
+
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: sel)
+        guard lineRange.length > 0 else { return }
+
+        // Check the line carries .sidekickThematicBreak.
+        guard storage.attribute(.sidekickThematicBreak,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return }
+
+        let lineEnd = lineRange.location + lineRange.length
+        // Only fire when this HR is the FINAL block with no trailing `\n`.
+        // If `lineEnd < storage.length` there is already content (or at least
+        // a `\n`) below — the escape is not needed and must not fire.
+        guard lineEnd == storage.length else { return }
+        // Double-check: the line must NOT already end with `\n` (which would
+        // mean there IS a line below and `lineEnd == storage.length` was a
+        // coincidence of the trailing-newline inclusive lineRange).
+        let lastChar = ns.character(at: lineEnd - 1)
+        guard lastChar != 0x0A && lastChar != 0x0D else { return }
+
+        // Append a single `\n` at the end of the document via the undo-safe
+        // shouldChangeText/replaceCharacters/didChangeText sandwich.
+        let editRange = NSRange(location: storage.length, length: 0)
+        guard shouldChangeText(in: editRange, replacementString: "\n") else { return }
+        replaceCharacters(in: editRange, with: "\n")
+        didChangeText()
+        // Park the caret at the start of the new empty line.
+        setSelectedRange(NSRange(location: storage.length, length: 0))
+    }
+
+    // MARK: - HR-04: `/hr` + `/divider` quick-insert
+
+    /// Detects when the user has typed `/hr` or `/divider` as the sole
+    /// content of a line (exact-match, caret at end) and converts it to a
+    /// thematic break by reusing the canonical `performInsertThematicBreak`
+    /// routine.
+    ///
+    /// HR-04 affordance: mirrors how Markdown editors auto-convert `- ` to a
+    /// bullet — an inline auto-convert trigger that fires on an exact
+    /// line-level match. Both `/hr` and `/divider` are supported for
+    /// discoverability. The implementation delegates entirely to
+    /// `FormattingToolbarView.performInsertThematicBreak(in:)` so the
+    /// inserted rule has identical breathing-room and caret-placement
+    /// behavior to the toolbar button — single source of truth.
+    ///
+    /// Guards (all must pass):
+    ///   • `textStorage` exists
+    ///   • zero-length selection (caret only)
+    ///   • line content (stripped of trailing newline) is exactly "/hr" or "/divider"
+    ///   • caret is at the end of the stripped content (full-line-exact match)
+    ///
+    /// Returns `true` when the quick-insert fired (caller should `return`
+    /// immediately to skip the trailing-HR escape, which does not apply).
+    @discardableResult
+    private func handleSlashQuickInsertIfNeeded() -> Bool {
+        guard let storage = textStorage else { return false }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: sel)
+        guard lineRange.length > 0 else { return false }
+
+        // Strip any trailing newline to get the visible content of the line.
+        var contentLength = lineRange.length
+        if contentLength > 0 {
+            let lastChar = ns.character(at: lineRange.location + contentLength - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { contentLength -= 1 }
+        }
+        guard contentLength > 0 else { return false }
+        let lineContent = ns.substring(with: NSRange(location: lineRange.location, length: contentLength))
+
+        // Exact-match check — caret must be at the end of the content.
+        guard lineContent == "/hr" || lineContent == "/divider" else { return false }
+        guard sel.location == lineRange.location + contentLength else { return false }
+
+        // Delete the slash trigger first so performInsertThematicBreak starts
+        // from a clean empty line (it already handles the case where the
+        // current line is empty — it uses the existing blank line as its
+        // leading separator).
+        let cmdRange = NSRange(location: lineRange.location, length: contentLength)
+        guard shouldChangeText(in: cmdRange, replacementString: "") else { return false }
+        replaceCharacters(in: cmdRange, with: "")
+        didChangeText()
+        setSelectedRange(NSRange(location: lineRange.location, length: 0))
+
+        // Delegate to the canonical HR insertion routine (single source of
+        // truth for HR insertion — same as the toolbar button).
+        FormattingToolbarView.performInsertThematicBreak(in: self)
+        return true
     }
 
     override func setConstrainedFrameSize(_ desiredSize: NSSize) {
