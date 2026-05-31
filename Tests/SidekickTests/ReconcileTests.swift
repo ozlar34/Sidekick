@@ -57,4 +57,27 @@ final class ReconcileTests: XCTestCase {
         XCTAssertEqual(index.notes[0].order, 0)  // dense order reassigned
         XCTAssertTrue(changed)
     }
+
+    // RC1 guard (Fix 1a): an empty disk snapshot against a populated index is a
+    // transient blip, not a mass delete — reconcile must return the index
+    // unchanged rather than dropping every note and persisting the emptied index.
+    func testEmptySnapshotAgainstPopulatedIndexIsNoOp() {
+        let idA = UUID()
+        let idB = UUID()
+        let existingIndex = NoteIndex(version: 1, notes: [
+            IndexEntry(id: idA, filename: "a.md", pinned: false, order: 0),
+            IndexEntry(id: idB, filename: "b.md", pinned: false, order: 1)
+        ])
+        let (index, changed) = reconcile(snapshot: [], index: existingIndex)
+        XCTAssertEqual(index.notes.count, 2)
+        XCTAssertEqual(index.notes.map(\.id), [idA, idB])
+        XCTAssertFalse(changed)
+    }
+
+    // The guard must NOT fire on a genuine first launch (nil index, empty disk):
+    // that path correctly yields an empty index.
+    func testEmptySnapshotWithNilIndexStaysEmpty() {
+        let (index, _) = reconcile(snapshot: [], index: nil)
+        XCTAssertTrue(index.notes.isEmpty)
+    }
 }

@@ -220,24 +220,52 @@ final class NoteStoreIntegrationTests: XCTestCase {
     func testWatcherDetectsExternalDelete() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
-        let note = try await store.create()
-        let filename = note.filename
-        XCTAssertEqual(store.notes.count, 1)
+        let keep = try await store.create()
+        let doomed = try await store.create()
+        XCTAssertEqual(store.notes.count, 2)
 
         // Let watcher settle.
         try await Task.sleep(nanoseconds: 200_000_000) // 200ms
 
-        // Externally delete the file.
-        let fileURL = tmp.url.appendingPathComponent(filename)
+        // Externally delete ONE file. A healthy, non-empty snapshot remains, so
+        // reconcile correctly drops the missing entry. (The RC1 empty-snapshot
+        // guard only engages when the *last* note would vanish — see
+        // testExternalDeleteOfLastNoteIsPreserved.)
+        let fileURL = tmp.url.appendingPathComponent(doomed.filename)
         try FileManager.default.removeItem(at: fileURL)
 
-        // Wait for reconcile to remove the note.
+        // Wait for reconcile to drop the deleted note while keeping the other.
         try await waitFor(
-            { store.notes.isEmpty },
+            { store.notes.count == 1 && store.notes.contains { $0.id == keep.id } },
             timeout: 3.0,
-            description: "store.notes.isEmpty after external delete"
+            description: "deleted note removed, surviving note kept"
         )
-        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertEqual(store.notes.count, 1)
+        XCTAssertEqual(store.notes.first?.id, keep.id)
+    }
+
+    // RC1 guard (Fix 1a): externally deleting the LAST note is intentionally
+    // NOT honored. An empty disk snapshot against a populated index is
+    // indistinguishable from a transient folder blip, so it is preserved rather
+    // than mass-dropped — the deliberate trade-off that prevents the
+    // "all notes vanished" data-loss incident.
+    func testExternalDeleteOfLastNoteIsPreserved() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url)
+        let note = try await store.create()
+        XCTAssertEqual(store.notes.count, 1)
+
+        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+        let fileURL = tmp.url.appendingPathComponent(note.filename)
+        try FileManager.default.removeItem(at: fileURL)
+
+        // Drive a reconcile against the now-empty folder; the guard must no-op.
+        try await Task.sleep(nanoseconds: 300_000_000) // 300ms
+        await store.reload()
+
+        XCTAssertEqual(store.notes.count, 1, "RC1 guard preserves the last note on an empty snapshot")
+        XCTAssertEqual(store.notes.first?.id, note.id)
     }
 
     /// 2-02-04: Rapid burst of external writes coalesces to consistent final state

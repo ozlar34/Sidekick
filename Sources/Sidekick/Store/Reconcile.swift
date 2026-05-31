@@ -26,6 +26,14 @@ func reconcile(snapshot: [DiskEntry], index: NoteIndex?) -> (index: NoteIndex, c
 
     let existingIndex = index!
 
+    // RC1 guard: an empty disk snapshot against a populated index almost always
+    // means a transient folder-access blip (folder briefly missing, recreated
+    // empty, or a failed scan) — NOT that the user deleted every note. Treat it
+    // as a no-op rather than mass-dropping and persisting an emptied index.
+    if snapshot.isEmpty && !existingIndex.notes.isEmpty {
+        return (existingIndex, false)
+    }
+
     // Step 2: Filter out orphans (index entries whose file no longer exists on disk).
     let surviving = existingIndex.notes.filter { snapshotFilenames.contains($0.filename) }
 
