@@ -47,6 +47,13 @@ struct FormattingToolbarView: View {
     /// HybridEditorController.activeLinePrefix.
     var activeLinePrefix: LinePrefix? = nil
 
+    /// Inline kinds currently armed on an empty selection (quick-260523-29t).
+    /// OR-ed into each inline button's `isActive` highlight so the toolbar
+    /// shows "armed for next-typed character" the same way it shows
+    /// "caret inside an existing pair". Defaults empty so existing call
+    /// sites (tests, previews) compile without change.
+    var armedInlineKinds: Set<InlineKind> = []
+
     /// Apple Notes-style: a single "Aa" trigger collapses every formatting
     /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
     /// styles (Heading / Subheading / Body / Bulleted / Numbered / Quote)
@@ -70,6 +77,7 @@ struct FormattingToolbarView: View {
                         activeInlineKind: activeInlineKind,
                         activeHeadingLevel: activeHeadingLevel,
                         activeLinePrefix: activeLinePrefix,
+                        armedInlineKinds: armedInlineKinds,
                         dismiss: { popoverShown = false }
                     )
                 }
@@ -312,6 +320,106 @@ struct FormattingToolbarView: View {
         case "<u>": return .underline
         default:   return nil
         }
+    }
+
+    // MARK: - Armed inline-format helpers (hide-markers-on-empty-selection)
+    //
+    // These power the "Cmd+B with empty selection does NOT insert ****; it arms
+    // the next-typed character" UX. Pure state-transition + string-composition
+    // math, no AppKit deps — see ArmedInlineFormatTests for the contract.
+
+    /// Bold/italic/code are mutually exclusive (CommonMark forbids composed
+    /// triple-asterisk in this codebase — see comment on applyMarkdownWrap's
+    /// mutex set at line 159). Underline + strikethrough are orthogonal: they
+    /// can stack with each other and with any one mutex kind.
+    private static let mutexInlineKinds: Set<InlineKind> = [.bold, .italic, .code]
+
+    /// Wrap markers per inline kind. Single source of truth shared with the
+    /// `inlineKind(forPrefix:)` table above.
+    private static func prefixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "<u>"
+        }
+    }
+
+    private static func suffixFor(_ kind: InlineKind) -> String {
+        switch kind {
+        case .bold:          return "**"
+        case .italic:        return "*"
+        case .code:          return "`"
+        case .strikethrough: return "~~"
+        case .underline:     return "</u>"
+        }
+    }
+
+    /// Pure state-transition for arming an inline kind on an empty selection.
+    ///
+    /// Rules (from locked decisions for quick-29t):
+    ///   1. If `requestedKind` is already armed → toggle off (remove from BOTH
+    ///      `set` and `order`).
+    ///   2. Else if `requestedKind` is in the bold/italic/code mutex set AND a
+    ///      different mutex kind is currently armed → replace that mutex kind
+    ///      in place. Both `set` and `order` are updated; the requested kind
+    ///      takes the existing mutex kind's slot in `order` so orthogonal
+    ///      neighbours (underline / strikethrough) keep their positions.
+    ///   3. Else → append `requestedKind` to `order` (becomes the new
+    ///      outermost / last-armed) and insert into `set`. This covers both
+    ///      "first arm" and "orthogonal stack" cases.
+    ///
+    /// Inputs are not mutated; a fresh tuple is returned.
+    internal static func armedInlineKindsAfterArm(
+        current: (set: Set<InlineKind>, order: [InlineKind]),
+        requestedKind: InlineKind
+    ) -> (set: Set<InlineKind>, order: [InlineKind]) {
+        // Rule 1: re-arming the same kind toggles off.
+        if current.set.contains(requestedKind) {
+            var newSet = current.set
+            newSet.remove(requestedKind)
+            let newOrder = current.order.filter { $0 != requestedKind }
+            return (newSet, newOrder)
+        }
+
+        // Rule 2: mutex-replace. If the requested kind is in the mutex set
+        // and another mutex kind is already armed, swap in-place.
+        if mutexInlineKinds.contains(requestedKind),
+           let existingMutex = current.order.first(where: { mutexInlineKinds.contains($0) }) {
+            var newSet = current.set
+            newSet.remove(existingMutex)
+            newSet.insert(requestedKind)
+            var newOrder = current.order
+            if let idx = newOrder.firstIndex(of: existingMutex) {
+                newOrder[idx] = requestedKind
+            }
+            return (newSet, newOrder)
+        }
+
+        // Rule 3: append (first arm OR orthogonal stack).
+        var newSet = current.set
+        newSet.insert(requestedKind)
+        var newOrder = current.order
+        newOrder.append(requestedKind)
+        return (newSet, newOrder)
+    }
+
+    /// Pure composition: given the `order` of armed kinds (innermost first,
+    /// outermost last), build the (prefix, suffix) pair that wraps a single
+    /// typed character.
+    ///
+    /// Reading left-to-right, the OUTER prefix comes first. Example for
+    /// `order = [.bold, .underline]` (bold armed first, underline second):
+    ///   prefix = "<u>**"   (outer <u> then inner **)
+    ///   suffix = "**</u>"  (inner ** then outer </u>)
+    /// Wrapping "X" gives `<u>**X**</u>`, which renders as bold-and-underlined.
+    internal static func composeArmedWrap(
+        order: [InlineKind]
+    ) -> (prefix: String, suffix: String) {
+        let prefix = order.reversed().map { prefixFor($0) }.joined()
+        let suffix = order.map { suffixFor($0) }.joined()
+        return (prefix, suffix)
     }
 
     /// Find any inline-kind marker pair (bold / italic / code) on the line
@@ -936,6 +1044,307 @@ struct FormattingToolbarView: View {
         return true
     }
 
+    // MARK: - Atomic inline-format marker delete (quick-260524-0ia)
+    //
+    // Design decisions (locked — see PLAN.md for full rationale):
+    //
+    // D-01: ALWAYS delete the pair atomically — preserves inner text, removes
+    //       both markers in one edit. Half-deleted markers expose raw markdown.
+    // D-02: Cursor INSIDE a marker run also fires atomic delete — any partial
+    //       deletion produces the same broken render.
+    // D-03: Link [label](url) deletes the whole wrapper and keeps the label.
+    // D-04: Routed via doCommand (NOT NSTextView override) — keeps delete logic
+    //       unified with checklist handlers; priority: atomic-marker → checklist → default.
+    // D-05: Detection uses the parser's named find* functions, NOT .sidekickHiddenMarker
+    //       (that attribute is set on 4 different scopes — inline, block, bare-URL, link wrapper).
+    // D-06: Return false when no pair is adjacent — preserves checklist & native delete.
+    // D-07: Inside a fenced code block → return nil (markers are literal text there).
+
+    /// Direction for an atomic-marker delete keystroke.
+    enum AtomicMarkerDeleteDirection { case backward, forward }
+
+    /// Result of an atomic-marker delete decision.
+    struct AtomicMarkerDeleteResult: Equatable {
+        /// The full NSRange to replace (open marker + inner content + close marker).
+        let deleteRange: NSRange
+        /// The inner content text to leave in place of the deletion.
+        let replacement: String
+        /// Caret location AFTER the edit: deleteRange.location + replacement.utf16 count.
+        let postCaret: Int
+    }
+
+    /// Determine whether a Backspace / forward-delete at `caret` should be
+    /// promoted to an atomic inline-format marker pair deletion.
+    ///
+    /// Returns nil when no inline-format pair has marker bytes adjacent to
+    /// (or containing) `caret` in the requested direction, or when the caret
+    /// is inside a fenced code block (D-07), or body is empty.
+    ///
+    /// Adjacency rules (D-02 — cursor-inside-run also fires):
+    ///   .backward:  caret > marker.location && caret <= marker.location + marker.length
+    ///   .forward:   caret >= marker.location && caret < marker.location + marker.length
+    ///
+    /// Pair-detection order (first hit wins):
+    ///   1. Links (findLinkRanges) — largest containing structure
+    ///   2. Underline (findUnderlineRanges) — asymmetric close (`</u>`, 4 chars)
+    ///   3. Bold (findBoldRanges)
+    ///   4. Strikethrough (findStrikethroughRanges)
+    ///   5. Inline code (findInlineCodeRanges)
+    ///   6. Italic (findItalicRanges) — 1-char markers, checked last to avoid
+    ///      false matches inside bold/strike runs.
+    static func atomicMarkerDeleteRange(
+        body: String,
+        caret: Int,
+        direction: AtomicMarkerDeleteDirection
+    ) -> AtomicMarkerDeleteResult? {
+        let ns = body as NSString
+        guard ns.length > 0 else { return nil }
+
+        // D-07: fenced code block guard — markers are literal inside fences.
+        for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+            let cr = fence.contentRange
+            if caret >= cr.location && caret <= cr.location + cr.length {
+                return nil
+            }
+        }
+
+        // Adjacency predicate (D-02: inside the run also fires).
+        func isAdjacent(_ markerRange: NSRange, _ caret: Int, _ dir: AtomicMarkerDeleteDirection) -> Bool {
+            switch dir {
+            case .backward:
+                return caret > markerRange.location && caret <= markerRange.location + markerRange.length
+            case .forward:
+                return caret >= markerRange.location && caret < markerRange.location + markerRange.length
+            }
+        }
+
+        // 1. Link pass — highest priority (outer structure).
+        for m in MarkdownInlineParser.findLinkRanges(in: body) {
+            let adjacentToMarker = isAdjacent(m.openBracketRange, caret, direction)
+                || isAdjacent(m.closeBracketRange, caret, direction)
+                || isAdjacent(m.openParenRange, caret, direction)
+                || isAdjacent(m.urlRange, caret, direction)
+                || isAdjacent(m.closeParenRange, caret, direction)
+            if adjacentToMarker {
+                let spanStart = m.openBracketRange.location
+                let spanEnd   = m.closeParenRange.location + m.closeParenRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.labelRange)   // D-03: keep label only
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        // 2. Underline pass — asymmetric close (`</u>` = 4 chars) before bold.
+        for m in MarkdownInlineParser.findUnderlineRanges(in: body) {
+            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
+                let spanStart = m.markerOpenRange.location
+                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.contentRange)
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        // 3. Bold pass.
+        for m in MarkdownInlineParser.findBoldRanges(in: body) {
+            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
+                let spanStart = m.markerOpenRange.location
+                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.contentRange)
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        // 4. Strikethrough pass.
+        for m in MarkdownInlineParser.findStrikethroughRanges(in: body) {
+            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
+                let spanStart = m.markerOpenRange.location
+                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.contentRange)
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        // 5. Inline code pass.
+        for m in MarkdownInlineParser.findInlineCodeRanges(in: body) {
+            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
+                let spanStart = m.markerOpenRange.location
+                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.contentRange)
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        // 6. Italic pass — 1-char markers, lowest priority.
+        for m in MarkdownInlineParser.findItalicRanges(in: body) {
+            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
+                let spanStart = m.markerOpenRange.location
+                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
+                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+                let replacement = ns.substring(with: m.contentRange)
+                let postCaret = spanStart + (replacement as NSString).length
+                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            }
+        }
+
+        return nil
+    }
+
+    /// Atomic-marker Backspace handler (quick-260524-0ia).
+    /// Returns true when a collapsed caret is adjacent to (or inside) an
+    /// inline-format marker run and the full pair was deleted atomically.
+    /// Returns false for non-collapsed selections (D-06) and when no pair
+    /// is adjacent — caller falls through to the existing checklist handler.
+    static func handleAtomicMarkerBackspace(in textView: NSTextView) -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }   // D-06: non-empty selection → false
+        guard let result = atomicMarkerDeleteRange(
+            body: textView.string,
+            caret: selection.location,
+            direction: .backward
+        ) else { return false }
+
+        guard textView.shouldChangeText(in: result.deleteRange, replacementString: result.replacement) else { return false }
+        textView.replaceCharacters(in: result.deleteRange, with: result.replacement)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: result.postCaret, length: 0))
+        return true
+    }
+
+    /// Atomic-marker forward-delete handler (quick-260524-0ia).
+    /// Returns true when a collapsed caret is adjacent to (or inside) an
+    /// inline-format marker run and the full pair was deleted atomically.
+    /// Returns false for non-collapsed selections (D-06) and when no pair
+    /// is adjacent — caller falls through to the existing checklist handler.
+    static func handleAtomicMarkerForwardDelete(in textView: NSTextView) -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }   // D-06: non-empty selection → false
+        guard let result = atomicMarkerDeleteRange(
+            body: textView.string,
+            caret: selection.location,
+            direction: .forward
+        ) else { return false }
+
+        guard textView.shouldChangeText(in: result.deleteRange, replacementString: result.replacement) else { return false }
+        textView.replaceCharacters(in: result.deleteRange, with: result.replacement)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: result.postCaret, length: 0))
+        return true
+    }
+
+    /// EDIT-03 — Backspace on a checklist line. Handles Paths A, B, E.
+    /// Returns true if the keystroke was consumed (prefix stripped); false to
+    /// fall through to NSTextView's default single-character delete.
+    static func handleChecklistBackspace(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+
+        // Path E: a non-empty selection that overlaps the checklist prefix.
+        if selection.length > 0 {
+            let lineRange = nsBody.lineRange(for: selection)
+            guard lineRange.length >= 6 else { return false }
+            let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+            let prefixNS = prefix as NSString
+            guard prefixNS.character(at: 0) == 0x2D,
+                  prefixNS.character(at: 1) == 0x20,
+                  prefixNS.character(at: 2) == 0x5B,
+                  (prefixNS.character(at: 3) == 0x20
+                    || prefixNS.character(at: 3) == 0x78
+                    || prefixNS.character(at: 3) == 0x58),
+                  prefixNS.character(at: 4) == 0x5D,
+                  prefixNS.character(at: 5) == 0x20 else { return false }
+            // Only intercept if the selection starts within the 6-char prefix zone.
+            let prefixEnd = lineRange.location + 6
+            guard selection.location < prefixEnd else { return false }
+            // Union: from line start through the end of the original selection.
+            let unionEnd = selection.location + selection.length
+            let unionRange = NSRange(location: lineRange.location,
+                                     length: unionEnd - lineRange.location)
+            guard textView.shouldChangeText(in: unionRange, replacementString: "") else { return false }
+            textView.replaceCharacters(in: unionRange, with: "")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        // Caret-only — Paths A and B collapse to one branch.
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B,
+              (prefixNS.character(at: 3) == 0x20
+                || prefixNS.character(at: 3) == 0x78
+                || prefixNS.character(at: 3) == 0x58),
+              prefixNS.character(at: 4) == 0x5D,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        // D-05 (Path A) and D-06 (Path B): caret exactly at lineStart + 6 → strip prefix.
+        guard selection.location == lineRange.location + 6 else { return false }
+        let stripRange = NSRange(location: lineRange.location, length: 6)
+        guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: stripRange, with: "")
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+        return true
+    }
+
+    /// EDIT-03 — Forward-delete (fn+Delete) on a checklist line. Handles Path C.
+    /// Path D (forward-delete from content start) is intentionally NOT intercepted —
+    /// it is already clean, so this helper only fires when the caret is at line start.
+    static func handleChecklistForwardDelete(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }   // selections handled by Backspace path
+
+        let lineRange = nsBody.lineRange(for: selection)
+        var lineEnd = lineRange.location + lineRange.length
+        if lineEnd > lineRange.location {
+            let lastChar = nsBody.character(at: lineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
+        }
+        let lineLen = lineEnd - lineRange.location
+        guard lineLen >= 6 else { return false }
+        let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
+        let prefixNS = prefix as NSString
+        guard prefixNS.character(at: 0) == 0x2D,
+              prefixNS.character(at: 1) == 0x20,
+              prefixNS.character(at: 2) == 0x5B,
+              (prefixNS.character(at: 3) == 0x20
+                || prefixNS.character(at: 3) == 0x78
+                || prefixNS.character(at: 3) == 0x58),
+              prefixNS.character(at: 4) == 0x5D,
+              prefixNS.character(at: 5) == 0x20 else { return false }
+
+        // Path C: caret AT line start. Forward-delete would remove `-` and break the
+        // prefix — strip all 6 chars instead. Path D (caret at lineStart+6) is left alone.
+        guard selection.location == lineRange.location else { return false }
+        let stripRange = NSRange(location: lineRange.location, length: 6)
+        guard textView.shouldChangeText(in: stripRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: stripRange, with: "")
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+        return true
+    }
+
     /// Enter continuation for bulleted-list lines (`- ` or `* `). Mirrors
     /// `handleChecklistReturn`: continue with `\n- ` (or `\n* `, preserving the
     /// original marker char) on a non-empty line; strip the prefix and exit
@@ -1082,6 +1491,66 @@ struct FormattingToolbarView: View {
     static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
         let body = textView.string
         let range = textView.selectedRange()
+
+        // quick-260523-29t: arm-or-edit fork for empty selections on inline
+        // formats. When the user fires Cmd+B (or any of the 5 inline shortcuts)
+        // with NO selected text, we suppress marker insertion and instead arm
+        // the next-typed character's style. This matches TextEdit / Pages /
+        // Notes rich-text behavior. The fork takes the ARM path only when
+        // ALL of:
+        //   a. textView is a HybridTextView (state lives on the subclass)
+        //   b. selection is caret-only (length 0)
+        //   c. prefix maps to one of the 5 inline kinds (NOT link `[`)
+        //   d. caret is NOT inside a fenced code block (F-05 inert)
+        //   e. caret is NOT inside an existing same-kind pair (the existing
+        //      universal toggle-off path in applyMarkdownWrap handles that
+        //      case correctly — strip the markers — so we fall through)
+        //
+        // When ARM is taken, ZERO body mutation occurs: no shouldChangeText
+        // sandwich, no push-token bump, no undo state. This is purely an
+        // in-memory flag flip on the HybridTextView.
+        if range.length == 0,
+           let htv = textView as? HybridTextView,
+           let requestedKind = inlineKind(forPrefix: prefix) {
+
+            // (d) Fenced-code-block check (mirrors the F-05 branch in
+            // applyMarkdownWrap at line 119-136).
+            var insideFence = false
+            for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+                let fenceContent = fence.contentRange
+                let startInside = range.location >= fenceContent.location
+                    && range.location <= fenceContent.location + fenceContent.length
+                if startInside {
+                    insideFence = true
+                    break
+                }
+            }
+            if insideFence {
+                // Silent no-op — no body edit, no arm state set. F-05 parity.
+                return
+            }
+
+            // (e) Same-kind enclosing-pair check — re-uses the universal
+            // toggle-off detection. If the caret sits inside an existing pair
+            // of the SAME kind, fall through to applyMarkdownWrap so the
+            // pair is stripped (toggle-off). For different-kind pairs we
+            // also fall through (the existing swap / nest logic owns it).
+            let existingPairKind = activeInlineKind(body: body, selection: range)
+            if existingPairKind == requestedKind {
+                // Fall through to the strip path below.
+            } else {
+                // ARM path — no body mutation. Update state + publish + return.
+                let newState = armedInlineKindsAfterArm(
+                    current: (htv.armedInlineKinds, htv.armedInlineKindsOrder),
+                    requestedKind: requestedKind
+                )
+                htv.armedInlineKinds = newState.set
+                htv.armedInlineKindsOrder = newState.order
+                htv.republishArmedKinds()
+                return
+            }
+        }
+
         let (newBody, cursor) = applyMarkdownWrap(
             prefix: prefix,
             suffix: suffix,
@@ -1389,17 +1858,24 @@ struct FormattingToolbarView: View {
         }
     }
 
-    /// Enter handler for thematic-break lines. The HR's `---` glyphs are
-    /// rendered zero-width with a hairline drawn over them, so the caret can
-    /// land at positions 0..lineLen of an HR line while looking like it's on
-    /// the hairline. Letting AppKit's default `insertNewline:` fire there
-    /// stacks new hairlines per keystroke: the inserted `\n` inherits
-    /// `.sidekickThematicBreak` from typing attributes (or survives the
-    /// paragraph-scoped reparse) and the layout manager paints one hairline
-    /// per contiguous TB run. Treat the HR as an atomic block boundary
-    /// instead — Enter escapes upward to the empty separator line above
-    /// (parser guarantees it exists per MarkdownInlineParser.swift
-    /// `prevLineIsEmpty`). Returns true when handled.
+    /// Enter handler for thematic-break lines. Defense-in-depth: production
+    /// code paths can't reach this anymore because `HybridTextView.snapCaretOutOfHR`
+    /// prevents the caret from landing on an HR line in the first place.
+    /// The handler stays for direct programmatic invocations and unit-test
+    /// coverage of the underlying invariant — "Enter on an HR line must not
+    /// fall through to default `insertNewline:`, which would inherit
+    /// `.sidekickThematicBreak` via typing attributes and stack hairlines."
+    ///
+    /// Branches on caret offset within the HR line:
+    ///   • offset 0: escape UP — pure caret move to the line above (or
+    ///     open a fresh `\n` at the doc-start case where there is none).
+    ///   • offset > 0: escape DOWN — insert a `\n` AFTER the HR's trailing
+    ///     `\n` (at `lineEnd`) and park the caret on the new blank line.
+    ///     Safe from hairline stacking: the insertion is in a NEW paragraph
+    ///     adjacent to the HR's `\n` (no TB attr), and the reparse only
+    ///     re-applies `.sidekickThematicBreak` to the `---` range itself.
+    ///
+    /// Returns true when handled.
     static func handleThematicBreakReturn(in textView: NSTextView) -> Bool {
         let body = textView.string
         let nsBody = body as NSString
@@ -1414,10 +1890,26 @@ struct FormattingToolbarView: View {
                                 at: lineRange.location,
                                 effectiveRange: nil) != nil else { return false }
 
-        // Doc-start HR has no separator line above. Open one with a clean
-        // `\n` (no TB attrs via shouldChangeText sandwich → typingAttributes
-        // path; at location 0 there is no preceding TB-tagged char to
-        // inherit from) and place the caret on it.
+        let offsetInLine = selection.location - lineRange.location
+
+        // RIGHT EDGE (offset > 0): escape DOWN. Insert `\n` at lineEnd
+        // (one past the HR's trailing `\n`, or at storage.length if the HR
+        // is the final block with no trailing `\n`) and place the caret on
+        // the new blank line.
+        if offsetInLine > 0 {
+            let lineEnd = lineRange.location + lineRange.length
+            let editRange = NSRange(location: lineEnd, length: 0)
+            guard textView.shouldChangeText(in: editRange, replacementString: "\n") else { return false }
+            textView.replaceCharacters(in: editRange, with: "\n")
+            textView.didChangeText()
+            textView.setSelectedRange(NSRange(location: lineEnd, length: 0))
+            return true
+        }
+
+        // LEFT EDGE, doc-start HR: no separator line above. Open one with
+        // a clean `\n` (no TB attrs via shouldChangeText sandwich →
+        // typingAttributes path; at location 0 there is no preceding
+        // TB-tagged char to inherit from) and place the caret on it.
         if lineRange.location == 0 {
             let editRange = NSRange(location: 0, length: 0)
             guard textView.shouldChangeText(in: editRange, replacementString: "\n") else { return false }
@@ -1427,19 +1919,25 @@ struct FormattingToolbarView: View {
             return true
         }
 
-        // Pure caret move — no text mutation, no shouldChangeText needed.
-        // Position `lineRange.location - 1` is the `\n` of the line above;
-        // selecting that location places the caret at the END of that line
-        // (which is the empty separator), ready for typing.
+        // LEFT EDGE, normal HR: pure caret move — no text mutation, no
+        // shouldChangeText needed. Position `lineRange.location - 1` is
+        // the `\n` of the line above; selecting that location places the
+        // caret at the END of that line (which is the empty separator),
+        // ready for typing.
         textView.setSelectedRange(NSRange(location: lineRange.location - 1, length: 0))
         return true
     }
 
     /// Inserts a markdown thematic break (`---`) on its own line below the
-    /// caret line. The parser only treats `---` as a thematic break when the
-    /// preceding line is empty (else it is a setext-H2 underline candidate),
-    /// so non-empty caret lines get an extra blank line inserted between the
-    /// content and the break. One-shot insert — no toggle-off path.
+    /// caret line. One-shot insert — no toggle-off path.
+    ///
+    /// Insertion shape always sandwiches `---` between blank lines so the
+    /// rendered hairline has breathing room above and below — matches the
+    /// Bear / Typora / Notion convention (HR feels like a section break, not
+    /// a divider squeezed against text). The leading blank line is NOT a
+    /// parser requirement: `findThematicBreaks` accepts any line that is
+    /// only dashes regardless of what's above it (the setext-H2
+    /// disambiguation guard was intentionally removed — see parser comment).
     ///
     /// Edit-sandwich pattern matches `performBlockQuote`. Caret lands on a
     /// real empty line BELOW the inserted `---`. Each insertion always
@@ -1451,6 +1949,19 @@ struct FormattingToolbarView: View {
     static func performInsertThematicBreak(in textView: NSTextView) {
         let nsBody = textView.string as NSString
         let range = textView.selectedRange()
+
+        // Bail when the caret is inside a fenced code block — inserting `---`
+        // there would (a) be semantically wrong (HR inside code), and (b) the
+        // leading `\n` we'd prepend would manufacture the blank-line precondition
+        // for the parser's thematic-break match, drawing a hairline through code.
+        // Silent `return` matches the existing toolbar bail convention in this
+        // file (no NSBeep — see lines ~1530/1550).
+        let fenceContentRanges = MarkdownInlineParser.findFencedCodeBlocks(in: textView.string)
+            .map(\.contentRange)
+        if fenceContentRanges.contains(where: { NSLocationInRange(range.location, $0) }) {
+            return
+        }
+
         let lineRange = nsBody.lineRange(for: range)
         let lineEnd = lineRange.location + lineRange.length
         let lineText = lineRange.length > 0 ? nsBody.substring(with: lineRange) : ""
@@ -1590,6 +2101,10 @@ private struct FormattingPopoverView: View {
     let activeInlineKind: FormattingToolbarView.InlineKind?
     let activeHeadingLevel: Int?
     let activeLinePrefix: FormattingToolbarView.LinePrefix?
+    /// quick-260523-29t: armed inline kinds. OR-ed into each inline button's
+    /// isActive so the toolbar reflects "armed for next-typed character" the
+    /// same way it reflects "caret inside an existing pair".
+    let armedInlineKinds: Set<FormattingToolbarView.InlineKind>
     let dismiss: () -> Void
 
     var body: some View {
@@ -1603,28 +2118,28 @@ private struct FormattingPopoverView: View {
                     systemName: "bold",
                     tooltip: "Bold (⌘B)",
                     accessibilityLabel: "Bold",
-                    isActive: activeInlineKind == .bold
+                    isActive: activeInlineKind == .bold || armedInlineKinds.contains(.bold)
                 ) { wrapSelection("**", "**"); dismiss() }
 
                 FormatButton(
                     systemName: "italic",
                     tooltip: "Italic (⌘I)",
                     accessibilityLabel: "Italic",
-                    isActive: activeInlineKind == .italic
+                    isActive: activeInlineKind == .italic || armedInlineKinds.contains(.italic)
                 ) { wrapSelection("*", "*"); dismiss() }
 
                 FormatButton(
                     systemName: "underline",
                     tooltip: "Underline (⌘U)",
                     accessibilityLabel: "Underline",
-                    isActive: activeInlineKind == .underline
+                    isActive: activeInlineKind == .underline || armedInlineKinds.contains(.underline)
                 ) { wrapSelection("<u>", "</u>"); dismiss() }
 
                 FormatButton(
                     systemName: "strikethrough",
                     tooltip: "Strikethrough (⌘⇧X)",
                     accessibilityLabel: "Strikethrough",
-                    isActive: activeInlineKind == .strikethrough
+                    isActive: activeInlineKind == .strikethrough || armedInlineKinds.contains(.strikethrough)
                 ) { wrapSelection("~~", "~~"); dismiss() }
             }
             .padding(.horizontal, 8)
@@ -1680,7 +2195,7 @@ private struct FormattingPopoverView: View {
                 ) { applyBlockQuote(); dismiss() }
 
                 ParagraphStyleRow(
-                    label: "◯  Checklist",
+                    label: "□  Checklist",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .checklist
                 ) { applyChecklist(); dismiss() }

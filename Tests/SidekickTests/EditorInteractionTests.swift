@@ -193,18 +193,22 @@ final class EditorInteractionTests: XCTestCase {
                        "Caret jumps to end of empty separator line above the HR")
     }
 
-    func test_thematicBreakReturn_caretMidDashes_alsoMovesCaretAbove() {
+    func test_thematicBreakReturn_caretMidDashes_treatedAsRightEdge() {
         // Caret at offset 2 (between first and second dash) — drawInsertionPoint
-        // shifts this visually to the right edge of the hairline, but the
-        // handler treats the entire HR line as an atomic boundary.
+        // shifts this visually to the right edge of the hairline. Right-edge
+        // semantics: Enter is end-of-block → insert a blank line BELOW the HR.
+        // (Pre-fix the handler escaped UP regardless of offset; that felt
+        // wrong on the right edge and is what this test now pins against.)
         let stack = makeStack(body: "\n---\n\n", selection: NSRange(location: 2, length: 0))
         let handled = stack.coordinator.textView(
             stack.textView,
             doCommandBy: #selector(NSResponder.insertNewline(_:))
         )
         XCTAssertTrue(handled)
-        XCTAssertEqual(stack.textView.string, "\n---\n\n")
-        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+        XCTAssertEqual(stack.textView.string, "\n---\n\n\n",
+                       "Right-edge Enter inserts `\\n` at lineEnd (one past the HR's trailing `\\n`)")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 5, length: 0),
+                       "Caret parks on the new blank line below the HR")
     }
 
     func test_thematicBreakReturn_hrAtDocStart_opensBlankLineAbove() {
@@ -291,7 +295,7 @@ final class EditorInteractionTests: XCTestCase {
     }
 
     /// The character on line 2 also needs bodyParagraphStyle so its line box
-    /// is 18pt (body) and not 32pt (h1). Without this the caret on line 2
+    /// is body height and not 32pt (h1). Without this the caret on line 2
     /// remains tall even though the font is body — the paragraph style is
     /// the load-bearing attribute for caret height.
     func test_enterFromH1_thenTypeChar_charHasBodyParagraphStyle() {
@@ -307,8 +311,8 @@ final class EditorInteractionTests: XCTestCase {
         stack.textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
 
         let aStyle = stack.textView.textStorage?.attribute(.paragraphStyle, at: 10, effectiveRange: nil) as? NSParagraphStyle
-        XCTAssertEqual(aStyle?.maximumLineHeight, 18,
-            "F-06: line 2 char must use bodyParagraphStyle (line box 18pt), not h1ParagraphStyle (32pt)")
+        XCTAssertEqual(aStyle?.maximumLineHeight, MarkdownTextStorage.bodyParagraphStyle.maximumLineHeight,
+            "F-06: line 2 char must use bodyParagraphStyle line box, not h1ParagraphStyle (32pt)")
     }
 
     // MARK: - F-10 — Title→body Tab handoff
@@ -457,6 +461,59 @@ final class EditorInteractionTests: XCTestCase {
         tv.insertText("t", replacementRange: NSRange(location: 6, length: 0))
         XCTAssertEqual(tv.string, "party 🎉t",
             "F-07 regression: emoji must not be overwritten by stale replacementRange on the next keystroke")
+    }
+
+    // MARK: - EDIT-03 — checklist delete paths
+
+    func test_checklistBackspace_emptyLine_stripsPrefix() {
+        // Path A / D-05: empty checklist line, caret at end of the 6-char prefix.
+        let stack = makeStack(body: "- [ ] ", selection: NSRange(location: 6, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Backspace on empty checklist line must be consumed")
+        XCTAssertEqual(stack.textView.string, "", "Whole 6-char prefix stripped — clean empty line")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistBackspace_contentStart_demotesLine() {
+        // Path B / D-06: caret at start of content — strip prefix, demote to plain line.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 6, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Backspace at content start must be consumed")
+        XCTAssertEqual(stack.textView.string, "task", "Prefix stripped, content preserved")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistForwardDelete_fromLineStart_stripsPrefix() {
+        // Path C: forward-delete from line start would remove the `-`; strip whole prefix.
+        let stack = makeStack(body: "- [ ] ", selection: NSRange(location: 0, length: 0))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteForward(_:)))
+        XCTAssertTrue(handled, "Forward-delete from line start must be consumed")
+        XCTAssertEqual(stack.textView.string, "", "Whole prefix stripped — clean empty line")
+        XCTAssertEqual(stack.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func test_checklistBackspace_selection_overlapsPrefix_noRemnant() {
+        // Path E: selection starts inside the prefix — union strip leaves no fragment.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 3, length: 5))
+        let handled = stack.coordinator.textView(
+            stack.textView, doCommandBy: #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertTrue(handled, "Selection overlapping the prefix must be consumed")
+        XCTAssertFalse(stack.textView.string.contains("- ["),
+                       "No broken `- [` prefix fragment may remain")
+        XCTAssertFalse(stack.textView.string.contains("- [ ]"),
+                       "No bare `- [ ]` remnant may remain")
+        XCTAssertEqual(stack.textView.string, "sk",
+                       "Union strip: lineStart..selectionEnd removed, leaving content tail")
+    }
+
+    func test_checklistBackspace_midContent_notIntercepted() {
+        // Caret mid-word — handler must decline so default single-char delete runs.
+        let stack = makeStack(body: "- [ ] task", selection: NSRange(location: 8, length: 0))
+        let handled = FormattingToolbarView.handleChecklistBackspace(in: stack.textView)
+        XCTAssertFalse(handled, "Mid-content Backspace must fall through to default delete")
     }
 
     // MARK: - F-07 — emoji stays visible after subsequent edits

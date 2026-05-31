@@ -314,6 +314,36 @@ final class MarkdownTextStorageTests: XCTestCase {
                        "Edits on later lines must not drop explicit H1 style")
     }
 
+    // MARK: - Checklist attribute tests (Wave 0 regression guards — EDIT-01)
+
+    func test_checklistPrefix_tagged_sidekickChecklistMarker() {
+        let unchecked = makeStorage("- [ ] task\n")
+        let uValue = unchecked.attribute(.sidekickChecklistMarker, at: 0, effectiveRange: nil)
+        XCTAssertNotNil(uValue, "Marker char must carry .sidekickChecklistMarker")
+        XCTAssertEqual(uValue as? Bool, false, "Unchecked line tags marker false")
+
+        let checked = makeStorage("- [x] task\n")
+        let cValue = checked.attribute(.sidekickChecklistMarker, at: 0, effectiveRange: nil)
+        XCTAssertNotNil(cValue, "Marker char must carry .sidekickChecklistMarker")
+        XCTAssertEqual(cValue as? Bool, true, "Checked line tags marker true")
+    }
+
+    func test_checkedItem_hasStrikethroughAndDim() {
+        // "- [x] done\n" — content "done" is at indices 6..<10
+        let checkedStorage = makeStorage("- [x] done\n")
+        let strike = checkedStorage.attribute(.strikethroughStyle, at: 6, effectiveRange: nil)
+        XCTAssertEqual(strike as? Int, NSUnderlineStyle.single.rawValue,
+                       "D-04: checked-item content must be struck through")
+        let color = checkedStorage.attribute(.foregroundColor, at: 6, effectiveRange: nil)
+        XCTAssertEqual(color as? NSColor, NSColor.tertiaryLabelColor,
+                       "D-04: checked-item content must be dimmed to tertiaryLabelColor")
+
+        // Unchecked content must NOT be struck through.
+        let openStorage = makeStorage("- [ ] open\n")
+        let openStrike = openStorage.attribute(.strikethroughStyle, at: 6, effectiveRange: nil)
+        XCTAssertNil(openStrike, "Unchecked content must not be struck through")
+    }
+
     // MARK: - SF Pro body font (aesthetic pass)
 
     func test_baseFont_isSFPro_notMono() {

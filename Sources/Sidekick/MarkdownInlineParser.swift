@@ -154,12 +154,14 @@ enum MarkdownInlineParser {
         pattern: "^> ",
         options: []
     )
-    // Thematic break: a line consisting only of three or more `-`, `*`, or `_`
-    // characters (mixed not allowed per CommonMark), with optional surrounding
-    // whitespace. The regex is run against single-line text (newline stripped
-    // before matching) so `^…$` anchors the whole line.
+    // Thematic break: a line consisting only of three or more `-` characters,
+    // with optional surrounding whitespace. CommonMark also permits `*` and
+    // `_` runs, but we intentionally restrict to dashes — `***` collides with
+    // bold-italic typing (`**` + `**`) and produced surprise horizontal rules.
+    // The regex is run against single-line text (newline stripped before
+    // matching) so `^…$` anchors the whole line.
     private static let thematicBreakRegex = try! NSRegularExpression(
-        pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$",
+        pattern: "^[ \\t]*-{3,}[ \\t]*$",
         options: []
     )
     private static let fenceRegex = try! NSRegularExpression(
@@ -546,21 +548,38 @@ enum MarkdownInlineParser {
         return results
     }
 
-    // MARK: Thematic breaks (`---` / `***` / `___`)
+    // MARK: Thematic breaks (`---`)
 
     /// Returns the line-content NSRange (no trailing newline) for every
     /// thematic-break line in `string`. A thematic break is a line containing
-    /// only three-or-more `-`, `*`, or `_` characters (single character class —
-    /// mixed not allowed) with optional surrounding spaces/tabs.
+    /// only three-or-more `-` characters with optional surrounding spaces/tabs.
+    /// CommonMark also accepts `***` and `___`, but we restrict to dashes —
+    /// `***` collides with bold-italic typing (`**` + `**`) and produced
+    /// surprise rules.
     ///
-    /// To rule out heading underlines (`Title\n---`) and table separators,
-    /// callers (MarkdownTextStorage.applyThematicBreak) should additionally
-    /// check that the previous line is empty. Fenced-code-block expansion is
-    /// handled at the storage layer (the reparse range subsumes the fence).
+    /// Lines whose range intersects a fenced-code-block content range are
+    /// excluded — `---` inside a fence is source text, not an HR (mirrors
+    /// the `findTableBlocks` fence filter).
+    ///
+    /// NO previous-line-empty guard: CommonMark's setext-H2 disambiguation
+    /// (`Title\n---` is a heading underline, not a thematic break) does not
+    /// apply here because Sidekick does not render setext headings. Users
+    /// expect a `---` line to draw a hairline regardless of what's above.
+    /// The earlier guard also caused a paragraph-scope vs full-doc parsing
+    /// asymmetry that produced a "HR appears, then vanishes on note switch"
+    /// bug.
     static func findThematicBreaks(in string: String) -> [NSRange] {
         let ns = string as NSString
         let fullLength = ns.length
         guard fullLength > 0 else { return [] }
+
+        // Lines inside a fenced code block are claimed by the fence and must
+        // not be re-interpreted as a thematic break (mirrors the
+        // `findTableBlocks` fence filter at line ~875).
+        let fenceContentRanges = findFencedCodeBlocks(in: string).map(\.contentRange)
+        func intersectsFence(_ r: NSRange) -> Bool {
+            fenceContentRanges.contains { NSIntersectionRange($0, r).length > 0 }
+        }
 
         var results: [NSRange] = []
         var lineStart = 0
@@ -582,21 +601,19 @@ enum MarkdownInlineParser {
             let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
 
             if Self.thematicBreakRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
-                // Heading-underline guard: a `---` line directly under a non-
-                // empty line is a setext H2 underline, not a thematic break.
-                // Same for `===`. We don't support setext headings, but the
-                // visual ambiguity is enough to skip the hairline render — the
-                // user expects the dashes to read as text in that case.
-                let prevLineIsEmpty: Bool
-                if lineRange.location == 0 {
-                    prevLineIsEmpty = true
-                } else {
-                    let prevLineRange = ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
-                    let prevText = ns.substring(with: prevLineRange).trimmingCharacters(in: .whitespacesAndNewlines)
-                    prevLineIsEmpty = prevText.isEmpty
-                }
-                if prevLineIsEmpty {
-                    results.append(NSRange(location: lineRange.location, length: matchLength))
+                // The previous-line-empty guard (CommonMark setext-H2
+                // disambiguation) was removed: Sidekick doesn't render
+                // setext headings, and users expect a `---` line to render
+                // as a hairline regardless of what's above it. The previous
+                // guard also produced a substring-scoping bug — paragraph-
+                // scoped reparses saw the `---` at substring-offset 0 and
+                // accepted it, while full-doc reparses correctly rejected,
+                // making the HR appear briefly and then vanish on note
+                // switch. Treating `---` as HR unconditionally is consistent
+                // across both reparse scopes.
+                let candidate = NSRange(location: lineRange.location, length: matchLength)
+                if !intersectsFence(candidate) {
+                    results.append(candidate)
                 }
             }
 

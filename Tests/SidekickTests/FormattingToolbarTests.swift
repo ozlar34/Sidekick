@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Sidekick
 
 /// Pins the pure string-transformation contract that backs the
@@ -756,5 +757,188 @@ final class FormattingToolbarTests: XCTestCase {
             range: NSRange(location: 5, length: 0)
         )
         XCTAssertEqual(result.newBody, body, "Strikethrough wrap also inert inside fence")
+    }
+
+    // MARK: - performInsertThematicBreak fence awareness (260524-hul)
+
+    /// Builds the minimum TextKit assembly so `performInsertThematicBreak`
+    /// can be invoked against a real NSTextView. Mirrors the wiring used by
+    /// `EditorInteractionTests.makeStack` (storage + MarkdownLayoutManager +
+    /// container + NSTextView; `isRichText = false`).
+    @MainActor
+    private func makeTextViewStack(body: String, selection: NSRange) -> NSTextView {
+        let storage = MarkdownTextStorage()
+        let layoutManager = MarkdownLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 400, height: 400))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        let textView = NSTextView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 400),
+            textContainer: container
+        )
+        textView.isRichText = false
+        if !body.isEmpty {
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: body)
+        }
+        textView.setSelectedRange(selection)
+        return textView
+    }
+
+    @MainActor
+    func test_performInsertThematicBreak_caretInsideFence_noEdit() {
+        // Caret placed inside the fence content (between `code` and the
+        // closing fence). The toolbar HR button must be a silent no-op —
+        // no string change, no selection change. Pre-fix, this manufactured
+        // the bug by inserting `\n---\n\n`, which the parser then tagged
+        // as an HR straight through the code block.
+        let body = "```\ncode\n```\n"
+        // contentRange covers "code\n" at offsets 4..9. Place caret at 8
+        // (end of "code", before its trailing newline) — squarely inside.
+        let caret = NSRange(location: 8, length: 0)
+        let textView = makeTextViewStack(body: body, selection: caret)
+
+        let stringBefore = textView.string
+        let selectionBefore = textView.selectedRange()
+
+        FormattingToolbarView.performInsertThematicBreak(in: textView)
+
+        XCTAssertEqual(textView.string, stringBefore,
+                       "Caret inside fence: no body mutation")
+        XCTAssertEqual(textView.selectedRange(), selectionBefore,
+                       "Caret inside fence: no selection mutation")
+    }
+
+    @MainActor
+    func test_performInsertThematicBreak_caretOutsideFence_stillInserts() {
+        // Caret at the end of the closing-fence line (location 12, just
+        // before the trailing newline). Outside every fence content range
+        // (contentRange spans offsets 4..<9), so normal insertion proceeds.
+        // Pins no regression on the happy path.
+        //   "```\n"  = 0..<4
+        //   "code\n" = 4..<9   ← contentRange
+        //   "```"   = 9..<12   ← closing fence line text
+        //   "\n"    = 12..<13
+        let body = "```\ncode\n```\n"
+        let caret = NSRange(location: 12, length: 0)
+        let textView = makeTextViewStack(body: body, selection: caret)
+
+        let lengthBefore = (textView.string as NSString).length
+
+        FormattingToolbarView.performInsertThematicBreak(in: textView)
+
+        XCTAssertTrue(textView.string.contains("---"),
+                      "Caret outside fence: `---` must be inserted")
+        // Closing fence line has content + trailing newline → insertion is
+        // "\n---\n\n" (length 6).
+        let lengthAfter = (textView.string as NSString).length
+        XCTAssertEqual(lengthAfter - lengthBefore, 6,
+                       "Insertion shape `\\n---\\n\\n` adds exactly 6 UTF-16 units")
+    }
+
+    // MARK: - handleThematicBreakReturn (right-edge fix)
+    //
+    // The HR's `---` glyphs are zero-width; the caret-shift in
+    // `HybridTextView.drawInsertionPoint` makes any offset > 0 visually anchor
+    // to the right edge of the hairline. The handler must branch on offset:
+    //   • offset 0 (left edge): escape UP to the empty separator above
+    //   • offset > 0 (right edge): escape DOWN by inserting `\n` at lineEnd
+    //     and parking the caret on the new blank line
+    //
+    // Pre-fix the handler always escaped UP regardless of offset, which felt
+    // wrong on the right edge (the user expected end-of-block behavior).
+
+    @MainActor
+    func test_handleThematicBreakReturn_caretAtRightEdge_insertsBlankLineBelow() {
+        // "Foo\n\n---\nBar"
+        //  0123 4 567 8 9..11
+        // HR line = [5, 4] (chars "---\n"); right edge caret = 8 (before HR's \n).
+        let body = "Foo\n\n---\nBar"
+        let textView = makeTextViewStack(body: body, selection: NSRange(location: 8, length: 0))
+
+        let handled = FormattingToolbarView.handleThematicBreakReturn(in: textView)
+
+        XCTAssertTrue(handled, "Handler must consume Enter on an HR line")
+        XCTAssertEqual(textView.string, "Foo\n\n---\n\nBar",
+                       "Right edge Enter inserts `\\n` at lineEnd (position 9)")
+        XCTAssertEqual(textView.selectedRange(),
+                       NSRange(location: 9, length: 0),
+                       "Caret parks on the new blank line")
+    }
+
+    @MainActor
+    func test_handleThematicBreakReturn_caretInMiddleOfHR_treatedAsRightEdge() {
+        // Caret at offset 1 within `---` (between first and second dash).
+        // The zero-width-glyph design makes offsets 1, 2, 3 visually
+        // indistinguishable from the right edge — all take the same branch.
+        let body = "Foo\n\n---\nBar"
+        let textView = makeTextViewStack(body: body, selection: NSRange(location: 6, length: 0))
+
+        let handled = FormattingToolbarView.handleThematicBreakReturn(in: textView)
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(textView.string, "Foo\n\n---\n\nBar",
+                       "Mid-HR Enter behaves identically to right-edge Enter")
+        XCTAssertEqual(textView.selectedRange(),
+                       NSRange(location: 9, length: 0))
+    }
+
+    @MainActor
+    func test_handleThematicBreakReturn_caretAtLeftEdge_stillEscapesUp() {
+        // Offset 0 keeps the existing escape-UP behavior. This locks in that
+        // the right-edge split didn't regress the left-edge case.
+        let body = "Foo\n\n---\nBar"
+        let textView = makeTextViewStack(body: body, selection: NSRange(location: 5, length: 0))
+
+        let handled = FormattingToolbarView.handleThematicBreakReturn(in: textView)
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(textView.string, body,
+                       "Left edge Enter is a pure caret move — no text mutation")
+        XCTAssertEqual(textView.selectedRange(),
+                       NSRange(location: 4, length: 0),
+                       "Caret moves to lineRange.location - 1 (the empty separator above)")
+    }
+
+    @MainActor
+    func test_handleThematicBreakReturn_caretAtRightEdge_noTrailingNewline() {
+        // HR as the final block with no trailing `\n`. lineEnd == storage.length,
+        // so the insert appends a `\n` and the caret lands at the new EOL.
+        let body = "Foo\n\n---"
+        let textView = makeTextViewStack(body: body, selection: NSRange(location: 8, length: 0))
+
+        let handled = FormattingToolbarView.handleThematicBreakReturn(in: textView)
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(textView.string, "Foo\n\n---\n",
+                       "Trailing `\\n` appended after the HR")
+        XCTAssertEqual(textView.selectedRange(),
+                       NSRange(location: 8, length: 0),
+                       "Caret lands on the new EOL")
+    }
+
+    @MainActor
+    func test_handleThematicBreakReturn_caretAtRightEdge_noHairlineStacking() {
+        // Regression guard: after the right-edge Enter, the storage must still
+        // carry exactly ONE contiguous `.sidekickThematicBreak` run of length 3
+        // (just the `---` chars). Any leakage onto the inserted `\n` would
+        // paint a second hairline.
+        let body = "Foo\n\n---\nBar"
+        let textView = makeTextViewStack(body: body, selection: NSRange(location: 8, length: 0))
+
+        _ = FormattingToolbarView.handleThematicBreakReturn(in: textView)
+
+        guard let storage = textView.textStorage else {
+            return XCTFail("textView must have a textStorage")
+        }
+        var tbRuns: [NSRange] = []
+        storage.enumerateAttribute(
+            .sidekickThematicBreak,
+            in: NSRange(location: 0, length: storage.length),
+            options: []
+        ) { value, attrRange, _ in
+            if (value as? Bool) == true { tbRuns.append(attrRange) }
+        }
+        XCTAssertEqual(tbRuns.count, 1, "Exactly one TB run survives the edit")
+        XCTAssertEqual(tbRuns.first?.length, 3, "TB run covers only the `---` chars")
     }
 }

@@ -111,6 +111,23 @@ final class MarkdownTextStorage: NSTextStorage {
         return style
     }()
 
+    /// Paragraph style for checklist (task-list) lines. Identical to
+    /// `bulletParagraphStyle` except `headIndent` is widened: the checklist
+    /// marker is laid out as a fixed-width control glyph
+    /// (`MarkdownLayoutManager.checklistMarkerWidth`) followed by a visible
+    /// trailing space (~4pt), so content sits further right than a bullet's
+    /// `• ` prefix. Matching `headIndent` to that content start keeps wrapped
+    /// lines hanging under the first-line text instead of the drawn square.
+    static let checklistParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = 0
+        style.headIndent = MarkdownLayoutManager.checklistMarkerWidth + 4
+        style.minimumLineHeight = 20
+        style.maximumLineHeight = 20
+        style.paragraphSpacing = 7
+        return style
+    }()
+
     // MARK: - Required overrides (NSTextStorage subclass contract)
 
     override var string: String { backing.string }
@@ -595,9 +612,10 @@ final class MarkdownTextStorage: NSTextStorage {
 
     /// Apply task-list (checklist) styling: tag the leading `-` with
     /// `.sidekickChecklistMarker` (value=isChecked) so the layout manager
-    /// substitutes ◯/◉; hide the surrounding ` [ ]` / ` [x]` chars via
-    /// `.sidekickHiddenMarker`. The trailing space stays visible so the
-    /// rendered result is `◯ item` / `◉ item`.
+    /// lays it out as a fixed-width control glyph and paints a custom square
+    /// over it; hide the surrounding ` [ ]` / ` [x]` chars via
+    /// `.sidekickHiddenMarker`. The trailing space stays visible so a gap
+    /// separates the drawn square from the item text.
     ///
     /// On checked items, dim the content with strikethrough + tertiary color
     /// to match Apple Notes' done-item treatment. Round-trip stays byte-
@@ -617,14 +635,14 @@ final class MarkdownTextStorage: NSTextStorage {
             // Use the same bold body-size font as the bullet marker so the
             // ◯/◉ glyph reads at consistent weight with surrounding text.
             backing.addAttribute(.font,
-                                 value: NSFont.systemFont(ofSize: 15, weight: .bold),
+                                 value: NSFont.systemFont(ofSize: 15, weight: .semibold),
                                  range: marker)
-            // Hanging indent + per-item air — same style bullets use. Applied
-            // for both checked and unchecked rows so the visual rhythm matches
-            // bullets and numbered lists.
+            // Hanging indent + per-item air. Uses the checklist-specific style
+            // (wider headIndent than bullets) so wrapped lines hang under the
+            // first-line content rather than under the drawn square.
             let lineRange = (backing.string as NSString).lineRange(for: marker)
             backing.addAttribute(.paragraphStyle,
-                                 value: Self.bulletParagraphStyle,
+                                 value: Self.checklistParagraphStyle,
                                  range: lineRange)
 
             tagHiddenMarker(shifting: m.hiddenRange, by: offset)
@@ -771,7 +789,7 @@ final class MarkdownTextStorage: NSTextStorage {
         }
     }
 
-    /// Apply thematic-break styling: tag the dash/asterisk/underscore line with
+    /// Apply thematic-break styling: tag the `---` line with
     /// `.sidekickThematicBreak` (read by the layout manager's drawBackground
     /// override to paint the hairline) AND with `.sidekickHiddenMarker` so the
     /// glyphs collapse to zero width — the raw `---` source chars survive in

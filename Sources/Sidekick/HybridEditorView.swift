@@ -38,7 +38,65 @@ import SwiftUI
 ///
 /// `widthTracksTextView` + `autoresizingMask = .width` continue to handle
 /// width tracking; we only own the vertical floor.
-final class HybridTextView: NSTextView {
+/// Note: not `final` so test files can subclass with a local UndoManager
+/// (windowless NSTextViews have no undoManager via the responder chain).
+/// See `TestableHybridTextView` in ArmedInlineFormatTests.swift. Production
+/// code never subclasses HybridTextView — there is exactly one instance
+/// created in `HybridEditorView.makeNSView`.
+class HybridTextView: NSTextView {
+    // MARK: - Armed inline-format state (quick-260523-29t)
+    //
+    // "Hide markers on empty selection" UX: Cmd+B with caret-only selection
+    // does NOT write `****` into the body; it arms the next-typed character's
+    // style. State lives on the text view (the unique focused-editor source
+    // of truth) and is mirrored upward through the weak `hybridController`
+    // back-pointer so the toolbar can OR arming into its `isActive` highlight.
+    //
+    // Design Note (clear-on-consumption vs persist-until-cancel):
+    //   The locked decisions hedged between these two behaviors. We CLEAR on
+    //   consumption because the user-visible behavior is identical: after the
+    //   first typed char, the caret sits between char and suffix — i.e. INSIDE
+    //   an existing inline pair. The toolbar's `findAnyEnclosingInlinePair`
+    //   path keeps the button highlighted as long as the caret stays inside.
+    //   Subsequent typed chars naturally extend the pair via vanilla NSTextView
+    //   insertion. On caret-move-out the inline-pair detector reports
+    //   "not in a pair" and the button de-highlights. Strictly less state to
+    //   track; revisit only if real UAT proves the simpler version feels wrong.
+
+    /// Set of armed inline kinds. Empty when no Cmd+B/I/U/etc has been
+    /// pressed with an empty selection (the default state).
+    var armedInlineKinds: Set<FormattingToolbarView.InlineKind> = []
+
+    /// Order of arming (innermost / first-armed → outermost / last-armed).
+    /// Drives `composeArmedWrap`'s reading-order output. Kept in lockstep
+    /// with `armedInlineKinds` by `FormattingToolbarView.armedInlineKindsAfterArm`.
+    var armedInlineKindsOrder: [FormattingToolbarView.InlineKind] = []
+
+    /// Weak back-pointer to the controller so the text view can republish
+    /// arming changes upward. Set once in `HybridEditorView.makeNSView` right
+    /// after `controller.textView = textView`. Weak to avoid the retain cycle
+    /// (controller owns view-lifetime; we don't want the text view to keep
+    /// the controller alive past its scope).
+    weak var hybridController: HybridEditorController?
+
+    /// One-shot flag — set to true immediately before a programmatic
+    /// `setSelectedRange` call that participates in consumption-on-type, so
+    /// the selection-change cancel branch in `setSelectedRanges` skips clearing
+    /// the armed set on THAT specific call. AppKit fires selection-change as
+    /// a side-effect of `replaceCharacters` + `setSelectedRange`, which would
+    /// otherwise clear the armed set BEFORE consumption finishes.
+    private var suppressArmedClearOnNextSelectionChange: Bool = false
+
+    /// Republish armed kinds upward. Coalesced (skip write when value
+    /// unchanged) for the same SwiftUI re-render reason as the other
+    /// HybridEditorController publishers.
+    func republishArmedKinds() {
+        guard let c = hybridController else { return }
+        if c.armedInlineKinds != armedInlineKinds {
+            c.armedInlineKinds = armedInlineKinds
+        }
+    }
+
     /// Click-to-toggle for GFM task-list checkboxes. When the user clicks on
     /// the substituted ◯/◉ glyph (the leading `-` char of a task-list line),
     /// flip the state byte (` ` ↔ `x`) instead of moving the caret. Anywhere
@@ -73,11 +131,21 @@ final class HybridTextView: NSTextView {
                    storage.attribute(.sidekickChecklistMarker,
                                      at: charIdx,
                                      effectiveRange: nil) != nil {
-                    let glyphRect = lm.boundingRect(
-                        forGlyphRange: NSRange(location: glyphIdx, length: 1),
-                        in: tc
+                    let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
+                    let glyphLocation = lm.location(forGlyphAt: glyphIdx)
+                    let markerFont = (storage.attribute(.font, at: charIdx, effectiveRange: nil) as? NSFont)
+                        ?? NSFont.systemFont(ofSize: 15)
+                    // Shared geometry with MarkdownLayoutManager.drawBackground so
+                    // the tap zone always tracks the painted square.
+                    let squareRect = MarkdownLayoutManager.checklistSquareRect(
+                        lineFragmentRect: lineRect,
+                        glyphLocation: glyphLocation,
+                        markerFont: markerFont
                     )
-                    if textPoint.x >= glyphRect.minX {
+                    // UI-SPEC: minimum 20×20pt tap zone centered on the drawn square.
+                    let squareSide: CGFloat = 11
+                    let tapZone = squareRect.insetBy(dx: -(20 - squareSide) / 2, dy: -(20 - squareSide) / 2)
+                    if tapZone.contains(textPoint) {
                         if FormattingToolbarView.toggleChecklistState(at: charIdx, in: self) {
                             return
                         }
@@ -105,6 +173,91 @@ final class HybridTextView: NSTextView {
            !NSEqualRanges(range, selectedRange()) {
             range = NSRange(location: NSNotFound, length: 0)
         }
+
+        // quick-260523-29t: armed-inline consumption-on-type. Layers BENEATH
+        // the F-07 range fix so the consumption uses the sanitized range.
+        // Only fires when ALL of:
+        //   a. there is an armed inline kind
+        //   b. no IME composition is in flight (hasMarkedText() == false)
+        //   c. input is a printable, non-control single-character or longer
+        //      run of printables (filters out Tab, Enter, etc.)
+        //   d. caret is NOT inside a fenced code block (defensive — arming
+        //      was already gated, but caret could have moved INTO a fence
+        //      while armed and BEFORE the selection-cancel cleared it; F-05
+        //      intent says drop consumption AND clear)
+        // When consumption fires, the wrap is built from `composeArmedWrap`,
+        // applied via the standard shouldChangeText/replaceCharacters/
+        // didChangeText sandwich (single undo step), the caret is placed
+        // between the typed char and the closing suffix, and armed state
+        // is cleared (Design Note above).
+        if !armedInlineKinds.isEmpty, !hasMarkedText() {
+            let effective: String
+            if let s = string as? String {
+                effective = s
+            } else if let a = string as? NSAttributedString {
+                effective = a.string
+            } else {
+                effective = ""
+            }
+
+            let isPrintable = !effective.isEmpty && effective.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+
+            if isPrintable {
+                // F-05 defense: drop consumption if caret is now inside a
+                // fenced code block, AND clear armed state.
+                let editRange: NSRange = (range.location == NSNotFound) ? selectedRange() : range
+                let body = self.string
+                var insideFence = false
+                for fence in MarkdownInlineParser.findFencedCodeBlocks(in: body) {
+                    let fenceContent = fence.contentRange
+                    let editEnd = editRange.location + editRange.length
+                    let startInside = editRange.location >= fenceContent.location
+                        && editRange.location <= fenceContent.location + fenceContent.length
+                    let endInside = editEnd >= fenceContent.location
+                        && editEnd <= fenceContent.location + fenceContent.length
+                    if startInside || endInside {
+                        insideFence = true
+                        break
+                    }
+                }
+
+                if insideFence {
+                    armedInlineKinds.removeAll()
+                    armedInlineKindsOrder.removeAll()
+                    republishArmedKinds()
+                    super.insertText(string, replacementRange: range)
+                    return
+                }
+
+                let (p, s) = FormattingToolbarView.composeArmedWrap(
+                    order: armedInlineKindsOrder
+                )
+                let replacement = p + effective + s
+                guard shouldChangeText(in: editRange, replacementString: replacement) else {
+                    return
+                }
+                replaceCharacters(in: editRange, with: replacement)
+                didChangeText()
+
+                let caretLoc = editRange.location
+                    + (p as NSString).length
+                    + (effective as NSString).length
+                // Suppress the side-effect selection-change cancel — the
+                // selection move below is OUR programmatic caret placement,
+                // not user navigation.
+                suppressArmedClearOnNextSelectionChange = true
+                setSelectedRange(NSRange(location: caretLoc, length: 0))
+
+                // Clear armed state per Design Note (clear-on-consumption).
+                armedInlineKinds.removeAll()
+                armedInlineKindsOrder.removeAll()
+                republishArmedKinds()
+                return
+            }
+        }
+
         super.insertText(string, replacementRange: range)
     }
 
@@ -116,62 +269,127 @@ final class HybridTextView: NSTextView {
         super.setConstrainedFrameSize(size)
     }
 
-    /// Tracks the last rect we drew a shifted HR-line caret at, so we can
-    /// invalidate it on the next selection change. NSTextView caches the
-    /// *unshifted* caret rect for its own setNeedsDisplay invalidation, so
-    /// if we don't manually invalidate the shifted position, the caret
-    /// pixel persists as a ghost when the caret moves away.
-    private var lastShiftedCaretRect: NSRect?
+    /// Compute the position to snap a caret to when `target` lands on a
+    /// thematic-break line. Returns `nil` if no snap is needed (target is
+    /// not on an HR line, or the line is the entire document so there is
+    /// nowhere to go).
+    ///
+    /// HR lines are uninhabitable by design: the dash glyphs are zero-width
+    /// (`.sidekickHiddenMarker` ORs `.null` into the glyph property), so
+    /// every caret position INSIDE the line collapses to a single visual
+    /// point. Letting the caret rest there produces a misleading position
+    /// — natural NSTextView puts it at x=0 (left edge), older overrides
+    /// shifted it to the right edge of the hairline; both lie about where
+    /// the next typed character will visually land. Pushing the caret to
+    /// the line above or below keeps user mental model coherent (matches
+    /// Bear / iA Writer).
+    ///
+    /// Direction inferred from `previous`:
+    ///   * `target > previous` → caret moving forward, snap DOWN to the
+    ///     start of the line below HR.
+    ///   * `target ≤ previous` → moving backward, snap UP to the end of
+    ///     the line above HR.
+    /// If only one neighbor exists, that wins regardless of direction.
+    /// If neither exists (HR is the whole document), return `nil` and
+    /// leave the caret alone — degenerate case, no good answer.
+    private func snapCaretOutOfHR(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target >= 0, target <= n else { return nil }
 
-    /// Selection changes are the trigger for HR-caret ghost cleanup. We
-    /// override the most-primitive selection setter (multi-range form) so
-    /// every path — keyboard, mouse, programmatic — invalidates the prior
-    /// shifted rect before NSTextView updates internal state.
+        // lineRange wants an index INSIDE the string. Clamp at n-1 for
+        // the end-of-doc case where target == n (one past last char).
+        let probeLoc = min(target, n - 1)
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: probeLoc, length: 0))
+        guard lineRange.length > 0 else { return nil }
+
+        var foundHR = false
+        storage.enumerateAttribute(
+            .sidekickThematicBreak,
+            in: lineRange,
+            options: []
+        ) { value, _, stop in
+            if (value as? Bool) == true {
+                foundHR = true
+                stop.pointee = true
+            }
+        }
+        guard foundHR else { return nil }
+
+        // Same-line exemption: if `previous` was on the SAME line as
+        // `target`, the user is moving within the line (typing, or
+        // intra-line navigation that landed on a freshly-converted HR).
+        // Don't snap — they haven't crossed a line boundary, and yanking
+        // them off the line they just typed on would be jarring. Snap
+        // only takes effect when caret crosses a line boundary INTO HR
+        // (arrow keys, clicks from another line, etc.).
+        let prevProbe = min(max(previous, 0), n - 1)
+        if prevProbe >= 0 {
+            let prevLineRange = ns.lineRange(for: NSRange(location: prevProbe, length: 0))
+            if NSEqualRanges(prevLineRange, lineRange) {
+                return nil
+            }
+        }
+
+        let hasAbove = lineRange.location > 0
+        let lineEndsWithNewline =
+            ns.character(at: lineRange.location + lineRange.length - 1) == 0x0A
+        let hasBelow = lineEndsWithNewline
+
+        let aboveLoc = lineRange.location - 1
+        let belowLoc = lineRange.location + lineRange.length
+
+        if !hasAbove && !hasBelow { return nil }
+        if !hasAbove { return belowLoc }
+        if !hasBelow { return aboveLoc }
+        return target > previous ? belowLoc : aboveLoc
+    }
+
+    /// Selection-change funnel — every keyboard, mouse, and programmatic
+    /// selection change reaches this override.
+    ///
+    /// Two responsibilities:
+    ///   1. quick-260523-29t armed-inline cancel: any non-still-selecting
+    ///      change clears the armed set, UNLESS the one-shot
+    ///      `suppressArmedClearOnNextSelectionChange` flag is set (which
+    ///      `insertText` raises around its own programmatic caret-placement
+    ///      call). `stillSelecting == true` is a drag-in-progress — don't
+    ///      clear arming mid-drag; AppKit fires a final `stillSelecting ==
+    ///      false` when the drag ends and THAT clears.
+    ///   2. HR-line caret-skip: when the proposed selection is a single
+    ///      zero-length caret landing on a thematic-break line, redirect
+    ///      it to the nearest non-HR neighbor before passing to super.
+    ///      Range selections (length > 0) are left alone so a user can
+    ///      shift-select across an HR.
     override func setSelectedRanges(
         _ ranges: [NSValue],
         affinity: NSSelectionAffinity,
         stillSelecting: Bool
     ) {
-        if let prev = lastShiftedCaretRect {
-            setNeedsDisplay(prev.insetBy(dx: -2, dy: -2))
-            lastShiftedCaretRect = nil
-        }
-        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
-    }
-
-    /// On a thematic-break line the `---` source glyphs are zero-width
-    /// (.null), so NSTextView's natural caret rect lands at x=0 for every
-    /// position inside the line. Visually, the user sees the caret stuck
-    /// at the left edge regardless of arrow-key movement. We detect a
-    /// caret whose preceding character carries `.sidekickThematicBreak`
-    /// and shift the draw rect to the right edge of the hairline — where
-    /// the rendered horizontal rule visually ends.
-    ///
-    /// Position 0 of an HR line (probe char has no thematic break attr)
-    /// stays at the left edge so down-arrow from above lands sensibly.
-    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        if let storage = textStorage,
-           let tc = textContainer,
-           selectedRange().length == 0 {
-            let caret = selectedRange().location
-            let n = storage.length
-            if caret > 0,
-               caret - 1 < n,
-               storage.attribute(.sidekickThematicBreak,
-                                 at: caret - 1,
-                                 effectiveRange: nil) != nil {
-                let inset = tc.lineFragmentPadding
-                let caretWidth = max(rect.width, 1)
-                var shifted = rect
-                shifted.origin.x = textContainerOrigin.x + tc.size.width - inset - caretWidth
-                super.drawInsertionPoint(in: shifted, color: color, turnedOn: flag)
-                if flag {
-                    lastShiftedCaretRect = shifted
-                }
-                return
+        if !stillSelecting {
+            if suppressArmedClearOnNextSelectionChange {
+                suppressArmedClearOnNextSelectionChange = false
+            } else if !armedInlineKinds.isEmpty {
+                armedInlineKinds.removeAll()
+                armedInlineKindsOrder.removeAll()
+                republishArmedKinds()
             }
         }
-        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+
+        var effectiveRanges = ranges
+        if !stillSelecting,
+           ranges.count == 1,
+           let proposed = ranges.first?.rangeValue,
+           proposed.length == 0,
+           let snapped = snapCaretOutOfHR(
+               target: proposed.location,
+               previous: selectedRange().location
+           ) {
+            effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
+        }
+
+        super.setSelectedRanges(effectiveRanges, affinity: affinity, stillSelecting: stillSelecting)
     }
 
     override func viewDidMoveToSuperview() {
@@ -305,6 +523,9 @@ struct HybridEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
         controller.textView = textView   // NEW (D-TB-02) — publish upward once
+        // quick-260523-29t: weak back-pointer so HybridTextView can republish
+        // armedInlineKinds upward without a retain cycle.
+        textView.hybridController = controller
 
         // Seed initial text. replaceCharacters triggers processEditing which
         // applies the initial attribute pass.
@@ -326,28 +547,100 @@ struct HybridEditorView: NSViewRepresentable {
         return scrollView
     }
 
+    /// Outcome of the EDIT-02 `updateNSView` binding-push decision.
+    ///
+    /// Extracted as a named type so the guard's branching logic is unit-testable
+    /// without mounting the full `NSViewRepresentable` (IN-02). `updateNSView`
+    /// itself just switches on the result.
+    enum BindingPushDecision: Equatable {
+        /// Binding value already equals the text view string — nothing to do.
+        case noChange
+        /// Incoming `text` differs from the text view, but no genuine external
+        /// push has occurred (tokens equal) — this is a reflexive echo of user
+        /// typing. Skip the undo-corrupting bare-storage replace.
+        case reflexiveEcho
+        /// A genuine external push (note switch / reload-from-disk) raised the
+        /// token. Apply the bare-storage replace and record the token.
+        case applyExternalPush
+    }
+
+    /// Pure decision function for the EDIT-02 binding-push guard.
+    ///
+    /// Classification is by EXPLICIT PUSH TOKEN, never by string value:
+    ///   - currentString == incomingText               -> noChange
+    ///   - currentToken != lastConsumedToken           -> applyExternalPush
+    ///   - otherwise (token unchanged, strings differ) -> reflexiveEcho
+    ///
+    /// Why token, not string (history): the WR-01 fix tried to distinguish
+    /// echo vs push by comparing `incomingText` against a remembered string. A
+    /// single-shot variant of that (commit 79f0f3b) cleared the remembered
+    /// string on the first echo, so every later reflexive echo of normal
+    /// typing was misclassified as an external push -> bare-storage replace ->
+    /// corrupted undo stack -> Cmd+Z wiped the whole note. An explicit push
+    /// token cannot be fooled by value collisions in EITHER direction.
+    static func bindingPushDecision(
+        currentString: String,
+        incomingText: String,
+        currentToken: Int,
+        lastConsumedToken: Int
+    ) -> BindingPushDecision {
+        guard currentString != incomingText else { return .noChange }
+        if currentToken != lastConsumedToken {
+            return .applyExternalPush
+        }
+        return .reflexiveEcho
+    }
+
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView,
               let storage = textView.textStorage as? MarkdownTextStorage else { return }
 
-        // External binding-push: e.g. reloadFromDisk() (STORAGE-03) or
-        // toolbar wrapSelection mutation from Phase 10.
+        // External binding-push guard (EDIT-02).
         //
-        // Guard against infinite loop: only push into storage when the
-        // binding value differs from the current text view string. If we
-        // blindly wrote every update, textDidChange → binding.text = tv.string
-        // → updateNSView → storage.replaceCharacters → textDidChange would
-        // never terminate on first keystroke.
-        if textView.string != text {
-            // Programmatic edit — bypass the shouldChangeText sandwich
-            // (CONTEXT PATTERNS line 497 note): this update originates from
-            // SwiftUI state, NOT from a user keystroke, so we should NOT
-            // register on the NSTextView undo stack.
+        // Classification is token-based: EditorPaneView bumps
+        // `controller.externalPushToken` at each genuine external-push site
+        // (note switch, reload-from-disk). updateNSView compares that token
+        // against the value this Coordinator last consumed — an advance means
+        // a real external push; an unchanged token means any binding change
+        // reaching here is a reflexive echo of user typing.
+        //
+        // Why token, not string value: a bare `storage.replaceCharacters`
+        // bypasses the shouldChangeText/didChangeText sandwich and corrupts
+        // NSTextView's undo coalescing, so it must fire ONLY for genuine
+        // external pushes. The WR-01 single-shot string sentinel could be
+        // fooled by value collisions in both directions (see
+        // `bindingPushDecision`); an explicit push token cannot.
+        //
+        // The branching itself lives in `bindingPushDecision` (a pure
+        // function) so it can be unit-tested without mounting the
+        // NSViewRepresentable.
+        switch Self.bindingPushDecision(
+            currentString: textView.string,
+            incomingText: text,
+            currentToken: controller.externalPushToken,
+            lastConsumedToken: context.coordinator.lastConsumedPushToken
+        ) {
+        case .noChange:
+            break
+        case .reflexiveEcho:
+            // Reflexive echo of user typing — the SwiftUI binding caught up
+            // to what the Coordinator pushed in textDidChange. A bare-storage
+            // replace here bypasses the shouldChangeText/didChangeText
+            // sandwich and corrupts the NSTextView undo stack (EDIT-02).
+            // No token advanced -> skip. No state to clear.
+            break
+        case .applyExternalPush:
+            // Genuine external push — note switch or reload-from-disk bumped
+            // the token. Apply the bare-storage replace (intentionally NOT
+            // registered on the undo stack — this content did not come from a
+            // user keystroke), then record the token so a follow-up reflexive
+            // echo of this same value is not re-applied.
             storage.beginEditing()
             let fullRange = NSRange(location: 0, length: storage.length)
             storage.replaceCharacters(in: fullRange, with: text)
             storage.endEditing()
             // processEditing fires inside endEditing → attributes reapplied.
+            context.coordinator.lastConsumedPushToken = controller.externalPushToken
         }
     }
 
@@ -356,15 +649,31 @@ struct HybridEditorView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: HybridEditorView
         weak var textView: NSTextView?
+        /// The value of `controller.externalPushToken` this Coordinator has
+        /// already applied. updateNSView treats `controller.externalPushToken
+        /// != lastConsumedPushToken` as a genuine external push. Initialized
+        /// to match the controller's starting token in `init` so the first
+        /// updateNSView after mount is not misread as a push.
+        var lastConsumedPushToken: Int
 
         init(_ parent: HybridEditorView) {
             self.parent = parent
+            // Seed the last-consumed token to the controller's current value
+            // so the first updateNSView after mount is treated as an echo /
+            // no-op, not a push (makeNSView already seeds the initial text).
+            // `controller` is @MainActor-isolated and makeCoordinator() — the
+            // sole caller — runs on the main actor, so the read is safe.
+            self.lastConsumedPushToken = MainActor.assumeIsolated {
+                parent.controller.externalPushToken
+            }
             super.init()
         }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             // Infinite-loop guard — only push up if the binding value is stale.
+            // No per-keystroke string snapshot is needed: the EDIT-02 echo
+            // guard is now purely token-based (see `bindingPushDecision`).
             if parent.text != tv.string {
                 parent.text = tv.string
             }
@@ -492,6 +801,14 @@ struct HybridEditorView: NSViewRepresentable {
                 if FormattingToolbarView.handleBulletReturn(in: textView) { return true }
                 if FormattingToolbarView.handleNumberedReturn(in: textView) { return true }
                 return false
+            }
+            if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                if FormattingToolbarView.handleAtomicMarkerBackspace(in: textView) { return true }    // quick-260524-0ia: atomic inline-format marker pair delete
+                if FormattingToolbarView.handleChecklistBackspace(in: textView) { return true }
+            }
+            if commandSelector == #selector(NSResponder.deleteForward(_:)) {
+                if FormattingToolbarView.handleAtomicMarkerForwardDelete(in: textView) { return true } // quick-260524-0ia: atomic inline-format marker pair delete
+                if FormattingToolbarView.handleChecklistForwardDelete(in: textView) { return true }
             }
             // Shift-Tab at body offset 0 → return focus to the title field
             // (counterpart to title→body Tab in EditorPaneView). Anywhere else

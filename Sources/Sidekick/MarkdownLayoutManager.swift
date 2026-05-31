@@ -24,6 +24,34 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// Pill corner radius.
     private static let chipCorner: CGFloat = 4
 
+    /// Horizontal advance reserved for a checklist marker. The marker char is
+    /// laid out as a control glyph (same mechanism as the link-chip anchor):
+    /// the underlying `-` glyph is suppressed entirely and this width is what
+    /// the typesetter reserves on the line. Sized to seat the 11pt drawn square
+    /// (see `drawBackground`) with clear air before it; the remaining gap to the
+    /// item text comes from the trailing space char. `checklistParagraphStyle`'s
+    /// `headIndent` is matched to this width so wrapped lines align under the
+    /// first-line content.
+    static let checklistMarkerWidth: CGFloat = 14
+
+    /// Frame of the drawn checklist square, in the marker glyph's line-fragment
+    /// coordinate space. Single source of truth shared by `drawBackground`
+    /// (painting) and `HybridTextView.mouseDown` (hit-testing) so the painted
+    /// square and the tap zone can never drift apart.
+    ///
+    /// The square is centered on the text **cap-height** band rather than the
+    /// full 20pt line box — centering on the line box leaves the square sitting
+    /// visibly low relative to the adjacent content.
+    static func checklistSquareRect(lineFragmentRect: NSRect,
+                                    glyphLocation: NSPoint,
+                                    markerFont: NSFont) -> NSRect {
+        let squareSide: CGFloat = 11
+        let x = lineFragmentRect.origin.x + glyphLocation.x
+        let baselineY = lineFragmentRect.origin.y + glyphLocation.y
+        let y = baselineY - markerFont.capHeight / 2 - squareSide / 2
+        return NSRect(x: x, y: y, width: squareSide, height: squareSide)
+    }
+
     override init() {
         super.init()
         self.delegate = self
@@ -63,23 +91,6 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         var bulletScalar: UniChar = 0x2022
         CTFontGetGlyphsForCharacters(font as CTFont, &bulletScalar, &bulletGlyph, 1)
 
-        // Precompute checklist glyphs. The SF system font (used by storage at
-        // 15pt bold) does NOT ship U+25EF LARGE CIRCLE or U+25C9 FISHEYE — both
-        // resolve to glyph 0, which silently falls through and renders the raw
-        // `-` instead. We use ○ U+25CB / ● U+25CF (both present in SF Pro)
-        // with ☐/☑ ballot boxes as a defensive cascade for any future font
-        // that lacks even those.
-        func resolve(_ scalars: [UniChar]) -> CGGlyph {
-            for var s in scalars {
-                var g: CGGlyph = 0
-                CTFontGetGlyphsForCharacters(font as CTFont, &s, &g, 1)
-                if g != 0 { return g }
-            }
-            return 0
-        }
-        let checklistEmptyGlyph = resolve([0x25CB, 0x25EF, 0x2610])
-        let checklistFilledGlyph = resolve([0x25CF, 0x25C9, 0x2611])
-
         for i in 0..<count {
             var prop = properties[i]
             let charIndex = characterIndexes[i]
@@ -92,13 +103,14 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     // single non-breakable unit. Do NOT set .null even
                     // if the same char also carries .sidekickHiddenMarker.
                     prop.insert(.controlCharacter)
-                } else if let checked = attrs[.sidekickChecklistMarker] as? Bool {
-                    // Substitute the dash with ◯ (unchecked) or ◉ (checked).
-                    // Keep visible — do NOT set .null.
-                    let target = checked ? checklistFilledGlyph : checklistEmptyGlyph
-                    if target != 0 {
-                        mutableGlyphs[i] = target
-                    }
+                } else if attrs[.sidekickChecklistMarker] != nil {
+                    // Treat the marker char as a control glyph — same mechanism
+                    // as the link-chip anchor. `.whitespace` (see `shouldUse`)
+                    // suppresses the underlying `-` glyph entirely (so it no
+                    // longer shows through the drawn square) and lets
+                    // `boundingBoxForControlGlyphAt` reserve an exact advance
+                    // width for the square plus its gap to the content.
+                    prop.insert(.controlCharacter)
                 } else if attrs[.sidekickBulletMarker] != nil {
                     // Substitute the dash/star glyph with a bullet glyph.
                     // Keep visible — do NOT set .null.
@@ -129,7 +141,10 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = self.textStorage,
               charIndex < storage.length else { return action }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
-        if attrs[.sidekickLinkChip] != nil {
+        // Both the link-chip anchor and the checklist marker are laid out as
+        // control glyphs. `.whitespace` is the action that makes the typesetter
+        // consult `boundingBoxForControlGlyphAt` for a custom advance width.
+        if attrs[.sidekickLinkChip] != nil || attrs[.sidekickChecklistMarker] != nil {
             return .whitespace
         }
         return action
@@ -150,6 +165,14 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         guard let storage = self.textStorage,
               charIndex < storage.length else { return .zero }
         let attrs = storage.attributes(at: charIndex, effectiveRange: nil)
+
+        // Checklist marker: reserve a fixed advance for the drawn square. The
+        // box is anchored at the glyph origin; height matches the line so the
+        // square (painted in `drawBackground`) seats inside the line box.
+        if attrs[.sidekickChecklistMarker] != nil {
+            return CGRect(x: 0, y: 0, width: Self.checklistMarkerWidth, height: proposedRect.height)
+        }
+
         guard let display = attrs[.sidekickLinkChip] as? String else { return .zero }
 
         let attrStr = NSAttributedString(
@@ -197,8 +220,32 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let runGlyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
             guard runGlyphRange.length > 0 else { return }
 
+            // Find the line fragment to draw the hairline in. Anchor on the
+            // HR paragraph's TRAILING newline (the char immediately after the
+            // dash run), not the first dash. Why: in some glyph-layout paths
+            // (notably the full-text-replace path on note switch), the HR's
+            // .null dash glyphs get absorbed into the line fragment of the
+            // PRECEDING empty paragraph instead of starting a new line —
+            // chars `\n---` end up sharing one fragment with the dashes'
+            // trailing `\n` orphaned on its own next-line fragment. Anchoring
+            // on the trailing `\n` follows the HR's true paragraph and
+            // sidesteps that layout quirk. In the typed-incrementally path
+            // (where dashes generate their own line fragment normally), the
+            // trailing `\n` is in the SAME fragment as the dashes, so the
+            // anchor yields identical geometry. Either way the hairline lands
+            // on the HR's own line, never the line above.
+            let trailingNewlineChar = attrRange.location + attrRange.length
+            let anchorGlyphIndex: Int
+            if trailingNewlineChar < storage.length {
+                anchorGlyphIndex = self.glyphIndexForCharacter(at: trailingNewlineChar)
+            } else {
+                // HR is at end-of-buffer with no trailing newline — fall back
+                // to the dash run's own first glyph.
+                anchorGlyphIndex = runGlyphRange.location
+            }
+
             let lineRect = self.lineFragmentUsedRect(
-                forGlyphAt: runGlyphRange.location,
+                forGlyphAt: anchorGlyphIndex,
                 effectiveRange: nil
             )
             let inset = container.lineFragmentPadding
@@ -215,6 +262,62 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 
             NSColor.separatorColor.setFill()
             hairlineRect.fill()
+        }
+
+        // Checklist marker squares — drawn after super, same pattern as link-chip pill.
+        // D-03a: marker glyph stays visible; drawBackground paints the square on top.
+        storage.enumerateAttribute(
+            .sidekickChecklistMarker,
+            in: charRange,
+            options: []
+        ) { value, attrRange, _ in
+            guard let isChecked = value as? Bool,
+                  attrRange.length > 0 else { return }
+
+            let glyphRange = self.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { return }
+
+            let lineRect = self.lineFragmentRect(
+                forGlyphAt: glyphRange.location,
+                effectiveRange: nil
+            )
+            let glyphLocation = self.location(forGlyphAt: glyphRange.location)
+            let markerFont = (storage.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
+                ?? NSFont.systemFont(ofSize: 15)
+
+            // UI-SPEC geometry (locked): 11×11pt square, 2pt corner radius.
+            // Frame comes from the shared helper so painting and hit-testing
+            // (HybridTextView.mouseDown) use identical geometry.
+            let cornerRadius: CGFloat = 2
+            let squareRect = Self.checklistSquareRect(
+                lineFragmentRect: lineRect,
+                glyphLocation: glyphLocation,
+                markerFont: markerFont
+            ).offsetBy(dx: origin.x, dy: origin.y)
+
+            NSGraphicsContext.current?.saveGraphicsState()
+
+            let path = NSBezierPath(roundedRect: squareRect, xRadius: cornerRadius, yRadius: cornerRadius)
+            path.lineWidth = 1
+
+            if isChecked {
+                NSColor.secondaryLabelColor.withAlphaComponent(0.15).setFill()
+                path.fill()
+                NSColor.separatorColor.setStroke()
+                path.stroke()
+                let check = NSBezierPath()
+                check.move(to: NSPoint(x: squareRect.minX + 2, y: squareRect.minY + 5))
+                check.line(to: NSPoint(x: squareRect.minX + 4, y: squareRect.minY + 8))
+                check.line(to: NSPoint(x: squareRect.minX + 9, y: squareRect.minY + 2))
+                check.lineWidth = 1.5
+                NSColor.textColor.setStroke()
+                check.stroke()
+            } else {
+                NSColor.separatorColor.setStroke()
+                path.stroke()
+            }
+
+            NSGraphicsContext.current?.restoreGraphicsState()
         }
 
         // Link-chip pills. Drawn after super (which paints inline-code /

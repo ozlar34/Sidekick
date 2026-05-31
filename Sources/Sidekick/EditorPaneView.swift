@@ -30,8 +30,18 @@ struct EditorPaneView: View {
     // note switches or while the editor is unmounted (empty state).
     @State private var diskWriteError: Bool = false
 
+    // Tracks whether the open note has unsaved local edits. Mirrors the
+    // setDocumentEdited signal already wired through scheduleAutoSave — used to
+    // decide external-change handling: silently auto-reload when there's nothing
+    // to lose, show the conflict banner only when reloading would clobber edits.
+    @State private var hasPendingEdits: Bool = false
+
+    /// True only for a genuine conflict: the file changed on disk AND the user
+    /// has unsaved local edits that an auto-reload would discard. The no-pending-
+    /// edits case is handled silently by `autoReloadIfSafe()`, so the banner
+    /// never appears for it (no transient flash either).
     private var showExternalChangeBanner: Bool {
-        store.externallyChangedIDs.contains(note.id)
+        store.externallyChangedIDs.contains(note.id) && hasPendingEdits
     }
 
     /// Footer text below the editor body. "Edited 2:14 PM" — Created date
@@ -44,18 +54,33 @@ struct EditorPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // External-edit banner (STORE-07) — top of editor
+            // External-edit conflict banner (STORE-07) — top of editor. Only
+            // shown when the on-disk file changed AND there are unsaved local
+            // edits (reloading would discard them). The safe case auto-reloads
+            // silently via autoReloadIfSafe(). A closing Divider separates the
+            // strip from the title zone so it doesn't crowd the rounded panel top.
             if showExternalChangeBanner {
-                HStack {
-                    Text("⚠ File changed on disk").font(.system(size: 13))
-                    Spacer()
-                    Button("Reload") {
-                        Task { await reloadFromDisk() }
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.orange)
+                        Text("File changed on disk")
+                            .font(.system(size: 13))
+                        Text("— Reload discards your unsaved edits")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Reload") {
+                            Task { await reloadFromDisk() }
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.yellow.opacity(0.12))
+                    Divider()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
-                .background(Color.yellow.opacity(0.15))
             }
 
             // Header chrome: title + formatting toolbar grouped on a slightly
@@ -98,7 +123,8 @@ struct EditorPaneView: View {
                     insertThematicBreak: insertThematicBreak,
                     activeInlineKind: editorController.activeInlineKind,
                     activeHeadingLevel: editorController.activeHeadingLevel,
-                    activeLinePrefix: editorController.activeLinePrefix
+                    activeLinePrefix: editorController.activeLinePrefix,
+                    armedInlineKinds: editorController.armedInlineKinds
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -137,20 +163,28 @@ struct EditorPaneView: View {
             .padding(.vertical, 6)
             .background(Color(.textBackgroundColor))
 
-            // Disk-write failure toast (REL-01) — bottom of editor
+            // Disk-write failure toast (REL-01) — bottom of editor. A top
+            // Divider separates it from the footer, mirroring the external-edit
+            // banner treatment at the top of the pane.
             if diskWriteError {
-                HStack {
-                    Text("Could not save — check disk permissions.").font(.system(size: 13))
-                    Spacer()
-                    Button("Retry") {
-                        diskWriteError = false
-                        scheduleAutoSave(title: localTitle, body: localBody)
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.orange)
+                        Text("Could not save — check disk permissions.").font(.system(size: 13))
+                        Spacer()
+                        Button("Retry") {
+                            diskWriteError = false
+                            scheduleAutoSave(title: localTitle, body: localBody)
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.controlBackgroundColor))
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
-                .background(Color(.controlBackgroundColor))
-                .shadow(radius: 4)
             }
         }
         .onAppear {
@@ -160,12 +194,23 @@ struct EditorPaneView: View {
             // Wire Shift-Tab @ body offset 0 → return focus to title.
             // Counterpart to title→body Tab handled by TitleField's delegate.
             editorController.onShiftTabAtBodyStart = { titleController.focus() }
+            autoReloadIfSafe()
         }
         .onChange(of: note.id) { _, _ in
+            // EDIT-02 echo guard: bump the push token BEFORE reseeding
+            // localBody so HybridEditorView.updateNSView sees the advanced
+            // token and classifies the new body as a genuine external push.
+            editorController.externalPushToken += 1
             localTitle = note.title
             localBody = note.body
             diskWriteError = false
+            // Freshly-mounted note has no unsaved local edits yet.
+            hasPendingEdits = false
             seedFocusForCurrentNote()
+            autoReloadIfSafe()
+        }
+        .onChange(of: store.externallyChangedIDs) { _, _ in
+            autoReloadIfSafe()
         }
     }
 
@@ -174,6 +219,7 @@ struct EditorPaneView: View {
     private func scheduleAutoSave(title: String, body: String) {
         // Immediate unsaved indicator (EDIT-05)
         setDocumentEdited(true)
+        hasPendingEdits = true
 
         let id = note.id
         let editedSetter = setDocumentEdited
@@ -182,7 +228,10 @@ struct EditorPaneView: View {
             await debouncer.schedule {
                 do {
                     try await storeRef.update(id, title: title, body: body)
-                    await MainActor.run { editedSetter(false) }
+                    await MainActor.run {
+                        editedSetter(false)
+                        hasPendingEdits = false
+                    }
                 } catch {
                     NSLog("[Sidekick] autosave failed: \(error.localizedDescription)")
                     await MainActor.run {
@@ -229,12 +278,28 @@ struct EditorPaneView: View {
 
     // MARK: - External changes (Phase 5: banner trigger instead of silent reload)
 
+    /// Silently reload the open note from disk when an external change arrived
+    /// and there's nothing local to lose. If the user has unsaved edits the
+    /// reload would discard, we leave `externallyChangedIDs` set so the conflict
+    /// banner surfaces instead — the user decides via the Reload button.
+    private func autoReloadIfSafe() {
+        guard store.externallyChangedIDs.contains(note.id) else { return }
+        guard !hasPendingEdits else { return }
+        Task { await reloadFromDisk() }
+    }
+
     private func reloadFromDisk() async {
         await store.reloadNote(id: note.id)
         if let updated = store.notes.first(where: { $0.id == note.id }) {
+            // EDIT-02 echo guard: bump the push token before reseeding the
+            // editor body from on-disk content so updateNSView classifies it
+            // as a genuine external push.
+            editorController.externalPushToken += 1
             localBody = updated.body
         }
         store.acknowledgeExternalChange(id: note.id)
+        // On-disk content is now the local content — nothing left unsaved.
+        hasPendingEdits = false
     }
 
     // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)

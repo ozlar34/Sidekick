@@ -26,14 +26,14 @@ extension NSAttributedString.Key {
     /// the rendered result is `• item` instead of the tight `•item`.
     static let sidekickBulletMarker = NSAttributedString.Key("sidekickBulletMarker")
 
-    /// Marks the `-` character of a GFM task-list line (`- [ ] ` / `- [x] `)
-    /// for glyph substitution. Value is `Bool` — `false` substitutes U+25EF
-    /// (◯ unchecked), `true` substitutes U+25C9 (◉ checked).
-    /// `MarkdownLayoutManager.setGlyphs(...)` reads the bool and picks the
-    /// glyph; the surrounding ` [ ]` / ` [x]` chars are hidden via
-    /// `.sidekickHiddenMarker` so the rendered result is `◯ item` / `◉ item`
-    /// without mutating the underlying bytes (round-trip safe).
-    /// Mouse hits on this marker character flip the underlying ` ` ↔ `x` byte.
+    /// Marks the `-` character of a GFM task-list line (`- [ ] ` / `- [x] `).
+    /// Value is `Bool` (`false` = unchecked, `true` = checked).
+    /// `MarkdownLayoutManager.drawBackground` paints a custom rounded square
+    /// (and checkmark when checked) over the reserved glyph width. The marker
+    /// glyph stays visible (D-03a) so the typesetter reserves its advance;
+    /// surrounding ` [ ]` / ` [x]` chars are hidden via `.sidekickHiddenMarker`.
+    /// Source bytes are never mutated (round-trip safe). Mouse hits on the drawn
+    /// square flip the underlying ` ` ↔ `x` byte.
     static let sidekickChecklistMarker = NSAttributedString.Key("sidekickChecklistMarker")
 
     /// Marks the `N.` prefix of a numbered list line (`\d+\.` at line start).
@@ -61,7 +61,8 @@ extension NSAttributedString.Key {
     /// the hidden chars one at a time (D-MH-03).
     static let sidekickLinkChip = NSAttributedString.Key("sidekickLinkChip")
 
-    /// Marks a markdown thematic-break line (`---` / `***` / `___` standalone).
+    /// Marks a markdown thematic-break line (`---` standalone — we restrict
+    /// to dashes; `***` would collide with bold-italic typing).
     /// Value is `Bool` (`true`). MarkdownTextStorage tags the line content
     /// range and dims it to tertiary; MarkdownLayoutManager reads this attribute
     /// in `drawBackground(forGlyphRange:at:)` to draw a 1pt hairline horizontally
