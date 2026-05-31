@@ -260,7 +260,9 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 height: hairlineHeight
             )
 
-            NSColor.separatorColor.setFill()
+            // HR-05: tertiaryLabelColor (dynamic) reads clearly on textBackgroundColor in both
+            // light and dark — separatorColor was too faint against the solid editor surface.
+            NSColor.tertiaryLabelColor.setFill()
             hairlineRect.fill()
         }
 
