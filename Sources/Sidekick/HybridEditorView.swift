@@ -259,6 +259,10 @@ class HybridTextView: NSTextView {
         }
 
         super.insertText(string, replacementRange: range)
+        // WR-02: skip the post-insert HR helpers during active IME composition —
+        // partial candidates must not trigger slash-convert or trailing-HR escape.
+        // Mirrors the `!hasMarkedText()` discipline the armed-inline path enforces above.
+        guard !hasMarkedText() else { return }
         // HR-04: Check for `/hr` / `/divider` quick-insert BEFORE the trailing-
         // HR escape — a completed slash trigger is not an HR line, so the escape
         // would not fire anyway, but returning early avoids the attribute probe.
@@ -374,6 +378,13 @@ class HybridTextView: NSTextView {
         // Exact-match check — caret must be at the end of the content.
         guard lineContent == "/hr" || lineContent == "/divider" else { return false }
         guard sel.location == lineRange.location + contentLength else { return false }
+
+        // WR-01: never quick-insert inside a fenced code block. performInsertThematicBreak
+        // has its own fence guard and bails — but only AFTER we'd have deleted the trigger,
+        // silently eating the user's literal `/hr`. Bail here, before any mutation, so the
+        // typed text stays as source inside the fence.
+        let fenceContentRanges = MarkdownInlineParser.findFencedCodeBlocks(in: storage.string).map(\.contentRange)
+        if fenceContentRanges.contains(where: { NSLocationInRange(sel.location, $0) }) { return false }
 
         // Delete the slash trigger first so performInsertThematicBreak starts
         // from a clean empty line (it already handles the case where the

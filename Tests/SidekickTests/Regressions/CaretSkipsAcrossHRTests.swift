@@ -274,4 +274,26 @@ final class CaretSkipsAcrossHRTests: XCTestCase {
         XCTAssertFalse(runner2.body.contains("---"),
                        "No rule must be inserted when line is `x/hr` — not line-exact")
     }
+
+    /// HR-04 / WR-01 regression: typing `/hr` INSIDE a fenced code block must
+    /// NOT quick-insert — and, critically, must not silently eat the trigger
+    /// text. `performInsertThematicBreak` already bails inside a fence, but the
+    /// slash helper used to delete the trigger BEFORE delegating, so `/hr`
+    /// vanished with no rule inserted (data loss). The fence guard now bails
+    /// before any mutation, leaving `/hr` as literal source inside the fence.
+    ///
+    /// Seed a paired fence containing `/h` and complete the trigger by typing
+    /// the final `r` with the caret inside the fence content.
+    /// Body: "```\n/h\n```", caret at 6 (just after `h`). Type `r`.
+    func test_slashHr_insideFence_staysLiteral() {
+        let runner = HostedEditorRunner(
+            initialBody: "```\n/h\n```",
+            initialSelection: NSRange(location: 6, length: 0)
+        )
+        runner.type("r")
+        XCTAssertEqual(runner.body, "```\n/hr\n```",
+                       "`/hr` typed inside a fenced code block must stay literal — no rule, no lost text")
+        XCTAssertFalse(runner.body.contains("---"),
+                       "No thematic break must be inserted from inside a fenced code block")
+    }
 }
