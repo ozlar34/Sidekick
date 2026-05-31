@@ -378,18 +378,29 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertEqual(matches[0], NSRange(location: 6, length: 3))
     }
 
-    func test_thematicBreak_dashesOnly_asterisksAndUnderscoresExcluded() {
-        // We deliberately diverge from CommonMark: only `-` runs create an HR.
-        // `***` was indistinguishable from a bold-italic transition (`**` +
-        // `**`) and produced surprise rules.
-        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "***\n").isEmpty,
-                      "Asterisks must NOT create a thematic break")
-        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "****\n").isEmpty,
-                      "Four asterisks must NOT create a thematic break")
-        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "___\n").isEmpty,
-                      "Underscores must NOT create a thematic break")
-        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "----\n").count, 1,
-                       "Four dashes still qualify")
+    func test_thematicBreak_dashesAsterisksUnderscores_allMatch() {
+        // CommonMark compliance: `*` and `_` runs (3+, own line) are thematic
+        // breaks. Whole-line anchoring makes them unambiguous from inline
+        // emphasis — `**bold**` has content between the markers and cannot
+        // match `^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$`.
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "***\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "****\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "___\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "____\n").count, 1)
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "----\n").count, 1)
+    }
+
+    func test_thematicBreak_inlineEmphasis_neverMatches() {
+        // Whole-line anchoring guarantees that emphasis markers with content
+        // between them (letters after the opening markers) can never match.
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "**bold**\n").isEmpty)
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "***bolditalic***\n").isEmpty)
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "*italic*\n").isEmpty)
+        XCTAssertTrue(MarkdownInlineParser.findThematicBreaks(in: "__under__\n").isEmpty)
+    }
+
+    func test_thematicBreak_surroundingSpaces_match() {
+        XCTAssertEqual(MarkdownInlineParser.findThematicBreaks(in: "  ___  \n").count, 1)
     }
 
     func test_thematicBreak_mixedChars_doesNotMatch() {
