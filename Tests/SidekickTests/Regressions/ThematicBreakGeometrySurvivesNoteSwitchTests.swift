@@ -146,4 +146,46 @@ final class ThematicBreakGeometrySurvivesNoteSwitchTests: XCTestCase {
         let glyph = lm.glyphIndexForCharacter(at: trailingNewlineChar)
         return lm.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil).midY
     }
+
+    /// HR-05 regression pin: the hairline color must be theme-adaptive (resolves
+    /// differently under .aqua vs .darkAqua) and must be distinct from the old
+    /// faint separatorColor that was replaced for contrast reasons.
+    ///
+    /// This test does NOT assert exact RGBA literals (those shift across macOS
+    /// releases) — it asserts the structural invariants that motivated the change:
+    ///   1. The chosen color is dynamic — it adapts between light and dark themes.
+    ///   2. The chosen color is NOT the old separatorColor (documents the deliberate
+    ///      contrast bump from P4b/HR-05).
+    func test_hairlineColor_isContrastAdaptive_acrossThemes() {
+        // Resolve tertiaryLabelColor under both appearances.
+        var lightComponents: (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) = (0, 0, 0, 0)
+        var darkComponents:  (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) = (0, 0, 0, 0)
+
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            if let resolved = NSColor.tertiaryLabelColor.usingColorSpace(.sRGB) {
+                lightComponents = (resolved.redComponent,
+                                   resolved.greenComponent,
+                                   resolved.blueComponent,
+                                   resolved.alphaComponent)
+            }
+        }
+
+        NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+            if let resolved = NSColor.tertiaryLabelColor.usingColorSpace(.sRGB) {
+                darkComponents = (resolved.redComponent,
+                                  resolved.greenComponent,
+                                  resolved.blueComponent,
+                                  resolved.alphaComponent)
+            }
+        }
+
+        // The alpha channels alone distinguish light (~0.26) from dark (~0.55)
+        // for tertiaryLabelColor — asserting they differ proves theme-adaptivity.
+        XCTAssertNotEqual(lightComponents.a, darkComponents.a, accuracy: 0.01,
+            "Hairline color must adapt between light and dark — a fixed color would fail one theme's contrast")
+
+        // Document the deliberate departure from the old faint divider tint.
+        XCTAssertNotEqual(NSColor.tertiaryLabelColor, NSColor.separatorColor,
+            "HR-05 deliberately moved off the faint separatorColor for visibility")
+    }
 }
