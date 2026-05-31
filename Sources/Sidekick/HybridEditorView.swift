@@ -803,10 +803,12 @@ struct HybridEditorView: NSViewRepresentable {
                 return false
             }
             if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                if FormattingToolbarView.handleThematicBreakBackspace(in: textView) { return true }   // HR-03: one-shot HR delete from adjacent empty line
                 if FormattingToolbarView.handleAtomicMarkerBackspace(in: textView) { return true }    // quick-260524-0ia: atomic inline-format marker pair delete
                 if FormattingToolbarView.handleChecklistBackspace(in: textView) { return true }
             }
             if commandSelector == #selector(NSResponder.deleteForward(_:)) {
+                if FormattingToolbarView.handleThematicBreakForwardDelete(in: textView) { return true } // HR-03: one-shot HR delete from adjacent empty line
                 if FormattingToolbarView.handleAtomicMarkerForwardDelete(in: textView) { return true } // quick-260524-0ia: atomic inline-format marker pair delete
                 if FormattingToolbarView.handleChecklistForwardDelete(in: textView) { return true }
             }

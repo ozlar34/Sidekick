@@ -1345,6 +1345,123 @@ struct FormattingToolbarView: View {
         return true
     }
 
+    // MARK: - HR-03: One-shot thematic-break delete handlers
+
+    /// HR-03 — Backspace on an empty line immediately below a horizontal rule.
+    ///
+    /// Trigger semantics: caret must be at the START of an EMPTY line (zero
+    /// content chars, just the line terminator) and the PREVIOUS line must carry
+    /// `.sidekickThematicBreak`. When both conditions hold, the HR line AND the
+    /// caret's own empty line are deleted together in a single undoable step via
+    /// the shouldChangeText/replaceCharacters/didChangeText sandwich, collapsing
+    /// "...\n---\n\n..." to "...\n...". The caret lands at the start of where
+    /// the HR was.
+    ///
+    /// Empty-caret-line guard prevents shadowing the normal "merge content into
+    /// HR" path that fires when the adjacent line has text.
+    ///
+    /// Returns true if the keystroke was consumed; false to fall through to the
+    /// default delete handler.
+    static func handleThematicBreakBackspace(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+        guard let storage = textView.textStorage, storage.length > 0 else { return false }
+
+        // Identify the caret's own line.
+        let caretLine = nsBody.lineRange(for: selection)
+
+        // Guard: caret's own line must be EMPTY (content length 0, i.e. only a
+        // newline terminator or end-of-doc) AND caret must be at line start.
+        var caretLineEnd = caretLine.location + caretLine.length
+        if caretLineEnd > caretLine.location {
+            let lastChar = nsBody.character(at: caretLineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
+        }
+        let contentLen = caretLineEnd - caretLine.location
+        guard contentLen == 0,
+              selection.location == caretLine.location else { return false }
+
+        // Identify the PREVIOUS line.
+        guard caretLine.location > 0 else { return false }
+        let prevLineRange = nsBody.lineRange(for: NSRange(location: caretLine.location - 1, length: 0))
+
+        // Guard: previous line must carry the HR attribute.
+        guard prevLineRange.location < storage.length,
+              storage.attribute(.sidekickThematicBreak,
+                                at: prevLineRange.location,
+                                effectiveRange: nil) != nil else { return false }
+
+        // Delete the HR line PLUS the caret's own empty line atomically.
+        // Combined range: from start of prevLineRange through end of caretLine.
+        // This collapses "...\n---\n\n..." → "...\n..." with one undo step.
+        let editStart = prevLineRange.location
+        let editEnd = caretLine.location + caretLine.length
+        let editRange = NSRange(location: editStart, length: editEnd - editStart)
+        guard textView.shouldChangeText(in: editRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: editRange, with: "")
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: prevLineRange.location, length: 0))
+        return true
+    }
+
+    /// HR-03 — Forward-delete (fn+Delete) on an empty line immediately above a
+    /// horizontal rule.
+    ///
+    /// Trigger semantics: caret must be on an EMPTY line (zero content chars)
+    /// and the NEXT line must carry `.sidekickThematicBreak`. When both
+    /// conditions hold, the caret's own empty line AND the HR line are deleted
+    /// together in one undoable step, collapsing "...\n\n---\n..." to "...\n...".
+    /// The caret stays at its original position.
+    ///
+    /// Empty-caret-line guard prevents shadowing the normal merge path.
+    ///
+    /// Returns true if the keystroke was consumed; false to fall through.
+    static func handleThematicBreakForwardDelete(in textView: NSTextView) -> Bool {
+        let body = textView.string
+        let nsBody = body as NSString
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+        guard let storage = textView.textStorage, storage.length > 0 else { return false }
+
+        // Identify the caret's own line.
+        let caretLine = nsBody.lineRange(for: selection)
+
+        // Guard: caret's own line must be EMPTY.
+        var caretLineEnd = caretLine.location + caretLine.length
+        if caretLineEnd > caretLine.location {
+            let lastChar = nsBody.character(at: caretLineEnd - 1)
+            if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
+        }
+        let contentLen = caretLineEnd - caretLine.location
+        guard contentLen == 0 else { return false }
+
+        // Identify the NEXT line.
+        let nextLineStart = caretLine.location + caretLine.length
+        guard nextLineStart < storage.length else { return false }
+        let nextLineRange = nsBody.lineRange(for: NSRange(location: nextLineStart, length: 0))
+
+        // Guard: next line must carry the HR attribute.
+        guard storage.attribute(.sidekickThematicBreak,
+                                at: nextLineRange.location,
+                                effectiveRange: nil) != nil else { return false }
+
+        // Delete the caret's own empty line PLUS the HR line atomically.
+        // Combined range: from start of caretLine through end of nextLineRange.
+        // This collapses "...\n\n---\n..." → "...\n..." with one undo step.
+        let editStart = caretLine.location
+        let editEnd = nextLineRange.location + nextLineRange.length
+        let editRange = NSRange(location: editStart, length: editEnd - editStart)
+        let originalLocation = selection.location
+        guard textView.shouldChangeText(in: editRange, replacementString: "") else { return false }
+        textView.replaceCharacters(in: editRange, with: "")
+        textView.didChangeText()
+        let clampedLocation = min(originalLocation, storage.length)
+        textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+        return true
+    }
+
     /// Enter continuation for bulleted-list lines (`- ` or `* `). Mirrors
     /// `handleChecklistReturn`: continue with `\n- ` (or `\n* `, preserving the
     /// original marker char) on a non-empty line; strip the prefix and exit
