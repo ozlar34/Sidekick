@@ -1,3 +1,5 @@
+![Sidekick — hotkey-summoned, edge-anchored notes panel for macOS](docs/banner.png)
+
 # Sidekick
 
 A hotkey-summoned, edge-anchored notes panel for macOS. Tap a global shortcut, a translucent panel slides in from the side of the screen, you write, you dismiss it. Notes persist as plain `.md` files in a folder you control. Built as a replacement for SideNotes when I wanted the speed of a hotkey-summoned scratch surface without giving up file ownership.
