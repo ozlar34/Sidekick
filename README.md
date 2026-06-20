@@ -19,6 +19,8 @@ A hotkey-summoned, edge-anchored notes panel for macOS. Tap a global shortcut, a
 
 - Swift, SwiftUI + AppKit hybrid (`NSTextView`-backed editor for live formatting, SwiftUI for everything else)
 - Tested on macOS 14+
+- Built with the assistance of [Claude Code](https://claude.ai/code) by Anthropic
+- Covered by 35+ test files including regression guards for the editor and markdown parsing
 
 ## Build and run
 

@@ -272,7 +272,7 @@ final class ThematicBreakSurvivesNoteSwitchTests: XCTestCase {
     /// reparse, on note switch). Post-fix: HR is stamped consistently
     /// across both reparse scopes and survives the round trip.
     func test_setextLikeHR_isStampedAndSurvivesRoundTrip() {
-        let body = "cd /Users/oguzoral/projects/Sidekick\n---\nafter"
+        let body = "cd /projects/repo\n---\nafter"
         let runner = HostedEditorRunner(initialBody: body)
 
         let hrLocation = (body as NSString).range(of: "---").location
