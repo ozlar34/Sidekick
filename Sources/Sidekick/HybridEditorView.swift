@@ -154,41 +154,39 @@ class HybridTextView: NSTextView {
             }
         }
         super.mouseDown(with: event)
-        // Divider click-leak rescue: the setSelectedRanges HR snap has a
-        // same-line exemption that the mouse path slips through — the click's
-        // intermediate `stillSelecting` pass parks the caret on the HR line, so
-        // the final pass sees "same line" and declines to snap, stranding the
-        // caret on the uninhabitable rule. Resolve it here at the click site.
-        relocateCaretOffHRAfterClick(event)
+        // Click-path caret rescue: the `setSelectedRanges` snap chain runs INSIDE
+        // super.mouseDown with a meaningless keyboard `previous` (a click has no
+        // previous caret), so it can strand the caret on the wrong edge of a
+        // managed region. Re-decide here from click GEOMETRY. See
+        // `relocateCaretAfterClick`.
+        relocateCaretAfterClick(event)
     }
 
-    /// After a plain click lands on an uninhabitable HR line, move the caret to
-    /// the nearest inhabitable neighbor — top half of the divider → end of the
-    /// line above, bottom half → start of the line below. No-op when the click
-    /// did not land on an HR line, produced a range selection, or the HR is the
-    /// whole document. The neighbor decision is delegated to the unit-tested
-    /// `hrCaretRelocationTarget`; only the click geometry lives here.
+    /// Click-path counterpart to the `setSelectedRanges` snap chain. A mouse
+    /// click has no meaningful "previous caret", so the keyboard snaps — which
+    /// run inside `super.mouseDown` via `setSelectedRanges` — decide the side of
+    /// a managed region from a stale `previous` and can strand the caret on the
+    /// wrong edge. This runs after `super.mouseDown` and re-decides from click
+    /// GEOMETRY, overriding that result. The regions are mutually exclusive (a
+    /// line is at most one of HR / checklist prefix / link chip); first match
+    /// wins. No-op when the click produced a range selection.
     ///
-    /// Both the HR-line test and the top/bottom-half decision are keyed off the
-    /// CLICKED glyph, never the post-`super.mouseDown` caret. Two reasons:
-    ///   * [9] `snapCaretOutOfHR` runs INSIDE `super.mouseDown` (via
-    ///     `setSelectedRanges`). When no intermediate `stillSelecting` pass
-    ///     parked the caret on the HR, its same-line exemption doesn't fire, so
-    ///     it relocates the caret to a neighbor by KEYBOARD direction (stale
-    ///     `previous`) before we run. Reading the resolved caret would then see
-    ///     a non-HR line and no-op, stranding the caret on the direction-picked
-    ///     neighbor — which can be the opposite half from where the user
-    ///     clicked. The clicked glyph still points at the HR the user hit, so we
-    ///     override with the correct geometry regardless of that race.
-    ///   * [8] The half decision must come from the SAME line the rescue acts
-    ///     on. Deriving both the line (`charIdx`) and its fragment from one
-    ///     glyph keeps them consistent even at a line-fragment boundary, where
-    ///     re-hit-testing the point against the resolved caret's line could pick
-    ///     the adjacent fragment and flip the half.
-    private func relocateCaretOffHRAfterClick(_ event: NSEvent) {
+    /// Everything keys off the CLICKED glyph, never the post-`super` caret. Two
+    /// reasons (surfaced as [8]/[9] on the HR case, general to all regions):
+    ///   * The keyboard snap may already have moved the caret OFF the region
+    ///     before we run — e.g. [9]: `snapCaretOutOfHR`'s same-line exemption
+    ///     didn't fire, so it relocated by keyboard direction. Reading the
+    ///     resolved caret would then see a non-region line and no-op. The
+    ///     clicked glyph still points at what the user actually hit.
+    ///   * [8] A region's geometry decision must come from the SAME line /
+    ///     fragment the rescue acts on. Deriving both from one glyph keeps them
+    ///     consistent even at a line-fragment boundary, where re-hit-testing the
+    ///     point against the resolved caret's line could pick the adjacent
+    ///     fragment and flip the decision.
+    private func relocateCaretAfterClick(_ event: NSEvent) {
         guard let lm = layoutManager, let tc = textContainer else { return }
         // A drag that produced a range selection is the user's intent, not a
-        // caret landing on the rule — leave it alone.
+        // caret landing in a region — leave it alone.
         guard selectedRange().length == 0 else { return }
 
         let viewPoint = convert(event.locationInWindow, from: nil)
@@ -198,11 +196,25 @@ class HybridTextView: NSTextView {
         )
         let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
         let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+
+        // [8][9] HR line → nearest inhabitable neighbor by which half of the
+        // divider the click landed in (top → line above, bottom → line below).
         let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
         let clickInBottomHalf = textPoint.y >= lineRect.midY
-
         if let dest = hrCaretRelocationTarget(caret: charIdx, clickInBottomHalf: clickInBottomHalf) {
             setSelectedRange(NSRange(location: dest, length: 0))
+            return
+        }
+
+        // [4] Checklist prefix gap → content start. The gap (the `- [ ] `
+        // interior, offsets 1…5) sits entirely to the RIGHT of the drawn
+        // checkbox, so a click that resolved into it is a click "into" the item;
+        // a click LEFT of the box resolves to offset 0 and never enters the gap.
+        // No half decision needed — unlike the keyboard path there is no
+        // backward direction a click can express here.
+        if let dest = checklistGapRelocationTarget(caret: charIdx) {
+            setSelectedRange(NSRange(location: dest, length: 0))
+            return
         }
     }
 
@@ -578,6 +590,36 @@ class HybridTextView: NSTextView {
                                 effectiveRange: nil) != nil else { return nil }
 
         return hrNeighborLocation(hrLineRange: hrLineRange, preferBelow: clickInBottomHalf)
+    }
+
+    /// Click-path counterpart to `snapCaretOutOfChecklistGap`: given a caret a
+    /// mouse click resolved into a rendered checklist prefix gap (offsets 1…5 of
+    /// a `- [ ] ` / `- [x] ` line), return content start (line + 6). Unlike the
+    /// keyboard path there is no direction to infer — the gap lies entirely to
+    /// the RIGHT of the drawn checkbox, so any click that landed in it means
+    /// "into the item" (a click LEFT of the box resolves to offset 0 and never
+    /// reaches the gap). Returns `nil` when the caret is not in a checklist gap.
+    ///
+    /// Gated on `.sidekickChecklistMarker` at line start — mirrors
+    /// `snapCaretOutOfChecklistGap` so a plain line that merely begins with the
+    /// `- [ ] ` characters (no rendered checkbox) is left alone. Left `internal`
+    /// so the decision is unit-testable without an AppKit mouse-tracking loop.
+    func checklistGapRelocationTarget(caret: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, caret >= 0, caret <= n else { return nil }
+
+        let probeLoc = min(caret, n - 1)
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: probeLoc, length: 0))
+        guard lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return nil }
+
+        let contentStart = lineRange.location + 6
+        guard caret > lineRange.location, caret < contentStart else { return nil }
+        return contentStart
     }
 
     /// Compute the position to snap a caret to when `target` lands in the
