@@ -147,4 +147,58 @@ final class ChecklistGapCaretTrapTests: XCTestCase {
             "Without a checklist marker the gap snap must not fire — the caret stays where it landed"
         )
     }
+
+    // MARK: - Click-path decision ([4], via checklistGapRelocationTarget)
+    //
+    // The keyboard `snapCaretOutOfChecklistGap` picks its side from the stale
+    // `previous` — meaningless for a mouse click. The click path instead calls
+    // `checklistGapRelocationTarget`, which always returns content start: the gap
+    // sits entirely RIGHT of the checkbox, so a click that resolved into it is a
+    // click "into" the item (a click left of the box resolves to offset 0 and
+    // never enters the gap). The full click geometry (which glyph a gap click
+    // resolves to) is verified live — a synthetic mid-line on-glyph click can't
+    // produce a zero-length caret in this harness — so only the decision is
+    // unit-tested here, mirroring `DividerClickCaretLeakTests`.
+
+    /// Every interior gap offset (1…5) resolves to content start on a click.
+    func test_clickTarget_gapOffsets_goToContentStart() {
+        let runner = HostedEditorRunner(
+            initialBody: "- [ ] task",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        for caret in 1...5 {
+            XCTAssertEqual(
+                tv.checklistGapRelocationTarget(caret: caret), 6,
+                "A click resolving to gap offset \(caret) must relocate to content start (6)"
+            )
+        }
+    }
+
+    /// Line start (before the checkbox) and content start are both valid resting
+    /// spots — a click there is never relocated.
+    func test_clickTarget_edges_notRelocated() {
+        let runner = HostedEditorRunner(
+            initialBody: "- [ ] task",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertNil(tv.checklistGapRelocationTarget(caret: 0), "line start is inhabitable")
+        XCTAssertNil(tv.checklistGapRelocationTarget(caret: 6), "content start is inhabitable")
+        XCTAssertNil(tv.checklistGapRelocationTarget(caret: 8), "a click in the content is left alone")
+    }
+
+    /// A plain paragraph (no rendered checkbox) is never relocated, even at an
+    /// offset that would be "in the gap" of a real checklist prefix.
+    func test_clickTarget_plainLine_notRelocated() {
+        let runner = HostedEditorRunner(
+            initialBody: "hello world",
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertNil(
+            tv.checklistGapRelocationTarget(caret: 3),
+            "Without a checklist marker the click rescue must not fire"
+        )
+    }
 }

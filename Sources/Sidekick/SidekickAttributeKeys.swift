@@ -61,6 +61,22 @@ extension NSAttributedString.Key {
     /// the hidden chars one at a time (D-MH-03).
     static let sidekickLinkChip = NSAttributedString.Key("sidekickLinkChip")
 
+    /// Marks the hidden `](url)` tail of a STYLED markdown link — a
+    /// `[label](url)` pair whose label is NOT the URL itself (see
+    /// `.sidekickLinkChip` for that case, which renders a pill). Value is
+    /// `Bool` (`true`), applied to the whole tail span (closing bracket
+    /// through closing paren).
+    ///
+    /// Unlike every other key in this file, this one is read ONLY by the
+    /// caret-rescue logic in `HybridEditorView` — `MarkdownLayoutManager`
+    /// never looks at it, so it has zero rendering effect. Its sole purpose
+    /// is telling this hidden run apart from an ordinary inline marker run
+    /// (`**`, `_`, …) so a caret landing inside it snaps to either edge in
+    /// one hop instead of stepping through every invisible character one at
+    /// a time — the same atomicity `.sidekickLinkChip` gets from its pill,
+    /// without actually rendering one over plain styled-link text.
+    static let sidekickLinkTailAnchor = NSAttributedString.Key("sidekickLinkTailAnchor")
+
     /// Marks a markdown thematic-break line (`---`, `***`, or `___` standalone —
     /// three or more of a single marker class on its own line). Whole-line
     /// anchoring makes `*`/`_` unambiguous from inline emphasis (`**bold**`

@@ -221,4 +221,104 @@ final class BareURLCursorAndDeleteTests: XCTestCase {
             "A caret in the URL interior still snaps out to just after the pill (21)"
         )
     }
+
+    // MARK: - (d) Click-path decision ([7], via linkChipRelocationTarget)
+    //
+    // The keyboard `snapCaretOutOfLinkChip` picks its side from the stale
+    // `previous` — meaningless for a mouse click, so a left-of-pill click could
+    // land the caret after the WHOLE URL. The click path instead calls
+    // `linkChipRelocationTarget`, deciding purely from which half of the pill
+    // glyph the click hit: left → leading edge (chipStart), right → trailing
+    // edge (runEnd). A pill click hit-tests to the single control glyph at the
+    // anchor char, so `characterIndexForGlyph` resolves it to `chipStart`; the
+    // helper therefore treats `chipStart` as an on-pill hit (the keyboard snap
+    // excludes it). The full click geometry (glyph → point) is verified live —
+    // a synthetic mid-line on-glyph click can't produce a zero-length caret in
+    // this harness — so only the decision is unit-tested here, mirroring
+    // `ChecklistGapCaretTrapTests`' click section.
+    //
+    // Body "go https://example.com/page end": chip anchor at 3, URL run 3…26,
+    // runEnd = 27.
+
+    /// A click in the pill's LEFT half relocates to the leading edge (chipStart).
+    func test_clickTarget_leftHalf_goesToChipStart() {
+        let runner = HostedEditorRunner(
+            initialBody: body,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertEqual(
+            tv.linkChipRelocationTarget(caret: 3, clickInLeftHalf: true), 3,
+            "A click on the left half of the pill must place the caret before it (chipStart 3)"
+        )
+    }
+
+    /// A click in the pill's RIGHT half relocates to the trailing edge (runEnd).
+    func test_clickTarget_rightHalf_goesToRunEnd() {
+        let runner = HostedEditorRunner(
+            initialBody: body,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertEqual(
+            tv.linkChipRelocationTarget(caret: 3, clickInLeftHalf: false), 27,
+            "A click on the right half of the pill must place the caret after it (runEnd 27)"
+        )
+    }
+
+    /// A caret resolved into the hidden interior (defensive — pill clicks resolve
+    /// to the anchor) still decides by the same left/right geometry.
+    func test_clickTarget_hiddenInterior_decidesByHalf() {
+        let runner = HostedEditorRunner(
+            initialBody: body,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertEqual(tv.linkChipRelocationTarget(caret: 15, clickInLeftHalf: true), 3)
+        XCTAssertEqual(tv.linkChipRelocationTarget(caret: 15, clickInLeftHalf: false), 27)
+    }
+
+    /// The trailing edge (offset 27, on the following space) is not on the pill —
+    /// a click there is left alone regardless of half.
+    func test_clickTarget_trailingEdge_notRelocated() {
+        let runner = HostedEditorRunner(
+            initialBody: body,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertNil(tv.linkChipRelocationTarget(caret: 27, clickInLeftHalf: true))
+        XCTAssertNil(tv.linkChipRelocationTarget(caret: 27, clickInLeftHalf: false))
+    }
+
+    /// A plain (non-chip) character is never relocated — the rescue is gated on
+    /// the hidden-marker + chip-anchor combination.
+    func test_clickTarget_plainChar_notRelocated() {
+        let runner = HostedEditorRunner(
+            initialBody: body,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        XCTAssertNil(
+            tv.linkChipRelocationTarget(caret: 29, clickInLeftHalf: true),
+            "A click on ordinary text (the 'n' of 'end') must not be relocated"
+        )
+    }
+
+    /// The hidden `> ` block prefix in front of a quoted URL is not the chip —
+    /// a click resolving into the prefix must not be dragged onto the pill's
+    /// edges (guards the chip-anchor leading-edge disambiguation on the click
+    /// path too). Body "> https://example.com": prefix 0…1, chip anchor at 2.
+    func test_clickTarget_quotedPrefix_notTreatedAsChip() {
+        let runner = HostedEditorRunner(
+            initialBody: quotedURL,
+            initialSelection: NSRange(location: 0, length: 0)
+        )
+        let tv = runner.inner.textView
+        // Offset 1 is inside the hidden `> ` prefix (before chipStart 2).
+        XCTAssertNil(tv.linkChipRelocationTarget(caret: 1, clickInLeftHalf: true))
+        XCTAssertNil(tv.linkChipRelocationTarget(caret: 1, clickInLeftHalf: false))
+        // The chip anchor itself (offset 2) IS on the pill and decides by half.
+        XCTAssertEqual(tv.linkChipRelocationTarget(caret: 2, clickInLeftHalf: true), 2)
+        XCTAssertEqual(tv.linkChipRelocationTarget(caret: 2, clickInLeftHalf: false), 21)
+    }
 }

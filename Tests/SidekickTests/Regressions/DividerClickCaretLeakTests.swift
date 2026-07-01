@@ -102,4 +102,59 @@ final class DividerClickCaretLeakTests: XCTestCase {
             "Degenerate doc (HR only) has nowhere to relocate"
         )
     }
+
+    // MARK: - Full mouseDown path ([8]/[9], via SyntheticMouse)
+    //
+    // The cases above unit-test the neighbor DECISION. These drive a real
+    // NSEvent mouseDown through `super.mouseDown` + the keyboard `snapCaretOutOfHR`
+    // + `relocateCaretOffHRAfterClick`, closing the no-mouseDown-coverage gap
+    // [6] flagged for the divider fix. The invariant they lock in ([8]/[9]):
+    // the CLICKED half alone picks the neighbor — top → line above (3), bottom →
+    // line below (8) — regardless of where the caret sat before the click. A
+    // rescue that keyed off the post-`super` caret would let the pre-click
+    // position (via the keyboard snap's stale direction) leak into the result.
+
+    /// Text-container point in the top or bottom quarter of the HR line's
+    /// fragment, horizontally centered.
+    private func hrHalfPoint(_ runner: HostedEditorRunner, hrCharIndex: Int, bottom: Bool) -> NSPoint {
+        let lm = runner.inner.layoutManager
+        let glyph = lm.glyphRange(forCharacterRange: NSRange(location: hrCharIndex, length: 0),
+                                  actualCharacterRange: nil).location
+        let frag = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        return NSPoint(x: frag.midX, y: frag.minY + frag.height * (bottom ? 0.75 : 0.25))
+    }
+
+    // Body "abc\n---\nxyz": HR dashes at offsets 4…6, HR line "---\n" = 4…7,
+    // end of line above = 3, start of line below = 8.
+
+    func test_syntheticClick_topHalf_fromAbove_goesAbove() {
+        let runner = HostedEditorRunner(initialBody: "abc\n---\nxyz",
+                                        initialSelection: NSRange(location: 0, length: 0))
+        runner.click(atTextPoint: hrHalfPoint(runner, hrCharIndex: 4, bottom: false))
+        XCTAssertEqual(runner.selection.location, 3, "top-half click → end of line above")
+    }
+
+    func test_syntheticClick_bottomHalf_fromAbove_goesBelow() {
+        let runner = HostedEditorRunner(initialBody: "abc\n---\nxyz",
+                                        initialSelection: NSRange(location: 0, length: 0))
+        runner.click(atTextPoint: hrHalfPoint(runner, hrCharIndex: 4, bottom: true))
+        XCTAssertEqual(runner.selection.location, 8, "bottom-half click → start of line below")
+    }
+
+    /// The discriminating [9] cases: caret starts BELOW the HR, so a rescue that
+    /// inherited the keyboard snap's direction (target < previous → "above")
+    /// would send a bottom-half click the wrong way. Geometry must still win.
+    func test_syntheticClick_bottomHalf_fromBelow_goesBelow() {
+        let runner = HostedEditorRunner(initialBody: "abc\n---\nxyz",
+                                        initialSelection: NSRange(location: 11, length: 0))
+        runner.click(atTextPoint: hrHalfPoint(runner, hrCharIndex: 4, bottom: true))
+        XCTAssertEqual(runner.selection.location, 8, "bottom-half click → below, even coming from below")
+    }
+
+    func test_syntheticClick_topHalf_fromBelow_goesAbove() {
+        let runner = HostedEditorRunner(initialBody: "abc\n---\nxyz",
+                                        initialSelection: NSRange(location: 11, length: 0))
+        runner.click(atTextPoint: hrHalfPoint(runner, hrCharIndex: 4, bottom: false))
+        XCTAssertEqual(runner.selection.location, 3, "top-half click → above, even coming from below")
+    }
 }
