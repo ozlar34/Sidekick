@@ -298,6 +298,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.sidekickNumberedMarker, range: range)
         backing.removeAttribute(.sidekickThematicBreak, range: range)
         backing.removeAttribute(.sidekickLinkChip, range: range)
+        backing.removeAttribute(.sidekickLinkTailAnchor, range: range)
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
@@ -477,6 +478,15 @@ final class MarkdownTextStorage: NSTextStorage {
                 if let url = URL(string: urlText) {
                     backing.addAttribute(.link, value: url, range: label)
                 }
+
+                // [10]: tag the hidden `](url)` tail — closing bracket through
+                // closing paren, contiguous by construction (findLinkRanges) —
+                // so HybridEditorView's caret-rescue can hop across it in one
+                // move instead of stepping through every hidden char.
+                let tailStart = m.closeBracketRange.location
+                let tailLength = (m.closeParenRange.location + m.closeParenRange.length) - tailStart
+                let tailRange = shift(NSRange(location: tailStart, length: tailLength), by: offset)
+                backing.addAttribute(.sidekickLinkTailAnchor, value: true, range: tailRange)
             }
         }
 

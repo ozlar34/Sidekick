@@ -657,6 +657,42 @@ class HybridTextView: NSTextView {
         return target > previous ? runEnd : chipStart
     }
 
+    /// Compute the position to snap a caret to when `target` lands inside the
+    /// hidden `](url)` tail of a STYLED markdown link (`[label](url)` where
+    /// the label is not itself the URL — see `snapCaretOutOfLinkChip` for
+    /// that case). The tail renders nothing (no pill, unlike a link chip),
+    /// so without this rescue the caret silently steps through every hidden
+    /// character one arrow-key press / click at a time — for a long URL that
+    /// can be dozens of keypresses with no visible movement ([10]). Returns
+    /// `nil` when no snap applies.
+    ///
+    /// Detection is attribute-based: `.sidekickLinkTailAnchor` is a key
+    /// distinct from `.sidekickHiddenMarker` and applied only to the tail's
+    /// own span (never merged with an adjacent hidden run from a different
+    /// construct), so `longestEffectiveRange` always yields precisely the
+    /// tail's own bounds — no chip-anchor disambiguation needed here.
+    ///
+    /// Direction mirrors `snapCaretOutOfHR`/`snapCaretOutOfChecklistGap`:
+    /// forward → tail end, backward → tail start.
+    private func snapCaretOutOfLinkTail(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target > 0, target < n else { return nil }
+
+        var runRange = NSRange(location: NSNotFound, length: 0)
+        guard storage.attribute(.sidekickLinkTailAnchor,
+                                at: target,
+                                longestEffectiveRange: &runRange,
+                                in: NSRange(location: 0, length: n)) != nil else { return nil }
+
+        // Snap only when strictly inside the tail — a caret at either edge
+        // is already a valid resting spot.
+        let runEnd = runRange.location + runRange.length
+        guard target > runRange.location, target < runEnd else { return nil }
+
+        return target > previous ? runEnd : runRange.location
+    }
+
     /// Selection-change funnel — every keyboard, mouse, and programmatic
     /// selection change reaches this override.
     ///
@@ -711,14 +747,15 @@ class HybridTextView: NSTextView {
                 || storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) != nil
                 || (proposed.location < n
                     && storage.attribute(.sidekickHiddenMarker, at: probe, effectiveRange: nil) != nil)
-            // Three hidden-region caret rescues, mutually exclusive by
+            // Four hidden-region caret rescues, mutually exclusive by
             // construction (a zero-length caret can sit on at most one of: an
-            // HR line, a checklist prefix gap, a collapsed link-chip interior).
-            // First non-nil wins.
+            // HR line, a checklist prefix gap, a collapsed link-chip interior,
+            // or a styled-link hidden tail). First non-nil wins.
             if nearManagedRegion,
                let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
                 ?? snapCaretOutOfChecklistGap(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous) {
+                ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous)
+                ?? snapCaretOutOfLinkTail(target: proposed.location, previous: previous) {
                 effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
             }
         }
