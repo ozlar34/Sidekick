@@ -162,30 +162,46 @@ class HybridTextView: NSTextView {
         relocateCaretOffHRAfterClick(event)
     }
 
-    /// After a plain click resolves onto an uninhabitable HR line, move the
-    /// caret to the nearest inhabitable neighbor — top half of the divider →
-    /// end of the line above, bottom half → start of the line below. No-op when
-    /// the click did not land on an HR line, produced a range selection, or the
-    /// HR is the whole document. The neighbor decision is delegated to the
-    /// unit-tested `hrCaretRelocationTarget`; only the top/bottom-half geometry
-    /// lives here.
+    /// After a plain click lands on an uninhabitable HR line, move the caret to
+    /// the nearest inhabitable neighbor — top half of the divider → end of the
+    /// line above, bottom half → start of the line below. No-op when the click
+    /// did not land on an HR line, produced a range selection, or the HR is the
+    /// whole document. The neighbor decision is delegated to the unit-tested
+    /// `hrCaretRelocationTarget`; only the click geometry lives here.
+    ///
+    /// Both the HR-line test and the top/bottom-half decision are keyed off the
+    /// CLICKED glyph, never the post-`super.mouseDown` caret. Two reasons:
+    ///   * [9] `snapCaretOutOfHR` runs INSIDE `super.mouseDown` (via
+    ///     `setSelectedRanges`). When no intermediate `stillSelecting` pass
+    ///     parked the caret on the HR, its same-line exemption doesn't fire, so
+    ///     it relocates the caret to a neighbor by KEYBOARD direction (stale
+    ///     `previous`) before we run. Reading the resolved caret would then see
+    ///     a non-HR line and no-op, stranding the caret on the direction-picked
+    ///     neighbor — which can be the opposite half from where the user
+    ///     clicked. The clicked glyph still points at the HR the user hit, so we
+    ///     override with the correct geometry regardless of that race.
+    ///   * [8] The half decision must come from the SAME line the rescue acts
+    ///     on. Deriving both the line (`charIdx`) and its fragment from one
+    ///     glyph keeps them consistent even at a line-fragment boundary, where
+    ///     re-hit-testing the point against the resolved caret's line could pick
+    ///     the adjacent fragment and flip the half.
     private func relocateCaretOffHRAfterClick(_ event: NSEvent) {
         guard let lm = layoutManager, let tc = textContainer else { return }
-        let sel = selectedRange()
-        guard sel.length == 0 else { return }
+        // A drag that produced a range selection is the user's intent, not a
+        // caret landing on the rule — leave it alone.
+        guard selectedRange().length == 0 else { return }
 
         let viewPoint = convert(event.locationInWindow, from: nil)
         let textPoint = NSPoint(
             x: viewPoint.x - textContainerOrigin.x,
             y: viewPoint.y - textContainerOrigin.y
         )
-        // Which half of the clicked line fragment did the click land in? The
-        // click resolved onto the HR line, so its glyph fragment IS that line.
         let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
+        let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
         let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
         let clickInBottomHalf = textPoint.y >= lineRect.midY
 
-        if let dest = hrCaretRelocationTarget(caret: sel.location, clickInBottomHalf: clickInBottomHalf) {
+        if let dest = hrCaretRelocationTarget(caret: charIdx, clickInBottomHalf: clickInBottomHalf) {
             setSelectedRange(NSRange(location: dest, length: 0))
         }
     }
