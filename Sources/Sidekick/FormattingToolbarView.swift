@@ -1135,6 +1135,26 @@ struct FormattingToolbarView: View {
             }
         }
 
+        // 1b. Bare-URL pass — whole-URL atomic delete. A bare URL renders as a
+        //     single collapsed link chip (every char hidden behind one pill),
+        //     so a Backspace/forward-Delete adjacent to it must remove the
+        //     entire URL in one step — parity with how `[label](url)` deletes
+        //     atomically above. There is no marker/label to keep, so the whole
+        //     span is the delete range and the replacement is empty.
+        //
+        //     Ordered before the emphasis passes so a URL containing `_`, `*`,
+        //     or `~` is never mis-split by the bold/italic/strike parsers
+        //     (e.g. `https://host/a_b_c` must not delete just `_b_`).
+        for urlRange in MarkdownInlineParser.findAutoLinkRanges(in: body) {
+            if isAdjacent(urlRange, caret, direction) {
+                return AtomicMarkerDeleteResult(
+                    deleteRange: urlRange,
+                    replacement: "",
+                    postCaret: urlRange.location
+                )
+            }
+        }
+
         // 2. Underline pass — asymmetric close (`</u>` = 4 chars) before bold.
         for m in MarkdownInlineParser.findUnderlineRanges(in: body) {
             if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {

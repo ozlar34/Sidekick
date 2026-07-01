@@ -301,6 +301,7 @@ final class MarkdownTextStorage: NSTextStorage {
         backing.removeAttribute(.backgroundColor, range: range)
         backing.removeAttribute(.paragraphStyle, range: range)
         backing.removeAttribute(.link, range: range)            // D-LR-05 cleanup
+        backing.removeAttribute(.toolTip, range: range)         // link-chip hover hint cleanup
         backing.removeAttribute(.underlineStyle, range: range)  // D-LR-03 + applyUnderline cleanup
         backing.removeAttribute(.strikethroughStyle, range: range)  // applyStrikethrough cleanup
         // Reset font to the base 15pt editor font, matching
@@ -458,6 +459,10 @@ final class MarkdownTextStorage: NSTextStorage {
                 if let url = URL(string: urlText) {
                     backing.addAttribute(.link, value: url, range: firstCharRange)
                 }
+                // Discoverability hint: the pill collapses the scheme, so hover
+                // reveals the full destination and signals it is a clickable
+                // link (⌘-click opens it).
+                backing.addAttribute(.toolTip, value: urlText, range: firstCharRange)
                 // Defeat NSTextView's automatic linkTextAttributes (linkColor +
                 // single underline) on the chip anchor — the pill is our
                 // visual, the system underline would render below it.
@@ -496,6 +501,9 @@ final class MarkdownTextStorage: NSTextStorage {
             if let url = URL(string: urlText) {
                 backing.addAttribute(.link, value: url, range: firstCharRange)
             }
+            // Discoverability hint: hover reveals the full URL and signals the
+            // pill is a clickable link (⌘-click opens it).
+            backing.addAttribute(.toolTip, value: urlText, range: firstCharRange)
             // Defeat NSTextView's automatic linkTextAttributes underline on
             // the chip anchor (see [url](url) branch above).
             backing.addAttribute(.underlineStyle, value: 0, range: firstCharRange)
