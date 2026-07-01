@@ -216,6 +216,21 @@ class HybridTextView: NSTextView {
             setSelectedRange(NSRange(location: dest, length: 0))
             return
         }
+
+        // [7] Link-chip pill → leading edge (chipStart) for a click in the pill's
+        // LEFT half, trailing edge (runEnd) for the RIGHT half. The pill is a
+        // single wide control glyph at chipStart and the rest of the URL is
+        // zero-width hidden chars, so a click anywhere on the pill hit-tests to
+        // this one glyph. Split it at the glyph's horizontal midpoint — the
+        // click-geometry analog of the HR top/bottom-half split above (x here,
+        // y there). The keyboard snap's stale-`previous` side pick could jump a
+        // left-of-pill click clear past the whole URL; geometry fixes that.
+        let glyphRect = lm.boundingRect(forGlyphRange: NSRange(location: glyphIdx, length: 1), in: tc)
+        let clickInLeftHalf = textPoint.x < glyphRect.midX
+        if let dest = linkChipRelocationTarget(caret: charIdx, clickInLeftHalf: clickInLeftHalf) {
+            setSelectedRange(NSRange(location: dest, length: 0))
+            return
+        }
     }
 
     /// F-07: defense against macOS Character Viewer (emoji picker) handing us
@@ -620,6 +635,50 @@ class HybridTextView: NSTextView {
         let contentStart = lineRange.location + 6
         guard caret > lineRange.location, caret < contentStart else { return nil }
         return contentStart
+    }
+
+    /// Click-path counterpart to `snapCaretOutOfLinkChip`: given a caret a mouse
+    /// click resolved onto a collapsed link-chip pill (a bare URL / `[url](url)`
+    /// chip whose characters render as one pill), return the pill's leading edge
+    /// (`chipStart`) for a click in its LEFT half, or its trailing edge
+    /// (`runEnd`) for the RIGHT half. Unlike the keyboard path — which infers the
+    /// side from a stale `previous` — a click carries its own geometry, so the
+    /// half it landed in IS the whole decision. Returns `nil` when the caret is
+    /// not on a chip.
+    ///
+    /// Detection mirrors `snapCaretOutOfLinkChip`: the caret must sit in a
+    /// `.sidekickHiddenMarker` run whose extent carries a `.sidekickLinkChip`
+    /// anchor, and the chip's leading edge is the anchor char — not the merged
+    /// run's start, since a hidden block prefix (`> `/`# `) can coalesce into the
+    /// same run (see `snapCaretOutOfLinkChip`).
+    ///
+    /// Fires when the caret is anywhere ON the pill (`chipStart …< runEnd`),
+    /// INCLUDING `chipStart` itself — a pill click hit-tests to the single wide
+    /// control glyph at the anchor char, so `characterIndexForGlyph` resolves it
+    /// to `chipStart`. That is an on-pill hit here, not the already-valid leading
+    /// edge it is for the keyboard path (which excludes `chipStart`). Left
+    /// `internal` so the decision is unit-testable without a mouse-tracking loop.
+    func linkChipRelocationTarget(caret: Int, clickInLeftHalf: Bool) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, caret >= 0, caret < n else { return nil }
+
+        var runRange = NSRange(location: NSNotFound, length: 0)
+        guard storage.attribute(.sidekickHiddenMarker,
+                                at: caret,
+                                longestEffectiveRange: &runRange,
+                                in: NSRange(location: 0, length: n)) != nil else { return nil }
+
+        var chipStart = NSNotFound
+        storage.enumerateAttribute(.sidekickLinkChip, in: runRange, options: []) { value, range, stop in
+            if value != nil { chipStart = range.location; stop.pointee = true }
+        }
+        guard chipStart != NSNotFound else { return nil }
+
+        let runEnd = runRange.location + runRange.length
+        guard caret >= chipStart, caret < runEnd else { return nil }
+
+        return clickInLeftHalf ? chipStart : runEnd
     }
 
     /// Compute the position to snap a caret to when `target` lands in the
