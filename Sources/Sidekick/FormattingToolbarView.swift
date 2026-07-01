@@ -1371,14 +1371,16 @@ struct FormattingToolbarView: View {
     ///
     /// Trigger semantics: caret must be at the START of an EMPTY line (zero
     /// content chars, just the line terminator) and the PREVIOUS line must carry
-    /// `.sidekickThematicBreak`. When both conditions hold, the HR line AND the
-    /// caret's own empty line are deleted together in a single undoable step via
-    /// the shouldChangeText/replaceCharacters/didChangeText sandwich, collapsing
-    /// "...\n---\n\n..." to "...\n...". The caret lands at the start of where
-    /// the HR was.
+    /// `.sidekickThematicBreak`. One Backspace at the START of that line deletes
+    /// the whole rule in a single undoable step (shouldChangeText/
+    /// replaceCharacters/didChangeText). If the caret's line is empty, the HR AND
+    /// the empty line collapse ("...\n---\n\n..." → "...\n..."); if it has
+    /// content, ONLY the HR is removed and the content rides up to where the HR
+    /// was ("A\n---\nB" → "A\nB", N-01). The caret lands at the start of where
+    /// the HR was; a second Backspace then merges the two paragraphs normally.
     ///
-    /// Empty-caret-line guard prevents shadowing the normal "merge content into
-    /// HR" path that fires when the adjacent line has text.
+    /// Fires only at line start, so mid-line backspace stays a normal character
+    /// delete and falls through.
     ///
     /// Returns true if the keystroke was consumed; false to fall through to the
     /// default delete handler.
@@ -1400,8 +1402,8 @@ struct FormattingToolbarView: View {
             if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
         }
         let contentLen = caretLineEnd - caretLine.location
-        guard contentLen == 0,
-              selection.location == caretLine.location else { return false }
+        // Fire at the START of the line directly below an HR — empty or not.
+        guard selection.location == caretLine.location else { return false }
 
         // Identify the PREVIOUS line.
         guard caretLine.location > 0 else { return false }
@@ -1413,11 +1415,14 @@ struct FormattingToolbarView: View {
                                 at: prevLineRange.location,
                                 effectiveRange: nil) != nil else { return false }
 
-        // Delete the HR line PLUS the caret's own empty line atomically.
-        // Combined range: from start of prevLineRange through end of caretLine.
-        // This collapses "...\n---\n\n..." → "...\n..." with one undo step.
+        // Empty caret line → collapse the HR AND the now-pointless empty line
+        // ("...\n---\n\n..." → "...\n..."). Content caret line → delete ONLY the
+        // HR line, keeping the content ("A\n---\nB" → "A\nB"); the content rides
+        // up to where the HR was. One undo step either way.
         let editStart = prevLineRange.location
-        let editEnd = caretLine.location + caretLine.length
+        let editEnd = (contentLen == 0)
+            ? caretLine.location + caretLine.length   // HR line + the empty line
+            : caretLine.location                      // HR line only
         let editRange = NSRange(location: editStart, length: editEnd - editStart)
         guard textView.shouldChangeText(in: editRange, replacementString: "") else { return false }
         textView.replaceCharacters(in: editRange, with: "")
@@ -1429,13 +1434,15 @@ struct FormattingToolbarView: View {
     /// HR-03 — Forward-delete (fn+Delete) on an empty line immediately above a
     /// horizontal rule.
     ///
-    /// Trigger semantics: caret must be on an EMPTY line (zero content chars)
-    /// and the NEXT line must carry `.sidekickThematicBreak`. When both
-    /// conditions hold, the caret's own empty line AND the HR line are deleted
-    /// together in one undoable step, collapsing "...\n\n---\n..." to "...\n...".
+    /// Mirror of `handleThematicBreakBackspace`. Trigger: caret at the END of a
+    /// line whose NEXT line carries `.sidekickThematicBreak`. One Forward-Delete
+    /// removes the whole rule in one undoable step. If the caret's line is empty,
+    /// the empty line AND the HR collapse ("...\n\n---\n..." → "...\n..."); if it
+    /// has content, ONLY the HR is removed ("A\n---\nB" → "A\nB", N-01 mirror).
     /// The caret stays at its original position.
     ///
-    /// Empty-caret-line guard prevents shadowing the normal merge path.
+    /// Fires only at line end, so mid-line forward-delete stays a normal
+    /// character delete and falls through.
     ///
     /// Returns true if the keystroke was consumed; false to fall through.
     static func handleThematicBreakForwardDelete(in textView: NSTextView) -> Bool {
@@ -1455,7 +1462,9 @@ struct FormattingToolbarView: View {
             if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
         }
         let contentLen = caretLineEnd - caretLine.location
-        guard contentLen == 0 else { return false }
+        // Fire at the END of the line directly above an HR — empty or not. (For
+        // an empty line, caretLineEnd == line start, so this still holds.)
+        guard selection.location == caretLineEnd else { return false }
 
         // Identify the NEXT line.
         let nextLineStart = caretLine.location + caretLine.length
@@ -1467,10 +1476,11 @@ struct FormattingToolbarView: View {
                                 at: nextLineRange.location,
                                 effectiveRange: nil) != nil else { return false }
 
-        // Delete the caret's own empty line PLUS the HR line atomically.
-        // Combined range: from start of caretLine through end of nextLineRange.
-        // This collapses "...\n\n---\n..." → "...\n..." with one undo step.
-        let editStart = caretLine.location
+        // Empty caret line → collapse the empty line AND the HR
+        // ("...\n\n---\n..." → "...\n..."). Content caret line → delete ONLY the
+        // HR line, keeping the content ("A\n---\nB" → "A\nB"). One undo step; the
+        // HR is after the caret, so the caret position is unchanged.
+        let editStart = (contentLen == 0) ? caretLine.location : nextLineStart
         let editEnd = nextLineRange.location + nextLineRange.length
         let editRange = NSRange(location: editStart, length: editEnd - editStart)
         let originalLocation = selection.location

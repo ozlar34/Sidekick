@@ -520,9 +520,13 @@ class HybridTextView: NSTextView {
         guard let storage = textStorage, lineRange.length > 0 else { return nil }
         let ns = storage.string as NSString
         let hasAbove = lineRange.location > 0
-        let lineEndsWithNewline =
-            ns.character(at: lineRange.location + lineRange.length - 1) == 0x0A
-        let hasBelow = lineEndsWithNewline
+        // `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
+        // not just LF. A trailing terminator means a line exists below (even an
+        // empty one), so test the last scalar against ALL newline scalars, not
+        // only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
+        let lastUnichar = ns.character(at: lineRange.location + lineRange.length - 1)
+        let hasBelow = Unicode.Scalar(UInt32(lastUnichar))
+            .map(CharacterSet.newlines.contains) ?? false
 
         let aboveLoc = lineRange.location - 1
         let belowLoc = lineRange.location + lineRange.length
@@ -688,13 +692,31 @@ class HybridTextView: NSTextView {
         if !stillSelecting,
            ranges.count == 1,
            let proposed = ranges.first?.rangeValue,
-           proposed.length == 0 {
+           proposed.length == 0,
+           let storage = textStorage,
+           storage.length > 0 {
+            let n = storage.length
             let previous = selectedRange().location
+            // [11] Cheap gate before the three rescues: each recomputes lineRange
+            // and the HR rescue enumerates the whole line, so running all three on
+            // every caret move is wasteful. A zero-length caret only needs a
+            // rescue when it's near a managed region — an HR or checklist line
+            // (both markers anchored at line start) or a collapsed hidden-marker
+            // run at the caret (link chip). Otherwise skip the chain entirely.
+            let ns = storage.string as NSString
+            let probe = min(max(proposed.location, 0), n - 1)
+            let lineStart = ns.lineRange(for: NSRange(location: probe, length: 0)).location
+            let nearManagedRegion =
+                storage.attribute(.sidekickThematicBreak, at: lineStart, effectiveRange: nil) != nil
+                || storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) != nil
+                || (proposed.location < n
+                    && storage.attribute(.sidekickHiddenMarker, at: probe, effectiveRange: nil) != nil)
             // Three hidden-region caret rescues, mutually exclusive by
             // construction (a zero-length caret can sit on at most one of: an
             // HR line, a checklist prefix gap, a collapsed link-chip interior).
             // First non-nil wins.
-            if let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
+            if nearManagedRegion,
+               let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
                 ?? snapCaretOutOfChecklistGap(target: proposed.location, previous: previous)
                 ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous) {
                 effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
