@@ -154,6 +154,40 @@ class HybridTextView: NSTextView {
             }
         }
         super.mouseDown(with: event)
+        // Divider click-leak rescue: the setSelectedRanges HR snap has a
+        // same-line exemption that the mouse path slips through — the click's
+        // intermediate `stillSelecting` pass parks the caret on the HR line, so
+        // the final pass sees "same line" and declines to snap, stranding the
+        // caret on the uninhabitable rule. Resolve it here at the click site.
+        relocateCaretOffHRAfterClick(event)
+    }
+
+    /// After a plain click resolves onto an uninhabitable HR line, move the
+    /// caret to the nearest inhabitable neighbor — top half of the divider →
+    /// end of the line above, bottom half → start of the line below. No-op when
+    /// the click did not land on an HR line, produced a range selection, or the
+    /// HR is the whole document. The neighbor decision is delegated to the
+    /// unit-tested `hrCaretRelocationTarget`; only the top/bottom-half geometry
+    /// lives here.
+    private func relocateCaretOffHRAfterClick(_ event: NSEvent) {
+        guard let lm = layoutManager, let tc = textContainer else { return }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return }
+
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let textPoint = NSPoint(
+            x: viewPoint.x - textContainerOrigin.x,
+            y: viewPoint.y - textContainerOrigin.y
+        )
+        // Which half of the clicked line fragment did the click land in? The
+        // click resolved onto the HR line, so its glyph fragment IS that line.
+        let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
+        let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
+        let clickInBottomHalf = textPoint.y >= lineRect.midY
+
+        if let dest = hrCaretRelocationTarget(caret: sel.location, clickInBottomHalf: clickInBottomHalf) {
+            setSelectedRange(NSRange(location: dest, length: 0))
+        }
     }
 
     /// F-07: defense against macOS Character Viewer (emoji picker) handing us
@@ -473,6 +507,18 @@ class HybridTextView: NSTextView {
             }
         }
 
+        return hrNeighborLocation(hrLineRange: lineRange, preferBelow: target > previous)
+    }
+
+    /// Nearest inhabitable neighbor location for a caret leaving an HR line.
+    /// `preferBelow` breaks the tie when both neighbors exist — the keyboard
+    /// rescue passes direction-of-motion (`target > previous`), the mouse
+    /// rescue passes which half of the divider was clicked. Returns the start
+    /// of the line below (`belowLoc`) or the end of the line above (`aboveLoc`);
+    /// `nil` only when the HR line is the entire document (nowhere to go).
+    private func hrNeighborLocation(hrLineRange lineRange: NSRange, preferBelow: Bool) -> Int? {
+        guard let storage = textStorage, lineRange.length > 0 else { return nil }
+        let ns = storage.string as NSString
         let hasAbove = lineRange.location > 0
         let lineEndsWithNewline =
             ns.character(at: lineRange.location + lineRange.length - 1) == 0x0A
@@ -484,7 +530,127 @@ class HybridTextView: NSTextView {
         if !hasAbove && !hasBelow { return nil }
         if !hasAbove { return belowLoc }
         if !hasBelow { return aboveLoc }
-        return target > previous ? belowLoc : aboveLoc
+        return preferBelow ? belowLoc : aboveLoc
+    }
+
+    /// Click-path counterpart to `snapCaretOutOfHR`: given a caret that a mouse
+    /// click resolved onto an HR line, return where it should go instead. The
+    /// neighbor is chosen by which half of the divider was clicked — top half
+    /// (`clickInBottomHalf == false`) → end of the line above; bottom half →
+    /// start of the line below. Returns `nil` when the caret is not on an HR
+    /// line or the HR is the whole document.
+    ///
+    /// Split out (and left `internal`) from `mouseDown` so the neighbor
+    /// decision is unit-testable without synthesizing an AppKit mouse-tracking
+    /// loop — only the geometry that computes `clickInBottomHalf` needs live
+    /// verification.
+    func hrCaretRelocationTarget(caret: Int, clickInBottomHalf: Bool) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, caret >= 0, caret <= n else { return nil }
+
+        let probeLoc = min(caret, n - 1)
+        let ns = storage.string as NSString
+        let hrLineRange = ns.lineRange(for: NSRange(location: probeLoc, length: 0))
+        guard hrLineRange.location < n,
+              storage.attribute(.sidekickThematicBreak,
+                                at: hrLineRange.location,
+                                effectiveRange: nil) != nil else { return nil }
+
+        return hrNeighborLocation(hrLineRange: hrLineRange, preferBelow: clickInBottomHalf)
+    }
+
+    /// Compute the position to snap a caret to when `target` lands in the
+    /// "gap" of a GFM task-list prefix (`- [ ] ` / `- [x] `). The 6-char
+    /// prefix is an atomic block: the caret may rest at line start (offset 0,
+    /// before the checkbox) or at content start (offset 6), never on the
+    /// interior offsets 1…5. Letting it rest in the gap lets the user type
+    /// into — and thereby break — the checkbox syntax, and strands Enter (the
+    /// continuation handler only fires from content start). Returns `nil` when
+    /// no snap is needed.
+    ///
+    /// Gated on the rendered `.sidekickChecklistMarker` attribute so the snap
+    /// fires only where a checkbox is actually drawn — a plain line that merely
+    /// begins with the `- [ ] ` characters but did not parse as a task list
+    /// carries no marker and is left freely editable.
+    ///
+    /// Direction inferred from `previous` (mirrors `snapCaretOutOfHR`):
+    ///   * `target > previous` → moving forward, snap to content start (line+6)
+    ///   * `target ≤ previous` → moving backward, snap to line start (line+0)
+    private func snapCaretOutOfChecklistGap(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target >= 0, target <= n else { return nil }
+
+        let probeLoc = min(target, n - 1)
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: probeLoc, length: 0))
+        guard lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return nil }
+
+        // Gap = strictly between line start and content start (offsets 1…5).
+        let contentStart = lineRange.location + 6
+        guard target > lineRange.location, target < contentStart else { return nil }
+
+        return target > previous ? contentStart : lineRange.location
+    }
+
+    /// Compute the position to snap a caret to when `target` lands strictly
+    /// INSIDE a collapsed link-chip run — a bare URL, or a `[url](url)` chip
+    /// whose characters all carry `.sidekickHiddenMarker` and render as a
+    /// single pill. The chip is atomic: the caret may rest just before the run
+    /// (its leading edge) or just after it, never on the hidden interior where
+    /// the pill collapses every offset to one visual point. Returns `nil` when
+    /// no snap applies.
+    ///
+    /// Detection is attribute-based (no re-parse): the caret must sit inside a
+    /// `.sidekickHiddenMarker` run whose extent also carries a
+    /// `.sidekickLinkChip` anchor — a combination unique to rendered link
+    /// chips, so heading / list / emphasis hidden markers are left untouched.
+    ///
+    /// Direction mirrors `snapCaretOutOfHR`: forward → run end, backward → run
+    /// start.
+    private func snapCaretOutOfLinkChip(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target > 0, target < n else { return nil }
+
+        // Must be strictly inside a hidden run. Use `longestEffectiveRange` so
+        // the run spans the WHOLE URL by the hidden attribute's value alone —
+        // the chip anchor char carries extra attributes (.link, .toolTip, …)
+        // and would otherwise cut the plain `effectiveRange` short, hiding the
+        // anchor from the chip check below.
+        var runRange = NSRange(location: NSNotFound, length: 0)
+        guard storage.attribute(.sidekickHiddenMarker,
+                                at: target,
+                                longestEffectiveRange: &runRange,
+                                in: NSRange(location: 0, length: n)) != nil else { return nil }
+
+        // `.sidekickHiddenMarker` is stored with the SAME value (`true`) for
+        // every hidden construct, so `longestEffectiveRange` cannot tell a link
+        // chip apart from an immediately-preceding hidden prefix on the same
+        // line: a blockquote `> ` or heading `# ` whose content is itself a bare
+        // URL coalesces into one run spanning [prefix start … URL end]. Anchor
+        // the chip's leading edge on the `.sidekickLinkChip` char (the URL's
+        // first character) instead of the merged run's start, so the prefix is
+        // never mistaken for chip interior (which would trap the caret in the
+        // prefix and teleport it past the whole URL).
+        var chipStart = NSNotFound
+        storage.enumerateAttribute(.sidekickLinkChip, in: runRange, options: []) { value, range, stop in
+            if value != nil { chipStart = range.location; stop.pointee = true }
+        }
+        guard chipStart != NSNotFound else { return nil }
+
+        // Snap only when strictly inside the chip. Both the leading edge
+        // (`chipStart`, just before the pill) and the trailing edge (`runEnd`,
+        // just after) are valid resting spots. A caret at or before `chipStart`
+        // sits in the hidden prefix — not our concern here, leave it alone.
+        guard target > chipStart else { return nil }
+
+        let runEnd = runRange.location + runRange.length
+        return target > previous ? runEnd : chipStart
     }
 
     /// Selection-change funnel — every keyboard, mouse, and programmatic
@@ -522,12 +688,17 @@ class HybridTextView: NSTextView {
         if !stillSelecting,
            ranges.count == 1,
            let proposed = ranges.first?.rangeValue,
-           proposed.length == 0,
-           let snapped = snapCaretOutOfHR(
-               target: proposed.location,
-               previous: selectedRange().location
-           ) {
-            effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
+           proposed.length == 0 {
+            let previous = selectedRange().location
+            // Three hidden-region caret rescues, mutually exclusive by
+            // construction (a zero-length caret can sit on at most one of: an
+            // HR line, a checklist prefix gap, a collapsed link-chip interior).
+            // First non-nil wins.
+            if let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
+                ?? snapCaretOutOfChecklistGap(target: proposed.location, previous: previous)
+                ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous) {
+                effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
+            }
         }
 
         super.setSelectedRanges(effectiveRanges, affinity: affinity, stillSelecting: stillSelecting)
