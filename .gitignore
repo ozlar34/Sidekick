@@ -14,3 +14,8 @@ Package.resolved
 
 # GSD planning workspace (local-only)
 .planning/
+
+# Debug harness (local-only)
+Scripts/debug-harness/__pycache__/
+Scripts/debug-harness/fixtures/.index.json
+.scratch/
