@@ -589,20 +589,52 @@ class HybridTextView: NSTextView {
     /// rescue passes which half of the divider was clicked. Returns the start
     /// of the line below (`belowLoc`) or the end of the line above (`aboveLoc`);
     /// `nil` only when the HR line is the entire document (nowhere to go).
+    ///
+    /// Consecutive dividers (`---\n---`) form one uninhabitable block: the
+    /// neighbor search widens to the first / last HR line of the run before
+    /// looking above and below, so the caret never lands on the adjacent HR
+    /// (where a follow-up move would snap it in the wrong direction and a
+    /// delete would act on the wrong line).
     private func hrNeighborLocation(hrLineRange lineRange: NSRange, preferBelow: Bool) -> Int? {
         guard let storage = textStorage, lineRange.length > 0 else { return nil }
         let ns = storage.string as NSString
-        let hasAbove = lineRange.location > 0
+        let n = ns.length
+
+        func lineIsHR(_ range: NSRange) -> Bool {
+            var found = false
+            storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
+                if (value as? Bool) == true { found = true; stop.pointee = true }
+            }
+            return found
+        }
         // `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
         // not just LF. A trailing terminator means a line exists below (even an
         // empty one), so test the last scalar against ALL newline scalars, not
         // only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
-        let lastUnichar = ns.character(at: lineRange.location + lineRange.length - 1)
-        let hasBelow = Unicode.Scalar(UInt32(lastUnichar))
-            .map(CharacterSet.newlines.contains) ?? false
+        func endsWithNewline(_ range: NSRange) -> Bool {
+            let lastUnichar = ns.character(at: range.location + range.length - 1)
+            return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
+        }
 
-        let aboveLoc = lineRange.location - 1
-        let belowLoc = lineRange.location + lineRange.length
+        // Widen to the whole run of adjacent HR lines.
+        var first = lineRange
+        while first.location > 0 {
+            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
+            guard above.length > 0, lineIsHR(above) else { break }
+            first = above
+        }
+        var last = lineRange
+        while endsWithNewline(last), last.location + last.length < n {
+            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
+            guard below.length > 0, lineIsHR(below) else { break }
+            last = below
+        }
+
+        let hasAbove = first.location > 0
+        let hasBelow = endsWithNewline(last)
+
+        let aboveLoc = first.location - 1
+        let belowLoc = last.location + last.length
 
         if !hasAbove && !hasBelow { return nil }
         if !hasAbove { return belowLoc }
