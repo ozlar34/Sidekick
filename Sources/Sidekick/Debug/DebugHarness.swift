@@ -57,10 +57,21 @@ final class DebugHarness {
     }
 
     func start(port: UInt16) {
+        // `NWEndpoint.Port(rawValue: 0)` is not nil — it is the "any" port, so
+        // the failable guard below would let 0 bind an ephemeral port that no
+        // driver can find. Reject it explicitly.
+        guard port != 0 else {
+            NSLog("[Sidekick.debug] invalid --debug-port 0; harness not started")
+            return
+        }
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            NSLog("[Sidekick.debug] invalid --debug-port \(port); harness not started")
+            return
+        }
         do {
             let params = NWParameters.tcp
             params.requiredInterfaceType = .loopback
-            let l = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            let l = try NWListener(using: params, on: endpointPort)
             l.newConnectionHandler = { [weak self] conn in
                 Task { @MainActor in self?.accept(conn) }
             }
