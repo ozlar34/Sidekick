@@ -96,8 +96,23 @@ final class ClickSweepDiagnosticTests: XCTestCase {
             let ch = ns.character(at: i)
             if ch == 10 { continue }
             if lm.propertyForGlyph(at: g).contains(.null) { continue }
-            let rect = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc)
-            guard rect.width > 0 else { continue }
+            // Glyph extent = [this glyph's x, next visible glyph's x on the same
+            // fragment). boundingRect(forGlyphRange:) is unreliable on heading lines.
+            let x0 = frag.origin.x + lm.location(forGlyphAt: g).x
+            var x1: CGFloat? = nil
+            var j = i + 1
+            while j < n, x1 == nil {
+                let gj = lm.glyphIndexForCharacter(at: j)
+                if gj < lm.numberOfGlyphs,
+                   lm.lineFragmentRect(forGlyphAt: gj, effectiveRange: nil) == frag,
+                   !lm.propertyForGlyph(at: gj).contains(.null) {
+                    let xj = frag.origin.x + lm.location(forGlyphAt: gj).x
+                    if xj > x0 { x1 = xj } else { break }
+                } else if lm.lineFragmentRect(forGlyphAt: gj, effectiveRange: nil) != frag { break }
+                j += 1
+            }
+            guard let x1 else { continue }
+            let rect = NSRect(x: x0, y: frag.origin.y, width: x1 - x0, height: frag.height)
             let y = frag.midY
             let left = NSPoint(x: rect.minX + min(1.5, rect.width / 4), y: y)
             runner.select(NSRange(location: n, length: 0))
