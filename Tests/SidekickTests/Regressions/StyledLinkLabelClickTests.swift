@@ -51,6 +51,52 @@ final class StyledLinkLabelClickTests: XCTestCase {
                        "double-click on the label should select the word 'styled'")
     }
 
+    // ⇧-click extends the selection to the clicked char. AppKit skips that on
+    // `.link` text just as it skips caret placement, so the link-label rescue
+    // owns it too; without that, the rescue collapsed the click to a caret
+    // (found in review, 2026-09-03).
+    func test_shiftClickOnLinkLabel_extendsSelection_notCollapsed() {
+        let runner = HostedEditorRunner(initialBody: body,
+                                        initialSelection: NSRange(location: 0, length: 0))
+        runner.click(atTextPoint: leftEdgePoint(runner, ofCharAt: 9), modifierFlags: [.shift])
+        XCTAssertEqual(runner.selection, NSRange(location: 0, length: 9),
+                       "shift-click on the label should extend the selection 0..<9, not collapse to a caret")
+    }
+
+    // A drag that starts on the label must produce a normal text selection.
+    // AppKit treats a mouseDown on `.link` text as a link drag (never a text
+    // selection), so the rescue collapsed it to a caret at the mouseDown point
+    // (found in live verification, 2026-09-03).
+    func test_dragFromLinkLabel_selectsRange_notCaret() {
+        let runner = HostedEditorRunner(initialBody: body,
+                                        initialSelection: NSRange(location: 0, length: 0))
+        runner.drag(fromTextPoint: leftEdgePoint(runner, ofCharAt: 7),
+                    toTextPoint: leftEdgePoint(runner, ofCharAt: 10))
+        XCTAssertEqual(runner.selection, NSRange(location: 7, length: 3),
+                       "drag from 'y' to 'd' on the label should select 7..<10 like plain text")
+    }
+
+    // Same drag, but ending past the label on plain text.
+    func test_dragFromLinkLabel_intoPlainText_selectsRange() {
+        let runner = HostedEditorRunner(initialBody: body,
+                                        initialSelection: NSRange(location: 0, length: 0))
+        let after = (body as NSString).range(of: "after").location   // plain text
+        runner.drag(fromTextPoint: leftEdgePoint(runner, ofCharAt: 5),
+                    toTextPoint: leftEdgePoint(runner, ofCharAt: after))
+        XCTAssertEqual(runner.selection, NSRange(location: 5, length: after - 5),
+                       "drag from the label start into plain text should select up to the drop point")
+    }
+
+    // Drag from plain text INTO the label goes through AppKit's normal path;
+    // pinned so the link-label rescue never regresses it.
+    func test_dragFromPlainTextIntoLabel_selectsRange() {
+        let runner = HostedEditorRunner(initialBody: body,
+                                        initialSelection: NSRange(location: 0, length: 0))
+        runner.drag(fromTextPoint: leftEdgePoint(runner, ofCharAt: 1),
+                    toTextPoint: leftEdgePoint(runner, ofCharAt: 8))
+        XCTAssertEqual(runner.selection, NSRange(location: 1, length: 7))
+    }
+
     // MARK: - Geometry helpers
 
     private func leftEdgePoint(_ runner: HostedEditorRunner, ofCharAt i: Int) -> NSPoint {

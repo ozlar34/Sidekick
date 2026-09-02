@@ -153,6 +153,10 @@ class HybridTextView: NSTextView {
                 }
             }
         }
+        // Styled-link label: AppKit never places a caret or tracks a text
+        // selection on `.link` text, so own the whole gesture. See
+        // `trackLinkLabelSelection`.
+        if trackLinkLabelSelection(event) { return }
         super.mouseDown(with: event)
         // Click-path caret rescue: the `setSelectedRanges` snap chain runs INSIDE
         // super.mouseDown with a meaningless keyboard `previous` (a click has no
@@ -160,6 +164,63 @@ class HybridTextView: NSTextView {
         // managed region. Re-decide here from click GEOMETRY. See
         // `relocateCaretAfterClick`.
         relocateCaretAfterClick(event)
+    }
+
+    /// Styled-link label (`[label](url)`, label carries `.link`): NSTextView
+    /// treats a mouseDown on `.link` text as a link click — it tracks to
+    /// mouseUp, consults `clickedOnLink`, and never places the caret, even
+    /// when the delegate declines the click. A drag from the label is a link
+    /// drag, never a text selection. Either way the caret stays wherever it
+    /// was, which reads as a jump. So for a plain / ⇧ single click, take over
+    /// the gesture: place the caret (or ⇧-extend the current selection) at the
+    /// insertion point, then run the same tracking loop AppKit would for plain
+    /// text — extend the selection to each dragged point until mouseUp.
+    /// ⌘-click is the open-URL gesture and multi-clicks already select word /
+    /// paragraph through the normal path, so those fall through to `super`.
+    /// Chips (a pill for a bare URL) are excluded — their own half-geometry
+    /// rescue lives in `relocateCaretAfterClick`.
+    ///
+    /// Returns true when the gesture was consumed here.
+    private func trackLinkLabelSelection(_ event: NSEvent) -> Bool {
+        guard event.clickCount == 1,
+              !event.modifierFlags.contains(.command),
+              let lm = layoutManager, let tc = textContainer, let storage = textStorage,
+              let window else { return false }
+
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let textPoint = NSPoint(
+            x: viewPoint.x - textContainerOrigin.x,
+            y: viewPoint.y - textContainerOrigin.y
+        )
+        let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
+        let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+        guard charIdx < storage.length,
+              storage.attribute(.link, at: charIdx, effectiveRange: nil) != nil,
+              storage.attribute(.sidekickLinkChip, at: charIdx, effectiveRange: nil) == nil
+        else { return false }
+
+        if window.firstResponder !== self { window.makeFirstResponder(self) }
+
+        // ⇧ extends from the existing selection; otherwise the mouseDown
+        // insertion point is the anchor and the selection grows from there.
+        let insertion = characterIndexForInsertion(at: viewPoint)
+        let anchor = event.modifierFlags.contains(.shift)
+            ? selectedRange()
+            : NSRange(location: insertion, length: 0)
+        func extend(to end: Int) {
+            let lo = min(anchor.location, end)
+            let hi = max(NSMaxRange(anchor), end)
+            setSelectedRange(NSRange(location: lo, length: hi - lo))
+        }
+        extend(to: insertion)
+        // Only dragged events move the selection end, as in AppKit's own loop;
+        // the release point is wherever the last drag left it.
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]),
+              next.type == .leftMouseDragged {
+            autoscroll(with: next)
+            extend(to: characterIndexForInsertion(at: convert(next.locationInWindow, from: nil)))
+        }
+        return true
     }
 
     /// Click-path counterpart to the `setSelectedRanges` snap chain. A mouse
@@ -193,24 +254,6 @@ class HybridTextView: NSTextView {
         )
         let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
         let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
-
-        // Styled-link label (`[label](url)`, label carries `.link`): NSTextView
-        // treats a mouseDown on `.link` text as a link click — it tracks to
-        // mouseUp, consults `clickedOnLink`, and never places the caret, even
-        // when the delegate declines the click. The caret stays wherever it
-        // was, which reads as a jump. Place it ourselves for a plain single
-        // click; ⌘-click is the open-URL gesture and multi-clicks already
-        // select word / paragraph through the normal path. Chips (a pill for
-        // a bare URL) are excluded — their own half-geometry rescue follows.
-        if event.clickCount == 1,
-           !event.modifierFlags.contains(.command),
-           charIdx < storage.length,
-           storage.attribute(.link, at: charIdx, effectiveRange: nil) != nil,
-           storage.attribute(.sidekickLinkChip, at: charIdx, effectiveRange: nil) == nil {
-            let insertion = characterIndexForInsertion(at: viewPoint)
-            setSelectedRange(NSRange(location: insertion, length: 0))
-            return
-        }
 
         // Multi-click whose word / paragraph selection landed entirely inside a
         // checklist prefix (`- [ ] `): the prefix renders as a checkbox, so the
