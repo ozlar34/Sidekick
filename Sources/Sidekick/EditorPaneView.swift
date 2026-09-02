@@ -188,6 +188,13 @@ struct EditorPaneView: View {
             }
         }
         .onAppear {
+            // Same echo-guard rule as the note-switch path below: the child
+            // HybridEditorView may already have mounted (makeNSView) against
+            // the still-empty localBody, so the seed we write here reaches
+            // updateNSView as a binding change. Without a token bump it is
+            // classified as a reflexive echo and DROPPED — the launch-time
+            // "note body invisible until you switch notes" bug.
+            editorController.externalPushToken += 1
             localTitle = note.title
             localBody = note.body
             seedFocusForCurrentNote()
