@@ -184,10 +184,7 @@ class HybridTextView: NSTextView {
     ///     point against the resolved caret's line could pick the adjacent
     ///     fragment and flip the decision.
     private func relocateCaretAfterClick(_ event: NSEvent) {
-        guard let lm = layoutManager, let tc = textContainer else { return }
-        // A drag that produced a range selection is the user's intent, not a
-        // caret landing in a region — leave it alone.
-        guard selectedRange().length == 0 else { return }
+        guard let lm = layoutManager, let tc = textContainer, let storage = textStorage else { return }
 
         let viewPoint = convert(event.locationInWindow, from: nil)
         let textPoint = NSPoint(
@@ -196,6 +193,39 @@ class HybridTextView: NSTextView {
         )
         let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
         let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+
+        // Styled-link label (`[label](url)`, label carries `.link`): NSTextView
+        // treats a mouseDown on `.link` text as a link click — it tracks to
+        // mouseUp, consults `clickedOnLink`, and never places the caret, even
+        // when the delegate declines the click. The caret stays wherever it
+        // was, which reads as a jump. Place it ourselves for a plain single
+        // click; ⌘-click is the open-URL gesture and multi-clicks already
+        // select word / paragraph through the normal path. Chips (a pill for
+        // a bare URL) are excluded — their own half-geometry rescue follows.
+        if event.clickCount == 1,
+           !event.modifierFlags.contains(.command),
+           charIdx < storage.length,
+           storage.attribute(.link, at: charIdx, effectiveRange: nil) != nil,
+           storage.attribute(.sidekickLinkChip, at: charIdx, effectiveRange: nil) == nil {
+            let insertion = characterIndexForInsertion(at: viewPoint)
+            setSelectedRange(NSRange(location: insertion, length: 0))
+            return
+        }
+
+        // Multi-click whose word / paragraph selection landed entirely inside a
+        // checklist prefix (`- [ ] `): the prefix renders as a checkbox, so the
+        // selection is invisible and the next keystroke would silently replace
+        // hidden syntax. Collapse to content start; a selection that reaches
+        // into the content (triple-click paragraph) is left alone.
+        let current = selectedRange()
+        if current.length > 0, let dest = checklistPrefixSelectionCollapseTarget(selection: current) {
+            setSelectedRange(NSRange(location: dest, length: 0))
+            return
+        }
+
+        // A drag that produced a range selection is the user's intent, not a
+        // caret landing in a region — leave it alone.
+        guard current.length == 0 else { return }
 
         // [8][9] HR line → nearest inhabitable neighbor by which half of the
         // divider the click landed in (top → line above, bottom → line below).
@@ -634,6 +664,31 @@ class HybridTextView: NSTextView {
 
         let contentStart = lineRange.location + 6
         guard caret > lineRange.location, caret < contentStart else { return nil }
+        return contentStart
+    }
+
+    /// Multi-click counterpart to `checklistGapRelocationTarget`: given a RANGE
+    /// selection (word / paragraph pick) that lies entirely within a rendered
+    /// checklist prefix (`- [ ] `, offsets 0…5 of the line), return content
+    /// start (line + 6). A selection that extends past the prefix into the
+    /// item's content is a legitimate paragraph selection — return `nil`.
+    /// Gated on `.sidekickChecklistMarker` like the caret-path helpers. Left
+    /// `internal` so the decision is unit-testable without a mouse loop.
+    func checklistPrefixSelectionCollapseTarget(selection: NSRange) -> Int? {
+        guard let storage = textStorage, selection.length > 0 else { return nil }
+        let n = storage.length
+        guard selection.location < n else { return nil }
+
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: selection.location, length: 0))
+        guard lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return nil }
+
+        let contentStart = lineRange.location + 6
+        let selectionEnd = selection.location + selection.length
+        guard selection.location >= lineRange.location, selectionEnd <= contentStart else { return nil }
         return contentStart
     }
 
