@@ -153,6 +153,10 @@ class HybridTextView: NSTextView {
                 }
             }
         }
+        // Styled-link label: AppKit never places a caret or tracks a text
+        // selection on `.link` text, so own the whole gesture. See
+        // `trackLinkLabelSelection`.
+        if trackLinkLabelSelection(event) { return }
         super.mouseDown(with: event)
         // Click-path caret rescue: the `setSelectedRanges` snap chain runs INSIDE
         // super.mouseDown with a meaningless keyboard `previous` (a click has no
@@ -160,6 +164,63 @@ class HybridTextView: NSTextView {
         // managed region. Re-decide here from click GEOMETRY. See
         // `relocateCaretAfterClick`.
         relocateCaretAfterClick(event)
+    }
+
+    /// Styled-link label (`[label](url)`, label carries `.link`): NSTextView
+    /// treats a mouseDown on `.link` text as a link click — it tracks to
+    /// mouseUp, consults `clickedOnLink`, and never places the caret, even
+    /// when the delegate declines the click. A drag from the label is a link
+    /// drag, never a text selection. Either way the caret stays wherever it
+    /// was, which reads as a jump. So for a plain / ⇧ single click, take over
+    /// the gesture: place the caret (or ⇧-extend the current selection) at the
+    /// insertion point, then run the same tracking loop AppKit would for plain
+    /// text — extend the selection to each dragged point until mouseUp.
+    /// ⌘-click is the open-URL gesture and multi-clicks already select word /
+    /// paragraph through the normal path, so those fall through to `super`.
+    /// Chips (a pill for a bare URL) are excluded — their own half-geometry
+    /// rescue lives in `relocateCaretAfterClick`.
+    ///
+    /// Returns true when the gesture was consumed here.
+    private func trackLinkLabelSelection(_ event: NSEvent) -> Bool {
+        guard event.clickCount == 1,
+              !event.modifierFlags.contains(.command),
+              let lm = layoutManager, let tc = textContainer, let storage = textStorage,
+              let window else { return false }
+
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let textPoint = NSPoint(
+            x: viewPoint.x - textContainerOrigin.x,
+            y: viewPoint.y - textContainerOrigin.y
+        )
+        let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
+        let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+        guard charIdx < storage.length,
+              storage.attribute(.link, at: charIdx, effectiveRange: nil) != nil,
+              storage.attribute(.sidekickLinkChip, at: charIdx, effectiveRange: nil) == nil
+        else { return false }
+
+        if window.firstResponder !== self { window.makeFirstResponder(self) }
+
+        // ⇧ extends from the existing selection; otherwise the mouseDown
+        // insertion point is the anchor and the selection grows from there.
+        let insertion = characterIndexForInsertion(at: viewPoint)
+        let anchor = event.modifierFlags.contains(.shift)
+            ? selectedRange()
+            : NSRange(location: insertion, length: 0)
+        func extend(to end: Int) {
+            let lo = min(anchor.location, end)
+            let hi = max(NSMaxRange(anchor), end)
+            setSelectedRange(NSRange(location: lo, length: hi - lo))
+        }
+        extend(to: insertion)
+        // Only dragged events move the selection end, as in AppKit's own loop;
+        // the release point is wherever the last drag left it.
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]),
+              next.type == .leftMouseDragged {
+            autoscroll(with: next)
+            extend(to: characterIndexForInsertion(at: convert(next.locationInWindow, from: nil)))
+        }
+        return true
     }
 
     /// Click-path counterpart to the `setSelectedRanges` snap chain. A mouse
@@ -184,10 +245,7 @@ class HybridTextView: NSTextView {
     ///     point against the resolved caret's line could pick the adjacent
     ///     fragment and flip the decision.
     private func relocateCaretAfterClick(_ event: NSEvent) {
-        guard let lm = layoutManager, let tc = textContainer else { return }
-        // A drag that produced a range selection is the user's intent, not a
-        // caret landing in a region — leave it alone.
-        guard selectedRange().length == 0 else { return }
+        guard let lm = layoutManager, let tc = textContainer, let storage = textStorage else { return }
 
         let viewPoint = convert(event.locationInWindow, from: nil)
         let textPoint = NSPoint(
@@ -196,6 +254,21 @@ class HybridTextView: NSTextView {
         )
         let glyphIdx = lm.glyphIndex(for: textPoint, in: tc)
         let charIdx = lm.characterIndexForGlyph(at: glyphIdx)
+
+        // Multi-click whose word / paragraph selection landed entirely inside a
+        // checklist prefix (`- [ ] `): the prefix renders as a checkbox, so the
+        // selection is invisible and the next keystroke would silently replace
+        // hidden syntax. Collapse to content start; a selection that reaches
+        // into the content (triple-click paragraph) is left alone.
+        let current = selectedRange()
+        if current.length > 0, let dest = checklistPrefixSelectionCollapseTarget(selection: current) {
+            setSelectedRange(NSRange(location: dest, length: 0))
+            return
+        }
+
+        // A drag that produced a range selection is the user's intent, not a
+        // caret landing in a region — leave it alone.
+        guard current.length == 0 else { return }
 
         // [8][9] HR line → nearest inhabitable neighbor by which half of the
         // divider the click landed in (top → line above, bottom → line below).
@@ -559,20 +632,52 @@ class HybridTextView: NSTextView {
     /// rescue passes which half of the divider was clicked. Returns the start
     /// of the line below (`belowLoc`) or the end of the line above (`aboveLoc`);
     /// `nil` only when the HR line is the entire document (nowhere to go).
+    ///
+    /// Consecutive dividers (`---\n---`) form one uninhabitable block: the
+    /// neighbor search widens to the first / last HR line of the run before
+    /// looking above and below, so the caret never lands on the adjacent HR
+    /// (where a follow-up move would snap it in the wrong direction and a
+    /// delete would act on the wrong line).
     private func hrNeighborLocation(hrLineRange lineRange: NSRange, preferBelow: Bool) -> Int? {
         guard let storage = textStorage, lineRange.length > 0 else { return nil }
         let ns = storage.string as NSString
-        let hasAbove = lineRange.location > 0
+        let n = ns.length
+
+        func lineIsHR(_ range: NSRange) -> Bool {
+            var found = false
+            storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
+                if (value as? Bool) == true { found = true; stop.pointee = true }
+            }
+            return found
+        }
         // `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
         // not just LF. A trailing terminator means a line exists below (even an
         // empty one), so test the last scalar against ALL newline scalars, not
         // only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
-        let lastUnichar = ns.character(at: lineRange.location + lineRange.length - 1)
-        let hasBelow = Unicode.Scalar(UInt32(lastUnichar))
-            .map(CharacterSet.newlines.contains) ?? false
+        func endsWithNewline(_ range: NSRange) -> Bool {
+            let lastUnichar = ns.character(at: range.location + range.length - 1)
+            return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
+        }
 
-        let aboveLoc = lineRange.location - 1
-        let belowLoc = lineRange.location + lineRange.length
+        // Widen to the whole run of adjacent HR lines.
+        var first = lineRange
+        while first.location > 0 {
+            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
+            guard above.length > 0, lineIsHR(above) else { break }
+            first = above
+        }
+        var last = lineRange
+        while endsWithNewline(last), last.location + last.length < n {
+            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
+            guard below.length > 0, lineIsHR(below) else { break }
+            last = below
+        }
+
+        let hasAbove = first.location > 0
+        let hasBelow = endsWithNewline(last)
+
+        let aboveLoc = first.location - 1
+        let belowLoc = last.location + last.length
 
         if !hasAbove && !hasBelow { return nil }
         if !hasAbove { return belowLoc }
@@ -634,6 +739,31 @@ class HybridTextView: NSTextView {
 
         let contentStart = lineRange.location + 6
         guard caret > lineRange.location, caret < contentStart else { return nil }
+        return contentStart
+    }
+
+    /// Multi-click counterpart to `checklistGapRelocationTarget`: given a RANGE
+    /// selection (word / paragraph pick) that lies entirely within a rendered
+    /// checklist prefix (`- [ ] `, offsets 0…5 of the line), return content
+    /// start (line + 6). A selection that extends past the prefix into the
+    /// item's content is a legitimate paragraph selection — return `nil`.
+    /// Gated on `.sidekickChecklistMarker` like the caret-path helpers. Left
+    /// `internal` so the decision is unit-testable without a mouse loop.
+    func checklistPrefixSelectionCollapseTarget(selection: NSRange) -> Int? {
+        guard let storage = textStorage, selection.length > 0 else { return nil }
+        let n = storage.length
+        guard selection.location < n else { return nil }
+
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: selection.location, length: 0))
+        guard lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker,
+                                at: lineRange.location,
+                                effectiveRange: nil) != nil else { return nil }
+
+        let contentStart = lineRange.location + 6
+        let selectionEnd = selection.location + selection.length
+        guard selection.location >= lineRange.location, selectionEnd <= contentStart else { return nil }
         return contentStart
     }
 

@@ -15,8 +15,10 @@ extension HostedEditorRunner {
 
     /// Left-click at a point given in TEXT-CONTAINER coordinates (same space the
     /// layout manager reports fragment rects in). Drives the full mouseDown path.
+    /// `modifierFlags` rides on both events (e.g. `.shift` for extend-selection).
     @MainActor
-    func click(atTextPoint textPoint: NSPoint, clickCount: Int = 1) {
+    func click(atTextPoint textPoint: NSPoint, clickCount: Int = 1,
+               modifierFlags: NSEvent.ModifierFlags = []) {
         let tv = inner.textView
         // The window must be key for NSTextView's mouseDown tracking loop to
         // resolve a synthetic click as a zero-length caret. On a non-key window
@@ -30,7 +32,7 @@ extension HostedEditorRunner {
         let ts = ProcessInfo.processInfo.systemUptime
         func ev(_ type: NSEvent.EventType, at timestamp: TimeInterval) -> NSEvent? {
             NSEvent.mouseEvent(
-                with: type, location: winPoint, modifierFlags: [],
+                with: type, location: winPoint, modifierFlags: modifierFlags,
                 timestamp: timestamp, windowNumber: window.windowNumber, context: nil,
                 eventNumber: 0, clickCount: clickCount, pressure: 1
             )
@@ -45,6 +47,35 @@ extension HostedEditorRunner {
         guard let down = ev(.leftMouseDown, at: ts),
               let up = ev(.leftMouseUp, at: ts + 0.05) else { return }
         window.postEvent(up, atStart: false)   // queue mouseUp so the loop exits
+        tv.mouseDown(with: down)
+        inner.layoutManager.ensureLayout(for: inner.container)
+    }
+
+    /// Left-drag from one TEXT-CONTAINER point to another. Queues the dragged
+    /// and mouseUp events (later timestamps, destination point) before driving
+    /// mouseDown, so whichever tracking loop runs sees a real drag and exits.
+    @MainActor
+    func drag(fromTextPoint from: NSPoint, toTextPoint to: NSPoint,
+              modifierFlags: NSEvent.ModifierFlags = []) {
+        let tv = inner.textView
+        window.makeKeyAndOrderFront(nil)
+        func winPoint(_ p: NSPoint) -> NSPoint {
+            tv.convert(NSPoint(x: p.x + tv.textContainerOrigin.x,
+                               y: p.y + tv.textContainerOrigin.y), to: nil)
+        }
+        let ts = ProcessInfo.processInfo.systemUptime
+        func ev(_ type: NSEvent.EventType, at p: NSPoint, timestamp: TimeInterval) -> NSEvent? {
+            NSEvent.mouseEvent(
+                with: type, location: p, modifierFlags: modifierFlags,
+                timestamp: timestamp, windowNumber: window.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1
+            )
+        }
+        guard let down = ev(.leftMouseDown, at: winPoint(from), timestamp: ts),
+              let dragged = ev(.leftMouseDragged, at: winPoint(to), timestamp: ts + 0.03),
+              let up = ev(.leftMouseUp, at: winPoint(to), timestamp: ts + 0.06) else { return }
+        window.postEvent(dragged, atStart: false)
+        window.postEvent(up, atStart: false)
         tv.mouseDown(with: down)
         inner.layoutManager.ensureLayout(for: inner.container)
     }

@@ -35,3 +35,28 @@ Builds a release `.app` to `/Applications/Sidekick.app` and launches it.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Debug harness (for automated UI diagnosis)
+
+Launch the built binary with `--debug-port <n>` to start a localhost control
+server that can summon the panel, open notes, synthesize real clicks and
+keystrokes, dump caret and glyph geometry, and screenshot the panel window.
+Pair it with `--debug-notes-folder <path>` so the run never touches your
+real notes:
+
+```
+swift build -c release
+.build/release/Sidekick --debug-port 4567 --debug-notes-folder /tmp/sidekick-fixtures
+curl -X POST localhost:4567/summon
+curl localhost:4567/state
+curl -X POST localhost:4567/click -d '{"x":120,"y":10}'
+curl -X POST localhost:4567/screenshot -d '{"path":"/tmp/panel.png","region":"editor"}'
+```
+
+Endpoints are listed at the top of `Sources/Sidekick/Debug/DebugHarness.swift`.
+Without the flag the harness is inert.
+
+`Scripts/debug-harness/` holds a bundle launcher (`debug-launch.sh <notes-folder>`),
+a Python driver (`sk.py sweep <note title>` runs a geometric caret sweep that
+clicks every glyph and reports caret mismatches), and fixture notes covering
+links, lists, checklists, and dividers.

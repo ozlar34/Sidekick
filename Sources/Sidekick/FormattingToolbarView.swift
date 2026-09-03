@@ -1059,6 +1059,23 @@ struct FormattingToolbarView: View {
     //       (that attribute is set on 4 different scopes — inline, block, bare-URL, link wrapper).
     // D-06: Return false when no pair is adjacent — preserves checklist & native delete.
     // D-07: Inside a fenced code block → return nil (markers are literal text there).
+    // D-08: Adjacency is symmetric and inclusive at BOTH ends, for BOTH directions —
+    //       `caret >= marker.location && caret <= marker.location + marker.length`.
+    //       Marker characters render at zero visual width (hidden behind the
+    //       formatted glyph), so the caret position immediately before and
+    //       immediately after a marker run are visually indistinguishable to
+    //       the user; both must fire the atomic delete, regardless of whether
+    //       the keystroke is Backspace or forward-Delete.
+    // D-09: Widening D-08 means the caret offset at the shared boundary between
+    //       two back-to-back marker pairs (e.g. `**a****b**`) now matches BOTH
+    //       pairs at once — the left pair's close edge and the right pair's
+    //       open edge sit at the same zero-width offset. Resolved deterministically
+    //       by direction, never by pass/iteration order: Backspace always takes
+    //       the pair whose close marker ENDS at the caret (the pair to the
+    //       caret's left); forward-Delete always takes the pair whose open
+    //       marker STARTS at the caret (the pair to the caret's right). This
+    //       tie-break applies whether the two pairs are the same marker type
+    //       (checked within one pass) or different types (checked across passes).
 
     /// Direction for an atomic-marker delete keystroke.
     enum AtomicMarkerDeleteDirection { case backward, forward }
@@ -1077,14 +1094,20 @@ struct FormattingToolbarView: View {
     /// promoted to an atomic inline-format marker pair deletion.
     ///
     /// Returns nil when no inline-format pair has marker bytes adjacent to
-    /// (or containing) `caret` in the requested direction, or when the caret
-    /// is inside a fenced code block (D-07), or body is empty.
+    /// (or containing) `caret`, or when the caret is inside a fenced code
+    /// block (D-07), or body is empty.
     ///
-    /// Adjacency rules (D-02 — cursor-inside-run also fires):
-    ///   .backward:  caret > marker.location && caret <= marker.location + marker.length
-    ///   .forward:   caret >= marker.location && caret < marker.location + marker.length
+    /// Adjacency rule (D-08 — symmetric, inclusive both ends, same for both
+    /// directions):
+    ///   caret >= marker.location && caret <= marker.location + marker.length
     ///
-    /// Pair-detection order (first hit wins):
+    /// Because this widened rule can match more than one marker pair at a
+    /// shared zero-width boundary (D-09), every pass below COLLECTS candidates
+    /// instead of returning on first match; the final resolution step picks
+    /// the direction-correct candidate when more than one matched.
+    ///
+    /// Pair-detection order (tie-break fallback order only — see below, this
+    /// is NOT a first-match-wins order once more than one pass can match):
     ///   1. Links (findLinkRanges) — largest containing structure
     ///   2. Underline (findUnderlineRanges) — asymmetric close (`</u>`, 4 chars)
     ///   3. Bold (findBoldRanges)
@@ -1092,6 +1115,19 @@ struct FormattingToolbarView: View {
     ///   5. Inline code (findInlineCodeRanges)
     ///   6. Italic (findItalicRanges) — 1-char markers, checked last to avoid
     ///      false matches inside bold/strike runs.
+    ///   (The bare-URL pass — findAutoLinkRanges, "1b" at the call site below —
+    ///   runs right after Links but is intentionally left out of this numbered
+    ///   list: it uses its own unwidened adjacency predicate, not D-08.)
+    ///
+    /// Resolution when multiple candidates match the same caret (D-09):
+    ///   - Exactly one candidate → return it (today's behavior, unchanged).
+    ///   - Multiple candidates, Backspace → prefer the one whose close marker
+    ///     ends exactly at `caret` (the pair to the caret's left).
+    ///   - Multiple candidates, forward-Delete → prefer the one whose open
+    ///     marker starts exactly at `caret` (the pair to the caret's right).
+    ///   - Multiple candidates, no direction-correct match (shouldn't occur
+    ///     with well-formed non-overlapping markdown) → fall back to the
+    ///     first candidate in pass-detection order above.
     static func atomicMarkerDeleteRange(
         body: String,
         caret: Int,
@@ -1108,14 +1144,58 @@ struct FormattingToolbarView: View {
             }
         }
 
-        // Adjacency predicate (D-02: inside the run also fires).
+        // Adjacency predicate (D-02: inside the run also fires; D-08: symmetric,
+        // inclusive at both ends, identical for both directions). `dir` is kept
+        // in the signature to document call-site symmetry even though the body
+        // no longer branches on it.
         func isAdjacent(_ markerRange: NSRange, _ caret: Int, _ dir: AtomicMarkerDeleteDirection) -> Bool {
+            return caret >= markerRange.location && caret <= markerRange.location + markerRange.length
+        }
+
+        // Bare-URL adjacency predicate — intentionally NOT widened by D-08.
+        // A bare URL collapses to a single visible link-chip pill, unlike the
+        // zero-width `**`/`~~`/`` ` ``/`<u>` markers: its leading and trailing
+        // edges are real, visually distinct resting spots (the char just
+        // before vs. just after the pill), not an ambiguous shared point. The
+        // caret positions immediately outside the pill are ordinary text
+        // positions, so this pass keeps its original direction-dependent
+        // half-open range — Backspace at the pill's leading edge and
+        // forward-Delete at its trailing edge fall through to a normal
+        // single-character delete, exactly as before (see
+        // BareURLCursorAndDeleteTests.swift).
+        func isAdjacentBareURL(_ markerRange: NSRange, _ caret: Int, _ dir: AtomicMarkerDeleteDirection) -> Bool {
             switch dir {
             case .backward:
                 return caret > markerRange.location && caret <= markerRange.location + markerRange.length
             case .forward:
                 return caret >= markerRange.location && caret < markerRange.location + markerRange.length
             }
+        }
+
+        // A candidate atomic-delete match, gathered from any pass below.
+        // `openStart` / `closeEnd` are the span's outer bounds — used only for
+        // the D-09 tie-break resolution, not for the delete itself.
+        struct Candidate {
+            let openStart: Int
+            let closeEnd: Int
+            let result: AtomicMarkerDeleteResult
+        }
+        var candidates: [Candidate] = []
+
+        // Shared candidate-builder for the four identical-shaped marker/content
+        // passes below (underline, bold, strikethrough, inline code, italic).
+        func addPairCandidate(openRange: NSRange, closeRange: NSRange, contentRange: NSRange) {
+            guard isAdjacent(openRange, caret, direction) || isAdjacent(closeRange, caret, direction) else { return }
+            let spanStart = openRange.location
+            let spanEnd   = closeRange.location + closeRange.length
+            let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
+            let replacement = ns.substring(with: contentRange)
+            let postCaret = spanStart + (replacement as NSString).length
+            candidates.append(Candidate(
+                openStart: spanStart,
+                closeEnd: spanEnd,
+                result: AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            ))
         }
 
         // 1. Link pass — highest priority (outer structure).
@@ -1131,7 +1211,11 @@ struct FormattingToolbarView: View {
                 let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
                 let replacement = ns.substring(with: m.labelRange)   // D-03: keep label only
                 let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+                candidates.append(Candidate(
+                    openStart: spanStart,
+                    closeEnd: spanEnd,
+                    result: AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+                ))
             }
         }
 
@@ -1145,77 +1229,67 @@ struct FormattingToolbarView: View {
         //     Ordered before the emphasis passes so a URL containing `_`, `*`,
         //     or `~` is never mis-split by the bold/italic/strike parsers
         //     (e.g. `https://host/a_b_c` must not delete just `_b_`).
+        //
+        //     Uses `isAdjacentBareURL`, NOT the widened `isAdjacent` — this
+        //     pass is deliberately out of scope for the D-08 boundary widening
+        //     (see that predicate's doc comment above).
         for urlRange in MarkdownInlineParser.findAutoLinkRanges(in: body) {
-            if isAdjacent(urlRange, caret, direction) {
-                return AtomicMarkerDeleteResult(
-                    deleteRange: urlRange,
-                    replacement: "",
-                    postCaret: urlRange.location
-                )
+            if isAdjacentBareURL(urlRange, caret, direction) {
+                candidates.append(Candidate(
+                    openStart: urlRange.location,
+                    closeEnd: urlRange.location + urlRange.length,
+                    result: AtomicMarkerDeleteResult(
+                        deleteRange: urlRange,
+                        replacement: "",
+                        postCaret: urlRange.location
+                    )
+                ))
             }
         }
 
         // 2. Underline pass — asymmetric close (`</u>` = 4 chars) before bold.
         for m in MarkdownInlineParser.findUnderlineRanges(in: body) {
-            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
-                let spanStart = m.markerOpenRange.location
-                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.contentRange)
-                let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
-            }
+            addPairCandidate(openRange: m.markerOpenRange, closeRange: m.markerCloseRange, contentRange: m.contentRange)
         }
 
         // 3. Bold pass.
         for m in MarkdownInlineParser.findBoldRanges(in: body) {
-            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
-                let spanStart = m.markerOpenRange.location
-                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.contentRange)
-                let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
-            }
+            addPairCandidate(openRange: m.markerOpenRange, closeRange: m.markerCloseRange, contentRange: m.contentRange)
         }
 
         // 4. Strikethrough pass.
         for m in MarkdownInlineParser.findStrikethroughRanges(in: body) {
-            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
-                let spanStart = m.markerOpenRange.location
-                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.contentRange)
-                let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
-            }
+            addPairCandidate(openRange: m.markerOpenRange, closeRange: m.markerCloseRange, contentRange: m.contentRange)
         }
 
         // 5. Inline code pass.
         for m in MarkdownInlineParser.findInlineCodeRanges(in: body) {
-            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
-                let spanStart = m.markerOpenRange.location
-                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.contentRange)
-                let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
-            }
+            addPairCandidate(openRange: m.markerOpenRange, closeRange: m.markerCloseRange, contentRange: m.contentRange)
         }
 
-        // 6. Italic pass — 1-char markers, lowest priority.
+        // 6. Italic pass — 1-char markers, lowest priority, checked last to
+        //    avoid false matches inside bold/strike runs.
         for m in MarkdownInlineParser.findItalicRanges(in: body) {
-            if isAdjacent(m.markerOpenRange, caret, direction) || isAdjacent(m.markerCloseRange, caret, direction) {
-                let spanStart = m.markerOpenRange.location
-                let spanEnd   = m.markerCloseRange.location + m.markerCloseRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.contentRange)
-                let postCaret = spanStart + (replacement as NSString).length
-                return AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
-            }
+            addPairCandidate(openRange: m.markerOpenRange, closeRange: m.markerCloseRange, contentRange: m.contentRange)
         }
 
-        return nil
+        // Resolution (D-09): single match is unambiguous (today's behavior,
+        // unchanged); multiple matches at a shared boundary are resolved by
+        // direction, not by which pass happened to run first.
+        guard !candidates.isEmpty else { return nil }
+        if candidates.count == 1 { return candidates[0].result }
+
+        switch direction {
+        case .backward:
+            if let left = candidates.first(where: { $0.closeEnd == caret }) {
+                return left.result
+            }
+        case .forward:
+            if let right = candidates.first(where: { $0.openStart == caret }) {
+                return right.result
+            }
+        }
+        return candidates[0].result
     }
 
     /// Atomic-marker Backspace handler (quick-260524-0ia).
