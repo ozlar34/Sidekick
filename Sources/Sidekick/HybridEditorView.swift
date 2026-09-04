@@ -940,6 +940,98 @@ class HybridTextView: NSTextView {
         return target > previous ? runEnd : runRange.location
     }
 
+    /// Compute the position to snap a caret to when `target` lands strictly
+    /// inside any remaining `.sidekickHiddenMarker` run not already owned by
+    /// one of the four rescues above. Bold (`**`), strikethrough (`~~`), and
+    /// underline (`<u>`/`</u>`) marker pairs are the primary targets — each
+    /// has a 2+ character hidden run on at least one edge, so (like HR
+    /// lines, checklist gaps, link chips, and link tails) a caret can land
+    /// strictly between its edges, where every offset collapses to the same
+    /// zero-width point. This rescue is deliberately generic — it treats ANY
+    /// leftover `.sidekickHiddenMarker` run the same way, rather than adding
+    /// a fifth/sixth/seventh marker-type-specific function. Italic (`*`) and
+    /// inline code (`` ` ``) are 1-character runs with no interior offset to
+    /// land on, so they never trigger the strictly-inside guard below —
+    /// structurally immune, not specially handled.
+    ///
+    /// `longestEffectiveRange` merges immediately-adjacent hidden runs from
+    /// DIFFERENT constructs into one span (e.g. a heading `# ` prefix butted
+    /// against a following bold `**`, or a bold close `**` butted against a
+    /// following strikethrough open `~~`). For pure caret positioning this is
+    /// safe: every character in a merged span is equally zero-width and
+    /// un-restable, so snapping to either true end of the WHOLE span is
+    /// correct regardless of how many constructs contributed to it — there
+    /// is no "which construct wins" ambiguity for movement (unlike the
+    /// delete tie-break in `.scratch/inline-marker-delete-boundary/`).
+    ///
+    /// Exclusion: if the run at `target` carries (anywhere in its merged
+    /// span) the fingerprint of a region one of the four rescues above
+    /// already owns — an HR line, a checklist gap, a link chip, or a link
+    /// tail — decline (`nil`) and let that rescue's own decision stand,
+    /// INCLUDING an intentional decline (e.g. `snapCaretOutOfHR`'s same-line
+    /// exemption while typing `---`, or `snapCaretOutOfLinkChip` leaving a
+    /// merged heading-prefix-only portion alone). This is checked directly
+    /// here — not left to `??`-chain ordering alone — so a merged run that
+    /// spans both an owned construct and an unrelated marker is never
+    /// partially re-handled. (Checklist gaps in practice never merge with an
+    /// adjacent run — `applyChecklists` always leaves a visible separator
+    /// space after the hidden ` [ ]`/` [x]` chars — but the line-start check
+    /// is kept anyway as a direct, ordering-independent guard rather than an
+    /// assumption.)
+    ///
+    /// Direction mirrors the other four: forward → run end, backward → run
+    /// start.
+    private func snapCaretOutOfHiddenMarkerRun(target: Int, previous: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, target > 0, target < n else { return nil }
+
+        var runRange = NSRange(location: NSNotFound, length: 0)
+        guard storage.attribute(.sidekickHiddenMarker,
+                                at: target,
+                                longestEffectiveRange: &runRange,
+                                in: NSRange(location: 0, length: n)) != nil else { return nil }
+
+        // Snap only when strictly inside the run — either true edge is
+        // already a valid resting spot.
+        let runEnd = runRange.location + runRange.length
+        guard target > runRange.location, target < runEnd else { return nil }
+
+        // Defer to `snapCaretOutOfHR` for any run carrying a thematic-break
+        // fingerprint — including its same-line exemption's intentional
+        // decline.
+        var ownsThematicBreak = false
+        storage.enumerateAttribute(.sidekickThematicBreak, in: runRange, options: []) { value, _, stop in
+            if (value as? Bool) == true { ownsThematicBreak = true; stop.pointee = true }
+        }
+        guard !ownsThematicBreak else { return nil }
+
+        // Defer to `snapCaretOutOfLinkChip` / `snapCaretOutOfLinkTail` for
+        // any run carrying either anchor, even outside the anchor's own
+        // owned sub-span (e.g. a heading prefix merged with a following
+        // chip) — those rescues' declines for the non-chip/tail portion of
+        // such a merged run are intentional, not an oversight.
+        var ownsLinkConstruct = false
+        storage.enumerateAttribute(.sidekickLinkChip, in: runRange, options: []) { value, _, stop in
+            if value != nil { ownsLinkConstruct = true; stop.pointee = true }
+        }
+        if !ownsLinkConstruct {
+            storage.enumerateAttribute(.sidekickLinkTailAnchor, in: runRange, options: []) { value, _, stop in
+                if value != nil { ownsLinkConstruct = true; stop.pointee = true }
+            }
+        }
+        guard !ownsLinkConstruct else { return nil }
+
+        // Defer to `snapCaretOutOfChecklistGap` for a checklist line.
+        let ns = storage.string as NSString
+        let lineStart = ns.lineRange(for: NSRange(location: runRange.location, length: 0)).location
+        guard storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) == nil else {
+            return nil
+        }
+
+        return target > previous ? runEnd : runRange.location
+    }
+
     /// Selection-change funnel — every keyboard, mouse, and programmatic
     /// selection change reaches this override.
     ///
@@ -994,15 +1086,20 @@ class HybridTextView: NSTextView {
                 || storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) != nil
                 || (proposed.location < n
                     && storage.attribute(.sidekickHiddenMarker, at: probe, effectiveRange: nil) != nil)
-            // Four hidden-region caret rescues, mutually exclusive by
-            // construction (a zero-length caret can sit on at most one of: an
-            // HR line, a checklist prefix gap, a collapsed link-chip interior,
-            // or a styled-link hidden tail). First non-nil wins.
+            // Five hidden-region caret rescues. The first four are mutually
+            // exclusive by construction (a zero-length caret can sit on at
+            // most one of: an HR line, a checklist prefix gap, a collapsed
+            // link-chip interior, or a styled-link hidden tail); the fifth,
+            // generic rescue explicitly excludes any run those four already
+            // own (including an intentional decline), so it only ever fires
+            // on a leftover `.sidekickHiddenMarker` run — bold, strikethrough,
+            // underline, or any other future marker pair. First non-nil wins.
             if nearManagedRegion,
                let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
                 ?? snapCaretOutOfChecklistGap(target: proposed.location, previous: previous)
                 ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfLinkTail(target: proposed.location, previous: previous) {
+                ?? snapCaretOutOfLinkTail(target: proposed.location, previous: previous)
+                ?? snapCaretOutOfHiddenMarkerRun(target: proposed.location, previous: previous) {
                 effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
             }
         }
