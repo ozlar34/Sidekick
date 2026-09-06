@@ -1446,6 +1446,98 @@ class HybridTextView: NSTextView {
         setSelectedRange(newRange)
     }
 
+    /// Override of `NSResponder.moveDownAndModifySelection(_:)` — fired by
+    /// Shift+Down. Combines two things that already exist separately: the
+    /// naive same-column vertical step `moveDown(_:)` (ticket 04) computes
+    /// via `NSString.getLineStart(_:end:contentsEnd:for:)`, and the anchor/
+    /// moving-edge extension bookkeeping `moveRightAndModifySelection(_:)`/
+    /// `moveLeftAndModifySelection(_:)` (ticket 05) use via
+    /// `extensionAnchorAndEdge(for:)` and `stepExtension`. The naive step is
+    /// computed from the MOVING EDGE, not `current.location` — exactly the
+    /// substitution `moveDown(_:)` would make if it were extending a
+    /// selection instead of repositioning a caret, since the edge (not the
+    /// anchor) is what "the current line" means for this keypress.
+    ///
+    /// Far from a managed region (the common case, and provided this
+    /// extension chain hasn't needed a correction yet — see
+    /// `stepExtension`'s doc comment), this defers straight to
+    /// `super.moveDownAndModifySelection(sender)`, so ordinary vertical
+    /// shift-extend keeps AppKit's real x-position-preserving glyph search.
+    /// Same when the anchor can't be resolved, or there's no line below the
+    /// edge's line — except once this chain is already self-managed
+    /// (`selectionExtensionOwnedByOverride`), in which case a document-end
+    /// no-op stays self-managed rather than handing back to `super`, mirroring
+    /// the boundary idiom `moveRightAndModifySelection(_:)` uses for the
+    /// document-end case.
+    override func moveDownAndModifySelection(_ sender: Any?) {
+        let current = selectedRange()
+        guard let (anchor, edge) = extensionAnchorAndEdge(for: current),
+              let storage = textStorage, storage.length > 0
+        else {
+            super.moveDownAndModifySelection(sender)
+            return
+        }
+        selectionExtensionAnchor = anchor
+        let ns = storage.string as NSString
+        var lineStart = 0, lineEnd = 0
+        ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: nil, for: NSRange(location: edge, length: 0))
+        guard lineEnd < storage.length else {
+            // No line below the edge's line — nothing left to extend into.
+            // Once self-managed (see `stepExtension`), stay self-managed
+            // even for a no-op step rather than handing back to `super`.
+            if !selectionExtensionOwnedByOverride { super.moveDownAndModifySelection(sender) }
+            return
+        }
+        let column = edge - lineStart
+        var belowStart = 0, belowContentsEnd = 0
+        ns.getLineStart(&belowStart, end: nil, contentsEnd: &belowContentsEnd, for: NSRange(location: lineEnd, length: 0))
+        let naive = min(belowStart + column, belowContentsEnd)
+        guard let newRange = stepExtension(anchor: anchor, naive: naive, edge: edge, direction: .forward) else {
+            super.moveDownAndModifySelection(sender)
+            return
+        }
+        setSelectedRange(newRange)
+    }
+
+    /// Override of `NSResponder.moveUpAndModifySelection(_:)` — fired by
+    /// Shift+Up. Mirrors `moveDownAndModifySelection(_:)` above (same
+    /// rationale: the naive same-column step comes from `moveUp(_:)`'s
+    /// line-above computation, ticket 04, applied to the moving edge instead
+    /// of `current.location`, and recombined with the anchor via the ticket
+    /// 05 `stepExtension` machinery). The boundary condition mirrors
+    /// `moveUp(_:)`'s own — "no line above" (`lineStart == 0` for the edge's
+    /// line) instead of "no line below" — and the same "stay self-managed on
+    /// a no-op once owned" idiom applies at the document start.
+    override func moveUpAndModifySelection(_ sender: Any?) {
+        let current = selectedRange()
+        guard let (anchor, edge) = extensionAnchorAndEdge(for: current),
+              let storage = textStorage, storage.length > 0
+        else {
+            super.moveUpAndModifySelection(sender)
+            return
+        }
+        selectionExtensionAnchor = anchor
+        let ns = storage.string as NSString
+        var lineStart = 0
+        ns.getLineStart(&lineStart, end: nil, contentsEnd: nil, for: NSRange(location: edge, length: 0))
+        guard lineStart > 0 else {
+            // No line above the edge's line — nothing left to extend into.
+            // Once self-managed (see `stepExtension`), stay self-managed
+            // even for a no-op step rather than handing back to `super`.
+            if !selectionExtensionOwnedByOverride { super.moveUpAndModifySelection(sender) }
+            return
+        }
+        let column = edge - lineStart
+        var aboveStart = 0, aboveContentsEnd = 0
+        ns.getLineStart(&aboveStart, end: nil, contentsEnd: &aboveContentsEnd, for: NSRange(location: lineStart - 1, length: 0))
+        let naive = min(aboveStart + column, aboveContentsEnd)
+        guard let newRange = stepExtension(anchor: anchor, naive: naive, edge: edge, direction: .backward) else {
+            super.moveUpAndModifySelection(sender)
+            return
+        }
+        setSelectedRange(newRange)
+    }
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         guard let clipView = enclosingScrollView?.contentView else { return }

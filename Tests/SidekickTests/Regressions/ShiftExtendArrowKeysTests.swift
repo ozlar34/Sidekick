@@ -422,4 +422,218 @@ final class ShiftExtendArrowKeysTests: XCTestCase {
             expectedWrappedBody: "before\n---\n~~after~~ word"
         )
     }
+
+    // MARK: - Ticket 06: Shift+Down/Shift+Up selection extension across a
+    // divider.
+    //
+    // `HybridTextView.moveDownAndModifySelection(_:)` /
+    // `moveUpAndModifySelection(_:)` combine the naive same-column vertical
+    // step `moveDown(_:)`/`moveUp(_:)` (ticket 04) compute — but applied to
+    // the moving EDGE of the selection instead of `current.location` — with
+    // the anchor/edge extension bookkeeping `moveRightAndModifySelection(_:)`/
+    // `moveLeftAndModifySelection(_:)` (ticket 05) already use. The style
+    // matrices below mirror `PlainArrowMoveAcrossDividerTests`'s "Down: a
+    // line above a divider -> the line below" / "Up: a line below a divider
+    // -> the line above" sections exactly — same bodies, same start
+    // locations, same corrected landing points — since a first Shift+Down/
+    // Shift+Up press from a fresh (zero-length) selection re-anchors at the
+    // caret and so must land the moving edge on the identical target the
+    // plain override would land the caret on. The point being verified is
+    // that the SELECTION's edge, not just a caret, gets that same one-hop
+    // correction (AC: "the resulting selection length equals what
+    // plain-text behaviour would produce", i.e. never stuck mid-divider,
+    // never overshooting past the corrected landing point).
+
+    private func assertShiftDownExtendsAcrossDivider(
+        body: String,
+        start: Int,
+        expectedEdge: Int,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.shiftDown)
+        runner.assertSelection(NSRange(location: start, length: expectedEdge - start), file: file, line: line)
+    }
+
+    private func assertShiftUpExtendsAcrossDivider(
+        body: String,
+        start: Int,
+        expectedEdge: Int,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.shiftUp)
+        runner.assertSelection(NSRange(location: expectedEdge, length: start - expectedEdge), file: file, line: line)
+    }
+
+    // MARK: - Shift+Down: line above a divider -> line below (style matrix)
+
+    func test_shiftDown_plainAbove_plainBelow() {
+        let body = "before\n---\nafter"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "after", in: body))
+    }
+
+    /// The plain-arrow analog (`test_down_plainAbove_boldBelow`) is the
+    /// confirmed-broken case this whole effort started from: a hidden
+    /// bold-opening marker immediately after the divider's line break.
+    func test_shiftDown_plainAbove_boldBelow() {
+        let body = "before\n---\n**Bold below**"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "**Bold below**", in: body))
+    }
+
+    func test_shiftDown_plainAbove_italicBelow() {
+        let body = "before\n---\n*Italic below*"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "*Italic below*", in: body))
+    }
+
+    func test_shiftDown_plainAbove_underlineBelow() {
+        let body = "before\n---\n<u>Underline below</u>"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "<u>Underline below</u>", in: body))
+    }
+
+    func test_shiftDown_plainAbove_strikethroughBelow() {
+        let body = "before\n---\n~~Strike below~~"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "~~Strike below~~", in: body))
+    }
+
+    /// Symmetric direction: styled line above, plain line below.
+    func test_shiftDown_boldAbove_plainBelow() {
+        let body = "**Bold above**\n---\nafter"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "after", in: body))
+    }
+
+    func test_shiftDown_italicAbove_plainBelow() {
+        let body = "*Italic above*\n---\nafter"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "after", in: body))
+    }
+
+    func test_shiftDown_underlineAbove_plainBelow() {
+        let body = "<u>Underline above</u>\n---\nafter"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "after", in: body))
+    }
+
+    func test_shiftDown_strikethroughAbove_plainBelow() {
+        let body = "~~Strike above~~\n---\nafter"
+        assertShiftDownExtendsAcrossDivider(body: body, start: 0, expectedEdge: offset(of: "after", in: body))
+    }
+
+    // MARK: - Shift+Up: line below a divider -> line above (mirrored style matrix)
+
+    func test_shiftUp_plainAbove_plainBelow() {
+        let body = "before\n---\nafter"
+        let start = offset(of: "after", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(after: "before", in: body))
+    }
+
+    /// The confirmed-broken case, mirrored: caret resting at the start of
+    /// the hidden bold-opening marker run immediately below the divider.
+    func test_shiftUp_plainAbove_boldBelow() {
+        let body = "before\n---\n**Bold below**"
+        let start = offset(of: "**Bold below**", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(after: "before", in: body))
+    }
+
+    func test_shiftUp_plainAbove_italicBelow() {
+        let body = "before\n---\n*Italic below*"
+        let start = offset(of: "*Italic below*", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(after: "before", in: body))
+    }
+
+    func test_shiftUp_plainAbove_underlineBelow() {
+        let body = "before\n---\n<u>Underline below</u>"
+        let start = offset(of: "<u>Underline below</u>", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(after: "before", in: body))
+    }
+
+    func test_shiftUp_plainAbove_strikethroughBelow() {
+        let body = "before\n---\n~~Strike below~~"
+        let start = offset(of: "~~Strike below~~", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(after: "before", in: body))
+    }
+
+    /// Symmetric direction: styled line above, plain line below.
+    func test_shiftUp_boldAbove_plainBelow() {
+        let body = "**Bold above**\n---\nafter"
+        let start = offset(of: "after", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(of: "\n---", in: body))
+    }
+
+    func test_shiftUp_italicAbove_plainBelow() {
+        let body = "*Italic above*\n---\nafter"
+        let start = offset(of: "after", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(of: "\n---", in: body))
+    }
+
+    func test_shiftUp_underlineAbove_plainBelow() {
+        let body = "<u>Underline above</u>\n---\nafter"
+        let start = offset(of: "after", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(of: "\n---", in: body))
+    }
+
+    func test_shiftUp_strikethroughAbove_plainBelow() {
+        let body = "~~Strike above~~\n---\nafter"
+        let start = offset(of: "after", in: body)
+        assertShiftUpExtendsAcrossDivider(body: body, start: start, expectedEdge: offset(of: "\n---", in: body))
+    }
+
+    // MARK: - Far from any managed region defers to super, unaffected
+    // (mirrors `test_plainText_farFromManagedRegion_movesBetweenLines`)
+
+    func test_shiftDown_farFromManagedRegion_extendsBetweenLines() {
+        let body = "line one\nline two\nline three\nline four"
+        let start = offset(of: "line two", in: body) + 5   // mid "line two"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.shiftDown)
+        let current = runner.selection
+        XCTAssertEqual(current.location, start, "Anchor must not move")
+        let lineThree = (body as NSString).range(of: "line three")
+        XCTAssertTrue(
+            NSLocationInRange(NSMaxRange(current), NSRange(location: lineThree.location, length: lineThree.length + 1)),
+            "Shift+Down from mid \"line two\" should extend the moving edge into \"line three\", got \(NSMaxRange(current))"
+        )
+    }
+
+    func test_shiftUp_farFromManagedRegion_extendsBetweenLines() {
+        let body = "line one\nline two\nline three\nline four"
+        let start = offset(of: "line three", in: body) + 5   // mid "line three"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.shiftUp)
+        let current = runner.selection
+        XCTAssertEqual(NSMaxRange(current), start, "Anchor must not move")
+        let lineTwo = (body as NSString).range(of: "line two")
+        XCTAssertTrue(
+            NSLocationInRange(current.location, NSRange(location: lineTwo.location, length: lineTwo.length + 1)),
+            "Shift+Up from mid \"line three\" should extend the moving edge into \"line two\", got \(current.location)"
+        )
+    }
+
+    // MARK: - `selectionExtensionOwnedByOverride` safeguard, vertical chain
+    // (mirrors `test_shiftLeftAndModifySelection_staysSelfManaged_forStepsAfterDividerCorrection`)
+
+    /// Once a Shift+Down chain has needed a divider correction, a SECOND
+    /// Shift+Down press landing purely in plain, unmanaged text (`"line2"`
+    /// to `"line3"`, no divider between them) must still be self-computed
+    /// via the latched `selectionExtensionOwnedByOverride` flag rather than
+    /// deferred to `super` — deferring would silently re-anchor the
+    /// selection to the moving edge instead of continuing to grow it from
+    /// the true anchor (see `stepExtension`'s doc comment for the confirmed
+    /// repro, established there for the horizontal chain but structurally
+    /// identical for a vertical one).
+    func test_shiftDownAndModifySelection_staysSelfManaged_forStepsAfterDividerCorrection() {
+        let body = "x\n---\nline2\nline3"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+
+        // First press: crosses the divider (a correction), anchored at 0.
+        runner.key(.shiftDown)
+        XCTAssertEqual(runner.selection.location, 0, "Anchor must not move")
+        runner.assertSelection(NSRange(location: 0, length: offset(of: "line2", in: body)))
+
+        // Second press: purely plain text ("line2" -> "line3"), nothing left
+        // to correct — only the latched flag keeps this self-managed.
+        runner.key(.shiftDown)
+        XCTAssertEqual(runner.selection.location, 0, "Anchor must not move on the post-correction plain step")
+        runner.assertSelection(NSRange(location: 0, length: offset(of: "line3", in: body)))
+    }
 }
