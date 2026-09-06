@@ -1048,6 +1048,57 @@ class HybridTextView: NSTextView {
         return direction == .forward ? runEnd : runRange.location
     }
 
+    /// Shared cheap-gate + five-helper snap-rescue chain for a proposed
+    /// zero-length caret `target`, given the location it's moving `direction`
+    /// from `previous`. Returns `nil` when `target` isn't near a managed
+    /// region (HR line, checklist marker, hidden-marker run) — the cheap
+    /// gate below gets checked FIRST so the common case (plain text, far
+    /// from any managed region) never pays for the five-helper chain — or
+    /// when it is near one but none of the five rescues wants to correct it.
+    ///
+    /// Factored out of `setSelectedRanges` (quick-260523 caret-skip logic)
+    /// so `moveLeft`/`moveRight` below can reuse the exact same rescue chain
+    /// against a caller-computed naive target, instead of trusting AppKit's
+    /// own layout-based stepping near these regions (see the overrides'
+    /// doc comments for why that stepping is unreliable there). [11] Cheap
+    /// gate before the five rescues: each recomputes lineRange and the HR
+    /// rescue enumerates the whole line, so running all five on every caret
+    /// move is wasteful. A zero-length caret only needs a rescue when it's
+    /// near a managed region — an HR or checklist line (both markers
+    /// anchored at line start) or a collapsed hidden-marker run at the
+    /// caret. Otherwise skip the chain entirely.
+    private func correctedCaretTarget(
+        fromNaive naive: Int,
+        previous: Int,
+        direction: CaretSnapDirection
+    ) -> Int? {
+        guard let storage = textStorage, storage.length > 0,
+              naive >= 0, naive <= storage.length else { return nil }
+        let n = storage.length
+        let ns = storage.string as NSString
+        let probe = min(max(naive, 0), n - 1)
+        let lineStart = ns.lineRange(for: NSRange(location: probe, length: 0)).location
+        let nearManagedRegion =
+            storage.attribute(.sidekickThematicBreak, at: lineStart, effectiveRange: nil) != nil
+            || storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) != nil
+            || (naive < n
+                && storage.attribute(.sidekickHiddenMarker, at: probe, effectiveRange: nil) != nil)
+        guard nearManagedRegion else { return nil }
+        // Five hidden-region caret rescues. The first four are mutually
+        // exclusive by construction (a zero-length caret can sit on at
+        // most one of: an HR line, a checklist prefix gap, a collapsed
+        // link-chip interior, or a styled-link hidden tail); the fifth,
+        // generic rescue explicitly excludes any run those four already
+        // own (including an intentional decline), so it only ever fires
+        // on a leftover `.sidekickHiddenMarker` run — bold, strikethrough,
+        // underline, or any other future marker pair. First non-nil wins.
+        return snapCaretOutOfHR(target: naive, previous: previous, direction: direction)
+            ?? snapCaretOutOfChecklistGap(target: naive, direction: direction)
+            ?? snapCaretOutOfLinkChip(target: naive, direction: direction)
+            ?? snapCaretOutOfLinkTail(target: naive, direction: direction)
+            ?? snapCaretOutOfHiddenMarkerRun(target: naive, direction: direction)
+    }
+
     /// Selection-change funnel — every keyboard, mouse, and programmatic
     /// selection change reaches this override.
     ///
@@ -1086,42 +1137,71 @@ class HybridTextView: NSTextView {
            proposed.length == 0,
            let storage = textStorage,
            storage.length > 0 {
-            let n = storage.length
             let previous = selectedRange().location
             let direction: CaretSnapDirection = proposed.location > previous ? .forward : .backward
-            // [11] Cheap gate before the three rescues: each recomputes lineRange
-            // and the HR rescue enumerates the whole line, so running all three on
-            // every caret move is wasteful. A zero-length caret only needs a
-            // rescue when it's near a managed region — an HR or checklist line
-            // (both markers anchored at line start) or a collapsed hidden-marker
-            // run at the caret (link chip). Otherwise skip the chain entirely.
-            let ns = storage.string as NSString
-            let probe = min(max(proposed.location, 0), n - 1)
-            let lineStart = ns.lineRange(for: NSRange(location: probe, length: 0)).location
-            let nearManagedRegion =
-                storage.attribute(.sidekickThematicBreak, at: lineStart, effectiveRange: nil) != nil
-                || storage.attribute(.sidekickChecklistMarker, at: lineStart, effectiveRange: nil) != nil
-                || (proposed.location < n
-                    && storage.attribute(.sidekickHiddenMarker, at: probe, effectiveRange: nil) != nil)
-            // Five hidden-region caret rescues. The first four are mutually
-            // exclusive by construction (a zero-length caret can sit on at
-            // most one of: an HR line, a checklist prefix gap, a collapsed
-            // link-chip interior, or a styled-link hidden tail); the fifth,
-            // generic rescue explicitly excludes any run those four already
-            // own (including an intentional decline), so it only ever fires
-            // on a leftover `.sidekickHiddenMarker` run — bold, strikethrough,
-            // underline, or any other future marker pair. First non-nil wins.
-            if nearManagedRegion,
-               let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous, direction: direction)
-                ?? snapCaretOutOfChecklistGap(target: proposed.location, direction: direction)
-                ?? snapCaretOutOfLinkChip(target: proposed.location, direction: direction)
-                ?? snapCaretOutOfLinkTail(target: proposed.location, direction: direction)
-                ?? snapCaretOutOfHiddenMarkerRun(target: proposed.location, direction: direction) {
+            if let snapped = correctedCaretTarget(fromNaive: proposed.location, previous: previous, direction: direction) {
                 effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
             }
         }
 
         super.setSelectedRanges(effectiveRanges, affinity: affinity, stillSelecting: stillSelecting)
+    }
+
+    /// Override of `NSResponder.moveRight(_:)` — fired by the Right arrow key.
+    ///
+    /// AppKit's own layout-based caret stepping is unreliable near a managed
+    /// region: empirically (see `PlainArrowMoveAcrossDividerTests`), its
+    /// native LEFT step from the boundary immediately below a divider can
+    /// jump the WRONG way — forward into a hidden inline-marker run's
+    /// interior — instead of stepping backward across the divider, because
+    /// the zero-width HR line and a zero-width hidden marker run collapse to
+    /// the same visual point and confuse its glyph-based search. `moveRight`
+    /// is not known to be broken the same way today, but nothing guarantees
+    /// that holds for every marker/font combination, so both directions get
+    /// the same authoritative treatment rather than one being incidental.
+    /// Rather than trust AppKit's stepping near a managed
+    /// region, this override computes its OWN naive one-character step from
+    /// the current selection and runs it through the same snap-rescue chain
+    /// `setSelectedRanges` already uses — reusing, not reimplementing, those
+    /// five helpers. Far from any managed region (the common case), the
+    /// cheap gate inside `correctedCaretTarget` returns `nil` immediately and
+    /// this defers straight to `super.moveRight(sender)`, so ordinary typing
+    /// pays nothing extra. A non-empty selection (range, not caret) also
+    /// defers to `super` — collapse-to-edge behavior is unaffected here.
+    override func moveRight(_ sender: Any?) {
+        let current = selectedRange()
+        guard current.length == 0, let storage = textStorage else {
+            super.moveRight(sender)
+            return
+        }
+        let naive = min(current.location + 1, storage.length)
+        guard naive != current.location,
+              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward)
+        else {
+            super.moveRight(sender)
+            return
+        }
+        setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
+    /// Override of `NSResponder.moveLeft(_:)` — fired by the Left arrow key.
+    /// Mirrors `moveRight(_:)` above (same rationale: AppKit's own stepping
+    /// is unreliable near a managed region, so this computes its own naive
+    /// backward step and runs it through the shared rescue chain instead).
+    override func moveLeft(_ sender: Any?) {
+        let current = selectedRange()
+        guard current.length == 0 else {
+            super.moveLeft(sender)
+            return
+        }
+        let naive = max(current.location - 1, 0)
+        guard naive != current.location,
+              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward)
+        else {
+            super.moveLeft(sender)
+            return
+        }
+        setSelectedRange(NSRange(location: corrected, length: 0))
     }
 
     override func viewDidMoveToSuperview() {
