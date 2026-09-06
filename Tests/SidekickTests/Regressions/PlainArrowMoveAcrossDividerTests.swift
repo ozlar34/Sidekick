@@ -33,6 +33,20 @@ import AppKit
 // Tests use HostedEditorRunner (real windowed layout) dispatching real
 // `.right`/`.left` keys and assert on the real post-dispatch selection —
 // never on the snap helpers directly.
+//
+// Ticket 04 extends this file with `moveUp`/`moveDown`. Confirmed repro (from
+// `.scratch/hr-adjacent-caret-movement/PLAN.md`, "Confirmed Bug A"): body
+// "Test1\n---\nTest2\n---\n*Test3*\n---\n*Test4*" with the caret at 35 (mid
+// "*Test4*"), pressing Up silently failed to move — it reset the caret to 32,
+// the START of the current line, instead of moving up into "*Test3*"'s line.
+// Fix: `HybridTextView.moveUp(_:)` / `moveDown(_:)` compute a naive
+// same-column step into the adjacent line via `NSString.getLineStart(_:end:
+// contentsEnd:for:)` — precise enough only to land inside the correct
+// adjacent line's span — and run it through the same
+// `correctedCaretTarget(fromNaive:previous:direction:)` chain `moveLeft`/
+// `moveRight` already use. Far from a managed region, both defer straight to
+// `super` so real AppKit vertical stepping (x-position-preserving glyph
+// search) is unaffected.
 @MainActor
 final class PlainArrowMoveAcrossDividerTests: XCTestCase {
 
@@ -251,5 +265,213 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         runner.assertSelection(NSRange(location: 5, length: 0))
         runner.key(.left)
         runner.assertSelection(NSRange(location: 4, length: 0))
+    }
+
+    // MARK: - Down: a line above a divider -> the line below (ticket 04)
+
+    func test_down_plainAbove_plainBelow() {
+        let body = "before\n---\nafter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "after", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0, "A single Down press must never decrease the caret location")
+    }
+
+    /// The broken case: a hidden bold-opening marker immediately after the
+    /// divider's line break.
+    func test_down_plainAbove_boldBelow() {
+        let body = "before\n---\n**Bold below**"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "**Bold below**", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_plainAbove_italicBelow() {
+        let body = "before\n---\n*Italic below*"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "*Italic below*", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_plainAbove_underlineBelow() {
+        let body = "before\n---\n<u>Underline below</u>"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "<u>Underline below</u>", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_plainAbove_strikethroughBelow() {
+        let body = "before\n---\n~~Strike below~~"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "~~Strike below~~", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    /// Symmetric direction: styled line above, plain line below.
+    func test_down_boldAbove_plainBelow() {
+        let body = "**Bold above**\n---\nafter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "after", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_italicAbove_plainBelow() {
+        let body = "*Italic above*\n---\nafter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "after", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_underlineAbove_plainBelow() {
+        let body = "<u>Underline above</u>\n---\nafter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "after", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    func test_down_strikethroughAbove_plainBelow() {
+        let body = "~~Strike above~~\n---\nafter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: offset(of: "after", in: body), length: 0))
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0)
+    }
+
+    // MARK: - Up: a line below a divider -> the line above (mirrored, ticket 04)
+
+    func test_up_plainAbove_plainBelow() {
+        let body = "before\n---\nafter"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "before", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start, "A single Up press must never increase the caret location")
+    }
+
+    /// The confirmed broken case: caret resting at the start of the hidden
+    /// bold-opening marker run immediately below the divider.
+    func test_up_plainAbove_boldBelow() {
+        let body = "before\n---\n**Bold below**"
+        let start = offset(of: "**Bold below**", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "before", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_plainAbove_italicBelow() {
+        let body = "before\n---\n*Italic below*"
+        let start = offset(of: "*Italic below*", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "before", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_plainAbove_underlineBelow() {
+        let body = "before\n---\n<u>Underline below</u>"
+        let start = offset(of: "<u>Underline below</u>", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "before", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_plainAbove_strikethroughBelow() {
+        let body = "before\n---\n~~Strike below~~"
+        let start = offset(of: "~~Strike below~~", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "before", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    /// Symmetric direction: styled line above, plain line below.
+    func test_up_boldAbove_plainBelow() {
+        let body = "**Bold above**\n---\nafter"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(of: "\n---", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_italicAbove_plainBelow() {
+        let body = "*Italic above*\n---\nafter"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(of: "\n---", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_underlineAbove_plainBelow() {
+        let body = "<u>Underline above</u>\n---\nafter"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(of: "\n---", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    func test_up_strikethroughAbove_plainBelow() {
+        let body = "~~Strike above~~\n---\nafter"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(of: "\n---", in: body), length: 0))
+        XCTAssertLessThanOrEqual(runner.selection.location, start)
+    }
+
+    /// Exact repro from `.scratch/hr-adjacent-caret-movement/PLAN.md` ("Confirmed Bug A"): caret
+    /// mid-word in the last of a chain of styled lines separated by dividers.
+    /// Before the fix, Up from position 35 silently failed to move — it reset
+    /// to 32 (the start of the current line) instead of moving up into
+    /// "*Test3*"'s line.
+    func test_up_silentlyFailsToMove_exactRepro() {
+        let body = "Test1\n---\nTest2\n---\n*Test3*\n---\n*Test4*"
+        let start = 35
+        XCTAssertEqual((body as NSString).substring(with: NSRange(location: 32, length: 7)), "*Test4*")
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: offset(after: "*Test3*", in: body), length: 0))
+        XCTAssertLessThan(runner.selection.location, start, "Up must move the caret up, never reset it to the current line's start")
+    }
+
+    // MARK: - Runs of consecutive dividers still skip as one block (vertical)
+
+    func test_consecutiveDividers_skipAsOneBlock_viaHostedRunner_verticalMove() {
+        let body = "a\n---\n---\nb"   // a=0 \n=1 ---=2..4 \n=5 ---=6..8 \n=9 b=10
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
+        runner.key(.down)
+        runner.assertSelection(NSRange(location: 10, length: 0))
+
+        let runnerBack = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 10, length: 0))
+        runnerBack.key(.up)
+        runnerBack.assertSelection(NSRange(location: 1, length: 0))
+    }
+
+    // MARK: - Far from any managed region defers to super, unaffected (vertical)
+
+    func test_plainText_farFromManagedRegion_movesBetweenLines() {
+        let body = "line one\nline two\nline three\nline four"
+        let start = offset(of: "line two", in: body) + 5   // mid "line two"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.down)
+        let lineThree = (body as NSString).range(of: "line three")
+        XCTAssertTrue(
+            NSLocationInRange(runner.selection.location, NSRange(location: lineThree.location, length: lineThree.length + 1)),
+            "Down from mid \"line two\" should land within \"line three\", got \(runner.selection.location)"
+        )
+        XCTAssertGreaterThan(runner.selection.location, start)
+        runner.key(.up)
+        runner.assertSelection(NSRange(location: start, length: 0))
     }
 }

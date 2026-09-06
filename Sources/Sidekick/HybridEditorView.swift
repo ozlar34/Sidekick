@@ -1204,6 +1204,72 @@ class HybridTextView: NSTextView {
         setSelectedRange(NSRange(location: corrected, length: 0))
     }
 
+    /// Override of `NSResponder.moveDown(_:)` — fired by the Down arrow key.
+    /// Unlike `moveRight`/`moveLeft`, vertical movement has no single-
+    /// character naive step to reuse: AppKit's real `moveDown:` preserves the
+    /// caret's on-screen x-position across lines via glyph geometry, which is
+    /// not replicated here. Instead this computes a NAIVE same-column step
+    /// into the next line via `NSString`'s line-start API — precise enough
+    /// only to land somewhere inside the correct adjacent line's span, which
+    /// is all `correctedCaretTarget`'s cheap gate needs to detect a managed
+    /// region there and run the same five-helper rescue chain `moveRight`/
+    /// `moveLeft` already use. When the adjacent line isn't managed, the
+    /// naive guess is discarded and `super.moveDown(sender)` runs the real
+    /// AppKit vertical move. A non-empty selection or no line below the
+    /// current one also defers to `super`.
+    override func moveDown(_ sender: Any?) {
+        let current = selectedRange()
+        guard current.length == 0, let storage = textStorage, storage.length > 0 else {
+            super.moveDown(sender)
+            return
+        }
+        let ns = storage.string as NSString
+        var lineStart = 0, lineEnd = 0
+        ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
+        guard lineEnd < storage.length else {
+            super.moveDown(sender)
+            return
+        }
+        let column = current.location - lineStart
+        var belowStart = 0, belowContentsEnd = 0
+        ns.getLineStart(&belowStart, end: nil, contentsEnd: &belowContentsEnd, for: NSRange(location: lineEnd, length: 0))
+        let naive = min(belowStart + column, belowContentsEnd)
+        guard let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward) else {
+            super.moveDown(sender)
+            return
+        }
+        setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
+    /// Override of `NSResponder.moveUp(_:)` — fired by the Up arrow key.
+    /// Mirrors `moveDown(_:)` above (same naive same-column-step rationale,
+    /// opposite direction): probes the line above via the same line-start
+    /// API, guarding on "no line above" (`lineStart == 0`) instead of "no
+    /// line below".
+    override func moveUp(_ sender: Any?) {
+        let current = selectedRange()
+        guard current.length == 0, let storage = textStorage, storage.length > 0 else {
+            super.moveUp(sender)
+            return
+        }
+        let ns = storage.string as NSString
+        var lineStart = 0
+        ns.getLineStart(&lineStart, end: nil, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
+        guard lineStart > 0 else {
+            super.moveUp(sender)
+            return
+        }
+        let column = current.location - lineStart
+        var aboveStart = 0, aboveContentsEnd = 0
+        ns.getLineStart(&aboveStart, end: nil, contentsEnd: &aboveContentsEnd, for: NSRange(location: lineStart - 1, length: 0))
+        let naive = min(aboveStart + column, aboveContentsEnd)
+        guard let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward) else {
+            super.moveUp(sender)
+            return
+        }
+        setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         guard let clipView = enclosingScrollView?.contentView else { return }
