@@ -12,6 +12,22 @@ import AppKit
 // arrow cases. Later tickets in the same effort add marker/divider-adjacency
 // coverage for these selectors — this file only proves the dispatch plumbing
 // on plain, marker-free text.
+//
+// Ticket 05 extends this file with `HybridTextView.moveLeftAndModifySelection(_:)`
+// / `moveRightAndModifySelection(_:)` coverage: those overrides extend or
+// shrink a selection's moving edge by one character, reusing the exact
+// naive-step + snap-rescue chain `moveLeft`/`moveRight` (ticket 03/04) use
+// for a plain caret, combined with a tracked selection anchor (see
+// `HybridTextView.selectionExtensionAnchor`'s doc comment for why AppKit's
+// own selection state doesn't expose which end of a range is the anchor).
+// The cases below cover: N-presses-produce-length-N on plain/bold/italic/
+// underline/strikethrough text after a divider (both directions), growing a
+// selection up to and across a divider by exactly the expected amount
+// (including a divider immediately followed by a hidden inline marker, so
+// both managed regions get crossed back-to-back), and — the actual product
+// requirement motivating this ticket — that wrapping a shift-extended
+// word right after a divider touches only that word and leaves the
+// divider's `---` line byte-identical.
 @MainActor
 final class ShiftExtendArrowKeysTests: XCTestCase {
 
@@ -28,5 +44,382 @@ final class ShiftExtendArrowKeysTests: XCTestCase {
 
         runner.key(.shiftLeft)
         runner.assertSelection(NSRange(location: 7, length: 0))
+    }
+
+    // MARK: - Helpers (index arithmetic via substring search, not hand-counted)
+    // Same helpers as PlainArrowMoveAcrossDividerTests — duplicated locally
+    // since that file's are `private` to its own type.
+
+    private func offset(after marker: String, in body: String) -> Int {
+        let r = (body as NSString).range(of: marker)
+        precondition(r.location != NSNotFound, "marker not found: \(marker)")
+        return r.location + r.length
+    }
+
+    private func offset(of marker: String, in body: String) -> Int {
+        let r = (body as NSString).range(of: marker)
+        precondition(r.location != NSNotFound, "marker not found: \(marker)")
+        return r.location
+    }
+
+    // MARK: - N presses of Shift+Right/Shift+Left produce a selection of
+    // exactly length N, right after a divider, for each style on the
+    // surrounding text (AC #1, #2).
+    //
+    // Each case starts the caret at the first VISIBLE character of the line
+    // below the divider (i.e. already past any hidden opening marker — the
+    // marker-skip mechanics themselves are ticket 03/04 territory and are
+    // separately exercised, combined with divider-crossing, below). This
+    // isolates the thing this ticket actually adds: extending a selection
+    // one visible character at a time through styled (but not
+    // hidden-marker) text is unaffected by the new overrides — the cheap
+    // gate inside `correctedCaretTarget` sees no managed region on any of
+    // these steps and defers straight to `super` every time.
+
+    private func assertShiftRightThenShiftLeftStepsByOne(
+        body: String,
+        start: Int,
+        steps: Int,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        for n in 1...steps {
+            runner.key(.shiftRight)
+            runner.assertSelection(NSRange(location: start, length: n), file: file, line: line)
+        }
+        for n in stride(from: steps - 1, through: 0, by: -1) {
+            runner.key(.shiftLeft)
+            runner.assertSelection(NSRange(location: start, length: n), file: file, line: line)
+        }
+    }
+
+    func test_shiftRightThenShiftLeft_plainWordAfterDivider() {
+        let body = "before\n---\nafter word"
+        assertShiftRightThenShiftLeftStepsByOne(body: body, start: offset(of: "after", in: body), steps: 3)
+    }
+
+    func test_shiftRightThenShiftLeft_boldWordAfterDivider() {
+        let body = "before\n---\n**Bold word here**"
+        assertShiftRightThenShiftLeftStepsByOne(body: body, start: offset(of: "Bold", in: body), steps: 3)
+    }
+
+    func test_shiftRightThenShiftLeft_italicWordAfterDivider() {
+        let body = "before\n---\n*Italic word here*"
+        assertShiftRightThenShiftLeftStepsByOne(body: body, start: offset(of: "Italic", in: body), steps: 3)
+    }
+
+    func test_shiftRightThenShiftLeft_underlineWordAfterDivider() {
+        let body = "before\n---\n<u>Underline word here</u>"
+        assertShiftRightThenShiftLeftStepsByOne(body: body, start: offset(of: "Underline", in: body), steps: 3)
+    }
+
+    func test_shiftRightThenShiftLeft_strikethroughWordAfterDivider() {
+        let body = "before\n---\n~~Strike word here~~"
+        assertShiftRightThenShiftLeftStepsByOne(body: body, start: offset(of: "Strike", in: body), steps: 3)
+    }
+
+    // MARK: - N presses of Shift+Left ALONE (no prior Shift+Right) produce
+    // a selection of exactly length N, growing BACKWARD from a caret
+    // placed after the region, for each style (AC #2 independently — every
+    // case above only exercises Shift+Left as the shrink-back half of a
+    // Shift+Right-then-Shift+Left pair; none of them start a chain with
+    // Shift+Left or grow a selection using it alone).
+
+    private func assertShiftLeftStepsByOne(
+        body: String,
+        end: Int,
+        steps: Int,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: end, length: 0))
+        for n in 1...steps {
+            runner.key(.shiftLeft)
+            runner.assertSelection(NSRange(location: end - n, length: n), file: file, line: line)
+        }
+    }
+
+    func test_shiftLeft_extendsBackward_producesExactLength_plainWord() {
+        let body = "before\n---\nafter word"
+        assertShiftLeftStepsByOne(body: body, end: offset(after: "after", in: body), steps: 3)
+    }
+
+    func test_shiftLeft_extendsBackward_producesExactLength_boldWord() {
+        let body = "before\n---\n**Bold word here**"
+        assertShiftLeftStepsByOne(body: body, end: offset(after: "Bold", in: body), steps: 3)
+    }
+
+    func test_shiftLeft_extendsBackward_producesExactLength_italicWord() {
+        let body = "before\n---\n*Italic word here*"
+        assertShiftLeftStepsByOne(body: body, end: offset(after: "Italic", in: body), steps: 3)
+    }
+
+    func test_shiftLeft_extendsBackward_producesExactLength_underlineWord() {
+        let body = "before\n---\n<u>Underline word here</u>"
+        assertShiftLeftStepsByOne(body: body, end: offset(after: "Underline", in: body), steps: 3)
+    }
+
+    func test_shiftLeft_extendsBackward_producesExactLength_strikethroughWord() {
+        let body = "before\n---\n~~Strike word here~~"
+        assertShiftLeftStepsByOne(body: body, end: offset(after: "Strike", in: body), steps: 3)
+    }
+
+    // MARK: - Extending up to and across a divider grows the selection by
+    // exactly the expected amount, never overshooting (AC #3).
+
+    /// Forward: caret starts mid-word above a divider, extends through the
+    /// rest of that word, across the whole divider block in one press (the
+    /// divider's `\n---\n` is uninhabitable — same one-hop rule
+    /// `moveRight(_:)` already uses for a plain caret, ticket 03), then on
+    /// into the plain word below.
+    func test_shiftRight_extendsAcrossDivider_growsByExpectedAmount() {
+        let body = "before\n---\nafter"
+        let start = offset(of: "ore", in: body)   // mid "before": caret between "bef" and "ore"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+
+        var previousLength = 0
+        for _ in 0..<6 {
+            runner.key(.shiftRight)
+            let current = runner.selection
+            XCTAssertEqual(current.location, start, "Anchor must never move")
+            XCTAssertGreaterThan(current.length, previousLength, "Every press must grow the selection")
+            previousLength = current.length
+        }
+        // After 6 presses the selection must have crossed the entire
+        // divider block and landed exactly 2 characters into "after" — not
+        // one character short (stuck on the divider) and not overshot
+        // further than the naive 1-char-per-visible-step count warrants.
+        let expectedEnd = offset(of: "after", in: body) + 2
+        runner.assertSelection(NSRange(location: start, length: expectedEnd - start))
+        XCTAssertEqual(
+            (body as NSString).substring(with: runner.selection),
+            "ore\n---\naf",
+            "Selected text must be exactly the run from the anchor through 2 characters into \"after\", divider included, nothing extra"
+        )
+    }
+
+    /// Mirrored: caret starts mid-word below a divider, extends backward
+    /// through the rest of that word, across the whole divider block, then
+    /// up into the plain word above.
+    func test_shiftLeft_extendsAcrossDivider_growsByExpectedAmount() {
+        let body = "before\nafter word"
+            .replacingOccurrences(of: "\n", with: "\n---\n")
+        // body == "before\n---\nafter word"
+        let start = offset(of: "ter word", in: body)   // mid "after": caret between "af" and "ter"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+
+        var previousLength = 0
+        for _ in 0..<6 {
+            runner.key(.shiftLeft)
+            let current = runner.selection
+            XCTAssertEqual(NSMaxRange(current), start, "Anchor must never move")
+            XCTAssertGreaterThan(current.length, previousLength, "Every press must grow the selection")
+            previousLength = current.length
+        }
+        // 6 presses starting from `start` (offset of "ter word") and
+        // extending backward land on exactly the same range that 6 presses
+        // starting from offset(of: "ore") and extending forward land on
+        // (the forward test above) — both walk the identical span of the
+        // document, just from opposite ends, and the divider block is
+        // still crossed in a single press either way.
+        let expectedStart = offset(of: "ore", in: body)
+        runner.assertSelection(NSRange(location: expectedStart, length: start - expectedStart))
+        XCTAssertEqual(
+            (body as NSString).substring(with: runner.selection),
+            "ore\n---\naf",
+            "Selected text must be exactly the run from the anchor back through the divider to 3 characters into \"before\", divider included, nothing extra"
+        )
+    }
+
+    /// Combined case: a divider immediately followed by a hidden inline
+    /// marker (bold). The first press must cross the whole divider block,
+    /// the second must cross the whole hidden `**` marker run, and only the
+    /// third press should be a normal 1-character step — proving the two
+    /// managed regions compose correctly back-to-back instead of the
+    /// second press's naive target landing mid-marker and needing a
+    /// follow-up press to actually move.
+    func test_shiftRight_extendsAcrossDividerThenHiddenMarker_growsByExpectedAmountAtEachStep() {
+        let body = "before\n---\n**Bold below**"
+        let start = offset(after: "before", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+
+        runner.key(.shiftRight)
+        runner.assertSelection(NSRange(location: start, length: offset(of: "**Bold", in: body) - start))
+
+        runner.key(.shiftRight)
+        runner.assertSelection(NSRange(location: start, length: offset(of: "Bold", in: body) - start))
+
+        runner.key(.shiftRight)
+        runner.assertSelection(NSRange(location: start, length: offset(of: "old", in: body) - start))
+    }
+
+    // MARK: - `selectionExtensionOwnedByOverride` safeguard: once a chain
+    // has needed a correction, every later step in the SAME chain stays
+    // self-computed instead of deferring back to `super` — see
+    // `stepExtension`'s doc comment for the confirmed repro this guards
+    // against (a post-correction step handed back to `super` silently
+    // re-anchors the selection instead of continuing from the tracked
+    // anchor).
+
+    /// Extends left from mid-"after" across the whole divider block (one
+    /// corrected press — the same repro `stepExtension`'s doc comment
+    /// describes: anchor 13 jumps the selection to `{6, 7}`), then keeps
+    /// pressing Shift+Left for two MORE steps that land in plain,
+    /// unmanaged text ("before"). Those two steps have nothing left to
+    /// correct — `correctedCaretTarget` returns `nil` for both — so only
+    /// `selectionExtensionOwnedByOverride` staying latched keeps them
+    /// self-computed instead of deferring to `super`, which (per the
+    /// documented repro) would silently re-anchor the selection to the
+    /// moving edge instead of continuing to grow it from the true anchor.
+    func test_shiftLeftAndModifySelection_staysSelfManaged_forStepsAfterDividerCorrection() {
+        let body = "before\n---\nafter word"
+        let anchor = offset(of: "ter word", in: body)   // mid "after", matches stepExtension's doc-comment repro
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: anchor, length: 0))
+
+        // Two plain steps inside "after", then the one-hop divider
+        // crossing — matches the doc comment's repro exactly.
+        for _ in 0..<3 {
+            runner.key(.shiftLeft)
+            XCTAssertEqual(NSMaxRange(runner.selection), anchor, "Anchor must never move")
+        }
+        runner.assertSelection(NSRange(location: 6, length: 7))
+
+        // The part that exercises the safeguard: two MORE presses, now
+        // purely in plain "before" text.
+        runner.key(.shiftLeft)
+        XCTAssertEqual(NSMaxRange(runner.selection), anchor, "Anchor must not move on a post-correction plain step")
+        runner.key(.shiftLeft)
+        XCTAssertEqual(NSMaxRange(runner.selection), anchor, "Anchor must not move on a second post-correction plain step")
+
+        let expectedStart = offset(of: "re", in: body)
+        runner.assertSelection(NSRange(location: expectedStart, length: anchor - expectedStart))
+        XCTAssertEqual(
+            (body as NSString).substring(with: runner.selection),
+            "re\n---\naf",
+            "Selected text must be exactly the run from 2 characters into \"before\" through the divider to the anchor mid-\"after\""
+        )
+    }
+
+    // MARK: - Anchor-crossing NSRange arithmetic in `stepExtension`: the
+    // selection's "sides" flip correctly when Shift+Right growth (anchor
+    // on the left) is shrunk by Shift+Left past zero-length and regrown
+    // on the opposite side (anchor now on the right) (AC #1/#2 combined,
+    // stress case).
+
+    /// Grows via Shift+Right (anchor mid-"before", on the left), crosses
+    /// the divider once forward, then shrinks the same selection back down
+    /// via Shift+Left — crossing the SAME divider a second time, backward
+    /// — until it collapses to a zero-length caret exactly at the anchor,
+    /// then continues past that point, growing into the opposite
+    /// direction with the anchor now pinned to the right (`NSMaxRange`)
+    /// instead of the left.
+    func test_shiftRightThenShiftLeft_selectionCrossesBackOverAnchor_intoOppositeSide() {
+        let body = "before\n---\nafter"
+        let anchor = offset(of: "ore", in: body)   // mid "before": between "bef" and "ore"
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: anchor, length: 0))
+
+        // Phase 1 — grow right, anchor fixed on the left, crossing the
+        // divider once (same setup/endpoint as
+        // `test_shiftRight_extendsAcrossDivider_growsByExpectedAmount` above).
+        var previousLength = 0
+        for _ in 0..<6 {
+            runner.key(.shiftRight)
+            let current = runner.selection
+            XCTAssertEqual(current.location, anchor, "Anchor must stay on the left while growing right")
+            XCTAssertGreaterThan(current.length, previousLength, "Every press must grow the selection")
+            previousLength = current.length
+        }
+        let expectedEnd = offset(of: "after", in: body) + 2
+        runner.assertSelection(NSRange(location: anchor, length: expectedEnd - anchor))
+
+        // Phase 2 — shrink the SAME selection back down, crossing the
+        // divider a second time (backward), until it collapses to a
+        // zero-length caret exactly at the anchor.
+        previousLength = expectedEnd - anchor
+        for _ in 0..<6 {
+            runner.key(.shiftLeft)
+            let current = runner.selection
+            XCTAssertEqual(current.location, anchor, "Anchor must still be the fixed left side while shrinking")
+            XCTAssertLessThan(current.length, previousLength, "Every press must shrink the selection")
+            previousLength = current.length
+        }
+        runner.assertSelection(NSRange(location: anchor, length: 0))
+
+        // Phase 3 — continuing Shift+Left PAST the collapse point starts a
+        // fresh extension chain at the same point, but growing in the
+        // OPPOSITE direction: the anchor ends up pinned to the RIGHT of
+        // the selection instead of the left.
+        previousLength = 0
+        for _ in 0..<3 {
+            runner.key(.shiftLeft)
+            let current = runner.selection
+            XCTAssertEqual(NSMaxRange(current), anchor, "Anchor must now be pinned to the right of the selection")
+            XCTAssertGreaterThan(current.length, previousLength, "Every press must grow the selection further left")
+            previousLength = current.length
+        }
+        // 3 presses from position 3 (mid "before") land exactly at the
+        // document start — "before"'s first 3 characters, "bef".
+        runner.assertSelection(NSRange(location: 0, length: anchor))
+        XCTAssertEqual(
+            (body as NSString).substring(with: runner.selection),
+            "bef",
+            "Selected text must be exactly the first 3 characters of \"before\""
+        )
+    }
+
+    // MARK: - Shift-extended word right after a divider, wrapped, touches
+    // only that word — the divider's `---` line is byte-identical (AC #4).
+
+    private func assertWrapTouchesOnlySelectedWord(
+        prefix: String,
+        suffix: String,
+        expectedWrappedBody: String,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        let body = "before\n---\nafter word"
+        let dividerLine = "---"
+        let start = offset(of: "after", in: body)
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        for _ in 0..<5 { runner.key(.shiftRight) }   // selects "after" (5 chars)
+        runner.assertSelection(NSRange(location: start, length: 5), file: file, line: line)
+
+        FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: runner.inner.textView)
+
+        runner.assertBody(expectedWrappedBody, file: file, line: line)
+        XCTAssertTrue(
+            runner.body.contains("\n" + dividerLine + "\n"),
+            "Divider line must survive byte-identical",
+            file: file, line: line
+        )
+    }
+
+    func test_wrapBold_afterShiftExtend_touchesOnlySelectedWord() {
+        assertWrapTouchesOnlySelectedWord(
+            prefix: "**", suffix: "**",
+            expectedWrappedBody: "before\n---\n**after** word"
+        )
+    }
+
+    func test_wrapItalic_afterShiftExtend_touchesOnlySelectedWord() {
+        assertWrapTouchesOnlySelectedWord(
+            prefix: "*", suffix: "*",
+            expectedWrappedBody: "before\n---\n*after* word"
+        )
+    }
+
+    func test_wrapUnderline_afterShiftExtend_touchesOnlySelectedWord() {
+        assertWrapTouchesOnlySelectedWord(
+            prefix: "<u>", suffix: "</u>",
+            expectedWrappedBody: "before\n---\n<u>after</u> word"
+        )
+    }
+
+    func test_wrapStrikethrough_afterShiftExtend_touchesOnlySelectedWord() {
+        assertWrapTouchesOnlySelectedWord(
+            prefix: "~~", suffix: "~~",
+            expectedWrappedBody: "before\n---\n~~after~~ word"
+        )
     }
 }

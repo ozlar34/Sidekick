@@ -1270,6 +1270,182 @@ class HybridTextView: NSTextView {
         setSelectedRange(NSRange(location: corrected, length: 0))
     }
 
+    /// Fixed anchor of an in-progress `moveLeftAndModifySelection`/
+    /// `moveRightAndModifySelection` extension chain.
+    ///
+    /// AppKit's public API doesn't expose which end of `selectedRange()` is
+    /// the anchor and which is the moving edge: `NSRange(location: 5,
+    /// length: 3)` produced by anchoring at 5 and extending right to 8 is
+    /// indistinguishable, after the fact, from the same range produced by
+    /// anchoring at 8 and extending left to 5. `selectionAffinity` doesn't
+    /// help either — it only disambiguates which line an insertion point
+    /// belongs to at a wrapped line boundary, not which edge of a range
+    /// selection is the anchor. So the anchor is tracked here instead of
+    /// reconstructed: `extensionAnchorAndEdge(for:)` (re)confirms it to the
+    /// current caret location every time a NEW extension starts from a
+    /// zero-length selection — mirroring AppKit's own convention that a
+    /// fresh shift-arrow press anchors wherever the caret currently sits —
+    /// and otherwise leaves it untouched across a chain of subsequent
+    /// shift-arrow presses (including ones this override defers straight to
+    /// `super` for) so the anchor never drifts mid-chain. Any operation that
+    /// collapses the selection back to zero length (a plain arrow key, a
+    /// click, typing) is picked up automatically the next time either
+    /// override runs, since `extensionAnchorAndEdge(for:)` always re-derives
+    /// a fresh anchor when `current.length == 0`.
+    private var selectionExtensionAnchor: Int?
+
+    /// Whether the CURRENT extension chain has already had a step corrected
+    /// by this override (as opposed to every step so far being deferred to
+    /// `super`). See outcome 3 in `stepExtension(anchor:naive:edge:direction:)`'s
+    /// doc comment below for why, once true, every subsequent step in the
+    /// chain must also be self-computed
+    /// rather than handed back to `super` — empirically, `super` does not
+    /// reliably resume extending from OUR tracked anchor after this override
+    /// has called `setSelectedRange` with a non-native range. Reset to
+    /// `false` whenever a new chain starts (mirrors `selectionExtensionAnchor`,
+    /// and lives here rather than as a third case inside
+    /// `extensionAnchorAndEdge(for:)` only because that function has no
+    /// other reason to mutate state — resetting both together, right where
+    /// "new chain" is detected, keeps the two invariants co-located).
+    private var selectionExtensionOwnedByOverride = false
+
+    /// Resolve `(anchor, movingEdge)` for a modify-selection extension step,
+    /// given the CURRENT selection (before this keypress). See
+    /// `selectionExtensionAnchor`'s doc comment for why the anchor can't be
+    /// read back out of `current` alone.
+    ///
+    /// Returns `nil` when `current` is non-empty but doesn't correspond to
+    /// the tracked anchor — e.g. a mouse-drag or double-click selection that
+    /// no shift-arrow chain established — since the anchor can't be
+    /// determined safely in that case; callers defer to `super` rather than
+    /// guess which edge to move.
+    private func extensionAnchorAndEdge(for current: NSRange) -> (anchor: Int, edge: Int)? {
+        if current.length == 0 {
+            selectionExtensionOwnedByOverride = false
+            return (current.location, current.location)
+        }
+        if let tracked = selectionExtensionAnchor {
+            if tracked == current.location {
+                return (tracked, NSMaxRange(current))
+            }
+            if tracked == NSMaxRange(current) {
+                return (tracked, current.location)
+            }
+        }
+        return nil
+    }
+
+    /// Shared step logic for both overrides below, given this step's naive
+    /// (uncorrected) one-character target for the moving edge.
+    ///
+    /// Three outcomes:
+    ///   1. `correctedCaretTarget` wants to correct `naive` (near a managed
+    ///      region) — apply the correction, and latch
+    ///      `selectionExtensionOwnedByOverride` so every later step in this
+    ///      chain is also self-computed (see below).
+    ///   2. Far from a managed region AND this chain has never been
+    ///      corrected yet — defer to `super` (the "far from a managed
+    ///      region defers to super" idiom the plain overrides also use).
+    ///      This is the overwhelmingly common case, so ordinary shift-arrow
+    ///      selection stays exactly native.
+    ///   3. Far from a managed region BUT this chain WAS already corrected
+    ///      at least once — apply the plain `naive` step ourselves instead
+    ///      of deferring. This is not a general reimplementation of AppKit's
+    ///      extension logic, just the same one-character step `naive`
+    ///      already computed; the reason `super` can't be trusted here is
+    ///      empirical: once this override calls `setSelectedRange` with a
+    ///      range whose anchor sits at `NSMaxRange` (a Shift+Left-initiated
+    ///      extension that has crossed a managed region), the very next
+    ///      `super.move…AndModifySelection(sender)` call silently re-anchors
+    ///      to the range's `location` instead of continuing from the true
+    ///      anchor — confirmed by a throwaway repro: extend left across
+    ///      "before\n---\nafter word" from mid-"after", where the press that
+    ///      crosses the divider correctly jumps the selection to `{6, 7}`
+    ///      (anchor 13, edge 6), but the FOLLOWING plain Shift+Left press,
+    ///      handed to `super`, collapsed the selection to `{5, 1}` — the
+    ///      anchor silently moved from 13 to 6. Once we've had to take
+    ///      manual control of a chain even once, `super` can no longer be
+    ///      trusted for the rest of that chain.
+    private func stepExtension(anchor: Int, naive: Int, edge: Int, direction: CaretSnapDirection) -> NSRange? {
+        if let corrected = correctedCaretTarget(fromNaive: naive, previous: edge, direction: direction) {
+            selectionExtensionOwnedByOverride = true
+            return NSRange(location: min(anchor, corrected), length: abs(corrected - anchor))
+        }
+        guard selectionExtensionOwnedByOverride else { return nil }
+        return NSRange(location: min(anchor, naive), length: abs(naive - anchor))
+    }
+
+    /// Override of `NSResponder.moveRightAndModifySelection(_:)` — fired by
+    /// Shift+Right. Extends or shrinks the selection by moving its edge one
+    /// character, reusing the exact naive-step + snap-rescue logic
+    /// `moveRight(_:)` above uses for a plain caret — `correctedCaretTarget`
+    /// — applied to the moving edge (`extensionAnchorAndEdge(for:)`) instead
+    /// of the caret, then recombined with the unchanged anchor into the new
+    /// range via `stepExtension`. `min`/`abs` there (rather than a raw
+    /// `location`/`length` pair) because the moving edge can cross to the
+    /// other side of the anchor as the selection shrinks past zero and
+    /// starts growing the other way — NSRange requires
+    /// `location <= location + length`.
+    ///
+    /// Far from a managed region (the common case, and provided this
+    /// extension chain hasn't needed a correction yet — see
+    /// `stepExtension`'s doc comment), this defers straight to
+    /// `super.moveRightAndModifySelection(sender)`, so ordinary shift-arrow
+    /// selection is unaffected. Same when the anchor can't be resolved
+    /// (`extensionAnchorAndEdge` returns `nil`) — this never guesses.
+    ///
+    /// The wrap logic applied afterward (Cmd+B/I/underline/strikethrough) is
+    /// unchanged by this ticket — it already operates correctly on whatever
+    /// `selectedRange()` it's handed, so fixing the selection here is
+    /// sufficient to fix wrapping near a divider too.
+    override func moveRightAndModifySelection(_ sender: Any?) {
+        let current = selectedRange()
+        guard let (anchor, edge) = extensionAnchorAndEdge(for: current), let storage = textStorage else {
+            super.moveRightAndModifySelection(sender)
+            return
+        }
+        selectionExtensionAnchor = anchor
+        let naive = min(edge + 1, storage.length)
+        guard naive != edge else {
+            // Already at the document end — nothing left to extend into.
+            // Once self-managed (see `stepExtension`), stay self-managed
+            // even for a no-op step rather than handing back to `super`.
+            if !selectionExtensionOwnedByOverride { super.moveRightAndModifySelection(sender) }
+            return
+        }
+        guard let newRange = stepExtension(anchor: anchor, naive: naive, edge: edge, direction: .forward) else {
+            super.moveRightAndModifySelection(sender)
+            return
+        }
+        setSelectedRange(newRange)
+    }
+
+    /// Override of `NSResponder.moveLeftAndModifySelection(_:)` — fired by
+    /// Shift+Left. Mirrors `moveRightAndModifySelection(_:)` above (same
+    /// rationale: reuse the shared anchor/edge resolution and step logic
+    /// instead of reimplementing AppKit's extension logic from scratch).
+    override func moveLeftAndModifySelection(_ sender: Any?) {
+        let current = selectedRange()
+        guard let (anchor, edge) = extensionAnchorAndEdge(for: current) else {
+            super.moveLeftAndModifySelection(sender)
+            return
+        }
+        selectionExtensionAnchor = anchor
+        let naive = max(edge - 1, 0)
+        guard naive != edge else {
+            // Already at the document start — nothing left to extend into.
+            // Once self-managed (see `stepExtension`), stay self-managed
+            // even for a no-op step rather than handing back to `super`.
+            if !selectionExtensionOwnedByOverride { super.moveLeftAndModifySelection(sender) }
+            return
+        }
+        guard let newRange = stepExtension(anchor: anchor, naive: naive, edge: edge, direction: .backward) else {
+            super.moveLeftAndModifySelection(sender)
+            return
+        }
+        setSelectedRange(newRange)
+    }
+
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         guard let clipView = enclosingScrollView?.contentView else { return }
