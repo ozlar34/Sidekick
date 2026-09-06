@@ -44,18 +44,26 @@ final class KeystrokeRunner {
         case right
         case up
         case down
+        case shiftLeft
+        case shiftRight
+        case shiftUp
+        case shiftDown
 
         var selector: Selector {
             switch self {
-            case .enter:     return #selector(NSResponder.insertNewline(_:))
-            case .backspace: return #selector(NSResponder.deleteBackward(_:))
-            case .delete:    return #selector(NSResponder.deleteForward(_:))
-            case .tab:       return #selector(NSResponder.insertTab(_:))
-            case .shiftTab:  return #selector(NSResponder.insertBacktab(_:))
-            case .left:      return #selector(NSResponder.moveLeft(_:))
-            case .right:     return #selector(NSResponder.moveRight(_:))
-            case .up:        return #selector(NSResponder.moveUp(_:))
-            case .down:      return #selector(NSResponder.moveDown(_:))
+            case .enter:      return #selector(NSResponder.insertNewline(_:))
+            case .backspace:  return #selector(NSResponder.deleteBackward(_:))
+            case .delete:     return #selector(NSResponder.deleteForward(_:))
+            case .tab:        return #selector(NSResponder.insertTab(_:))
+            case .shiftTab:   return #selector(NSResponder.insertBacktab(_:))
+            case .left:       return #selector(NSResponder.moveLeft(_:))
+            case .right:      return #selector(NSResponder.moveRight(_:))
+            case .up:         return #selector(NSResponder.moveUp(_:))
+            case .down:       return #selector(NSResponder.moveDown(_:))
+            case .shiftLeft:  return #selector(NSResponder.moveLeftAndModifySelection(_:))
+            case .shiftRight: return #selector(NSResponder.moveRightAndModifySelection(_:))
+            case .shiftUp:    return #selector(NSResponder.moveUpAndModifySelection(_:))
+            case .shiftDown:  return #selector(NSResponder.moveDownAndModifySelection(_:))
             }
         }
 
@@ -63,15 +71,19 @@ final class KeystrokeRunner {
         /// paste-ready Swift.
         var transcriptLabel: String {
             switch self {
-            case .enter:     return ".enter"
-            case .backspace: return ".backspace"
-            case .delete:    return ".delete"
-            case .tab:       return ".tab"
-            case .shiftTab:  return ".shiftTab"
-            case .left:      return ".left"
-            case .right:     return ".right"
-            case .up:        return ".up"
-            case .down:      return ".down"
+            case .enter:      return ".enter"
+            case .backspace:  return ".backspace"
+            case .delete:     return ".delete"
+            case .tab:        return ".tab"
+            case .shiftTab:   return ".shiftTab"
+            case .left:       return ".left"
+            case .right:      return ".right"
+            case .up:         return ".up"
+            case .down:       return ".down"
+            case .shiftLeft:  return ".shiftLeft"
+            case .shiftRight: return ".shiftRight"
+            case .shiftUp:    return ".shiftUp"
+            case .shiftDown:  return ".shiftDown"
             }
         }
     }
