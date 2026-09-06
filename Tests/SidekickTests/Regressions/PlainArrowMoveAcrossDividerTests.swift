@@ -34,6 +34,16 @@ import AppKit
 // `.right`/`.left` keys and assert on the real post-dispatch selection —
 // never on the snap helpers directly.
 //
+// Scope note (ticket 08): this file covers exactly `moveLeft`/`moveRight`/
+// `moveUp`/`moveDown` near an HR/hidden-marker boundary — nothing else.
+// Deliberately NOT covered/verified: word-jump (`moveWordLeft:`/
+// `moveWordRight:`, Option+Arrow) and line/paragraph/document jump
+// (`moveToBeginningOfLine:`/`moveToEndOfLine:`/`moveToBeginningOfParagraph:`/
+// `moveToEndOfParagraph:`/`moveToBeginningOfDocument:`/`moveToEndOfDocument:`,
+// Cmd+Arrow/Home/End) — plausibly share the same root cause but were never
+// tested; a future bug report there is not necessarily a regression of this
+// fix.
+//
 // Ticket 04 extends this file with `moveUp`/`moveDown`. Confirmed repro (from
 // `.scratch/hr-adjacent-caret-movement/PLAN.md`, "Confirmed Bug A"): body
 // "Test1\n---\nTest2\n---\n*Test3*\n---\n*Test4*" with the caret at 35 (mid
@@ -445,6 +455,28 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         XCTAssertLessThan(runner.selection.location, start, "Up must move the caret up, never reset it to the current line's start")
     }
 
+    /// Ticket 08: exact repro from the same `.scratch/hr-adjacent-caret-
+    /// movement/PLAN.md` fixture used by `test_up_silentlyFailsToMove_exactRepro`
+    /// above, but for a live-verify-confirmed RIGHT-direction bounce.
+    /// Before the ticket-08 fix, a caret at 32 — resting ON the hidden
+    /// opening `*` of `*Test4*` — pressing Right jumped BACKWARD to 27
+    /// (the end of `*Test3*`) instead of forward to 33 (one raw character
+    /// past the hidden marker, into the "T" of "Test4"). Root cause: the
+    /// `correctedCaretTarget` cheap gate only inspected the naive
+    /// DESTINATION (33, plain text — not "managed") and never the SOURCE
+    /// (32, sitting on a `.sidekickHiddenMarker` run), so it deferred to
+    /// `super.moveRight(sender)` — whose glyph-based search, starting from a
+    /// zero-width glyph, produced the wrong backward jump.
+    func test_right_fromHiddenMarkerSource_multiDividerChain_exactRepro() {
+        let body = "Test1\n---\nTest2\n---\n*Test3*\n---\n*Test4*"
+        let start = 32
+        XCTAssertEqual((body as NSString).substring(with: NSRange(location: 32, length: 1)), "*")
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        runner.key(.right)
+        runner.assertSelection(NSRange(location: 33, length: 0))
+        XCTAssertNotEqual(runner.selection.location, 27, "Right must never bounce backward across a divider")
+    }
+
     // MARK: - Runs of consecutive dividers still skip as one block (vertical)
 
     func test_consecutiveDividers_skipAsOneBlock_viaHostedRunner_verticalMove() {
@@ -473,5 +505,113 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         XCTAssertGreaterThan(runner.selection.location, start)
         runner.key(.up)
         runner.assertSelection(NSRange(location: start, length: 0))
+    }
+
+    // MARK: - Ticket 08 (standards-fix iteration): vertical callers must
+    // NOT trust the naive column guess as a verified step.
+    //
+    // The code-review gate caught a real regression in the first ticket-08
+    // pass: `correctedCaretTarget`'s two new SOURCE-side conditions
+    // (`sourceOnHiddenMarker`, `naiveAtManagedLineLookahead`) and its "trust
+    // `naive` directly" fallback were written assuming `naive` is always a
+    // real, verified one-raw-character step — true for `moveLeft`/
+    // `moveRight`, but `moveUp`/`moveDown` only ever compute a same-column
+    // GUESS (raw character count, blind to on-screen glyph width). Since
+    // `.sidekickHiddenMarker` runs render as ZERO-WIDTH glyphs
+    // (`MarkdownLayoutManager.setGlyphs` sets `.null` on them), a caret
+    // sitting on/after a hidden marker has a raw column that OVERCOUNTS its
+    // true visual column — trusting that raw count as a verified vertical
+    // target (as the pre-fix code did whenever the SOURCE line happened to
+    // contain any hidden marker before the caret) lands at the wrong
+    // on-screen position on perfectly ordinary navigation near any styled
+    // text, nothing to do with a divider. Fixed by an explicit
+    // `naiveIsVerifiedStep` parameter (`true` from the 4 horizontal
+    // callers, `false` from the 2 vertical ones) that fully disables both
+    // SOURCE-side conditions for `moveDown`/`moveUp`, restoring their
+    // pre-ticket-08 "guess, then discard in favor of `super`'s real
+    // glyph-based stepping unless the DESTINATION is managed" contract.
+    //
+    // This test's fixture is built so the divergence is provable without
+    // hardcoding font metrics: line 1 is `"**Bold** text"` (13 raw chars —
+    // 2 hidden opening `**` + 4 visible "Bold" + 2 hidden closing `**` + 5
+    // visible " text"); the caret starts at raw offset 6, ON the closing
+    // `**`'s hidden run (a real, valid resting spot — the run's own start
+    // boundary). That raw offset counts 2 invisible + 4 visible characters,
+    // so its TRUE on-screen column is "Bold"'s width (4 characters), not 6.
+    // Line 2 is a plain 16-character line with no hidden markers at all,
+    // so the pre-fix bug's naive same-raw-column guess (line 2's offset 6)
+    // necessarily sits at MORE on-screen width than "Bold" alone — any
+    // correct x-preserving vertical step must land strictly before it.
+    func test_down_fromHiddenMarkerSource_trustsSuperNotNaiveColumnGuess() {
+        let body = "**Bold** text\n0123456789ABCDEF"
+        XCTAssertEqual((body as NSString).substring(with: NSRange(location: 6, length: 2)), "**",
+                       "sanity: offset 6 must be the closing bold marker's hidden run")
+        let lineTwoStart = offset(of: "0123456789ABCDEF", in: body)
+        let buggyNaiveGuess = lineTwoStart + 6   // what the pre-fix code returned directly
+
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 6, length: 0))
+        let sourceX = glyphX(runner, at: 6)
+
+        runner.key(.down)
+
+        XCTAssertNotEqual(
+            runner.selection.location, buggyNaiveGuess,
+            "Down must not trust the raw-column guess as a verified step near a hidden marker"
+        )
+        XCTAssertLessThan(
+            runner.selection.location, buggyNaiveGuess,
+            "line 2 has no hidden characters, so any on-screen-x-preserving landing point must sit before the raw-column-6 guess (which counts 2 zero-width chars line 1 has and line 2 doesn't)"
+        )
+        XCTAssertGreaterThanOrEqual(runner.selection.location, lineTwoStart, "must still land on line 2")
+
+        // Belt-and-suspenders: the landing point's actual on-screen x should
+        // be close to the source caret's — proving real glyph-based
+        // vertical stepping ran, not a character-count copy. Tolerance is
+        // generous (one typical character advance) since this is a
+        // real-font measurement, not an exact pixel match.
+        let resultX = glyphX(runner, at: runner.selection.location)
+        XCTAssertLessThan(abs(resultX - sourceX), 20,
+                          "expected on-screen x to be preserved (source \(sourceX), result \(resultX))")
+    }
+
+    /// Mirrors the test above for `moveUp(_:)` (source line below, target
+    /// line above), same rationale.
+    func test_up_fromHiddenMarkerSource_trustsSuperNotNaiveColumnGuess() {
+        let body = "0123456789ABCDEF\n**Bold** text"
+        let lineTwoStart = offset(of: "**Bold** text", in: body)
+        let caretStart = lineTwoStart + 6   // ON the closing "**"'s hidden run
+        XCTAssertEqual((body as NSString).substring(with: NSRange(location: caretStart, length: 2)), "**",
+                       "sanity: offset must be the closing bold marker's hidden run")
+        let buggyNaiveGuess = 6   // what the pre-fix code returned directly, into line 1
+
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: caretStart, length: 0))
+        let sourceX = glyphX(runner, at: caretStart)
+
+        runner.key(.up)
+
+        XCTAssertNotEqual(
+            runner.selection.location, buggyNaiveGuess,
+            "Up must not trust the raw-column guess as a verified step near a hidden marker"
+        )
+        XCTAssertLessThan(
+            runner.selection.location, buggyNaiveGuess,
+            "line 1 has no hidden characters, so any on-screen-x-preserving landing point must sit before the raw-column-6 guess"
+        )
+        XCTAssertGreaterThanOrEqual(runner.selection.location, 0, "must still land on line 1")
+
+        let resultX = glyphX(runner, at: runner.selection.location)
+        XCTAssertLessThan(abs(resultX - sourceX), 20,
+                          "expected on-screen x to be preserved (source \(sourceX), result \(resultX))")
+    }
+
+    /// On-screen x-coordinate of the glyph at `location`, in the text
+    /// view's own coordinate space (line-fragment origin + intra-line glyph
+    /// offset) — same technique `ChecklistGapDoubleClickTests` uses to
+    /// compute a click point from a character index.
+    private func glyphX(_ runner: HostedEditorRunner, at location: Int) -> CGFloat {
+        let lm = runner.inner.layoutManager
+        let g = lm.glyphIndexForCharacter(at: location)
+        let frag = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
+        return frag.origin.x + lm.location(forGlyphAt: g).x
     }
 }

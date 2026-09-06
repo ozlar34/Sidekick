@@ -28,6 +28,30 @@ import AppKit
 // requirement motivating this ticket — that wrapping a shift-extended
 // word right after a divider touches only that word and leaves the
 // divider's `---` line byte-identical.
+//
+// Ticket 08 extends this file with the multi-divider shift-extend-overshoot
+// repro (`test_shiftRight_fromLineTerminator_multiDividerChain_exactRepro`)
+// and its Cmd+B-after-shift-extend follow-up. Root cause: on the step whose
+// naive one-character target lands exactly on the line terminator ending the
+// CURRENT (unmanaged) line, `correctedCaretTarget`'s gate never looked one
+// line ahead to see the FOLLOWING line was a divider, so it deferred to
+// `super.moveRightAndModifySelection(sender)` — which jumped the selection
+// past the entire `"\n---\n"` block in one step instead of stopping at the
+// terminator.
+//
+// Scope note (ticket 08): this file covers exactly `moveLeftAndModifySelection`/
+// `moveRightAndModifySelection`/`moveUpAndModifySelection`/
+// `moveDownAndModifySelection` near an HR/hidden-marker boundary — nothing
+// else. Deliberately NOT covered/verified: word-jump modify-selection
+// variants (`moveWordLeftAndModifySelection:`/`moveWordRightAndModifySelection:`,
+// Option+Shift+Arrow) and line/paragraph/document jump modify-selection
+// variants (Cmd+Shift+Arrow/Home/End) — plausibly share the same root cause
+// but were never tested; a future bug report there is not necessarily a
+// regression of this fix. `performWrap`/`applyMarkdownWrap` in
+// `FormattingToolbarView.swift` was investigated and ruled out as not
+// independently buggy — given a correct selection it produces correct output
+// every time; the divider-corruption symptom traced to the shift-extend
+// overshoot this ticket (08) fixes, not to the wrap logic.
 @MainActor
 final class ShiftExtendArrowKeysTests: XCTestCase {
 
@@ -635,5 +659,106 @@ final class ShiftExtendArrowKeysTests: XCTestCase {
         runner.key(.shiftDown)
         XCTAssertEqual(runner.selection.location, 0, "Anchor must not move on the post-correction plain step")
         runner.assertSelection(NSRange(location: 0, length: offset(of: "line3", in: body)))
+    }
+
+    // MARK: - Ticket 08: exact multi-divider repro from
+    // `.scratch/hr-adjacent-caret-movement/PLAN.md` (same fixture
+    // `PlainArrowMoveAcrossDividerTests.test_up_silentlyFailsToMove_exactRepro`
+    // and `test_right_fromHiddenMarkerSource_multiDividerChain_exactRepro`
+    // use).
+
+    private let multiDividerBody = "Test1\n---\nTest2\n---\n*Test3*\n---\n*Test4*"
+
+    /// Confirmed-live-broken case: 5 consecutive Shift+Right presses from
+    /// the start of "Test2" (offset 10) grew the selection 1, 2, 3, 4, then
+    /// OVERSHOT to 9 on the 5th press instead of stopping at 5 — swallowing
+    /// the following divider's `"\n---"` instead of stopping right before
+    /// it. Root cause: the 5th press's naive one-character target (15) lands
+    /// exactly on the `\n` terminating "Test2"'s own (unmanaged) line — the
+    /// gate never looked one line ahead to see the FOLLOWING line (16,
+    /// "---") was a divider, so it deferred to
+    /// `super.moveRightAndModifySelection(sender)`, whose native extension
+    /// jumped the whole `"\n---\n"` block in one step.
+    func test_shiftRight_fromLineTerminator_multiDividerChain_exactRepro() {
+        let start = 10
+        XCTAssertEqual((multiDividerBody as NSString).substring(with: NSRange(location: 10, length: 5)), "Test2")
+        let runner = HostedEditorRunner(initialBody: multiDividerBody, initialSelection: NSRange(location: start, length: 0))
+        let expectedLengths = [1, 2, 3, 4, 5]
+        for expected in expectedLengths {
+            runner.key(.shiftRight)
+            runner.assertSelection(NSRange(location: start, length: expected))
+        }
+        runner.assertSelection(NSRange(location: 10, length: 5))
+    }
+
+    /// Follow-on from the repro above: Cmd+B applied to the CORRECT `(10,5)`
+    /// selection must wrap only "Test2" — `**Test2**` — leaving every
+    /// divider byte-identical. Before the ticket-08 fix, the over-extended
+    /// `(10,9)` selection from the bug above would have wrapped
+    /// `"Test2\n---"` instead, corrupting the divider; that was never a
+    /// separate wrap-logic bug (see `assertWrapTouchesOnlySelectedWord`
+    /// above and this file's scope note) — fixing the selection here is
+    /// sufficient.
+    func test_wrapBold_afterShiftExtend_multiDividerChain_touchesOnlySelectedWord() {
+        let start = 10
+        let runner = HostedEditorRunner(initialBody: multiDividerBody, initialSelection: NSRange(location: start, length: 0))
+        for _ in 0..<5 { runner.key(.shiftRight) }
+        runner.assertSelection(NSRange(location: start, length: 5))
+
+        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: runner.inner.textView)
+
+        runner.assertBody("Test1\n---\n**Test2**\n---\n*Test3*\n---\n*Test4*")
+    }
+
+    /// Symmetric backward direction: Shift+Left from the end of "Test3"
+    /// (offset 26, right before its own closing hidden `*`) growing
+    /// backward across the SAME kind of boundary this file's forward repro
+    /// covers. Included per ticket 08's brief to check whether
+    /// `moveLeftAndModifySelection` is vulnerable to the same overshoot —
+    /// it is not: NSString's line-terminator convention attaches a
+    /// terminator to the line it ENDS, so a backward-moving naive step that
+    /// lands on a terminator already belongs to the line it's leaving (caught
+    /// directly by the existing "naive's own line is managed" check) — no
+    /// one-line-lookahead gap exists in this direction. This locks in that
+    /// non-vulnerability rather than asserting a fix.
+    func test_shiftLeft_fromWithinLine_multiDividerChain_noOvershoot() {
+        let start = 26
+        XCTAssertEqual((multiDividerBody as NSString).substring(with: NSRange(location: 21, length: 5)), "Test3")
+        let runner = HostedEditorRunner(initialBody: multiDividerBody, initialSelection: NSRange(location: start, length: 0))
+        let expectedLengths = [1, 2, 3, 4, 5]
+        for expected in expectedLengths {
+            runner.key(.shiftLeft)
+            runner.assertSelection(NSRange(location: start - expected, length: expected))
+        }
+        runner.assertSelection(NSRange(location: 21, length: 5))
+        XCTAssertEqual((multiDividerBody as NSString).substring(with: runner.selection), "Test3")
+    }
+
+    // MARK: - Ticket 08 (standards-fix iteration): `moveDownAndModifySelection`/
+    // `moveUpAndModifySelection` share `stepExtension`'s `naiveIsVerifiedStep`
+    // gate with the plain vertical overrides — mirrors
+    // `PlainArrowMoveAcrossDividerTests.test_down_fromHiddenMarkerSource_trustsSuperNotNaiveColumnGuess`
+    // for the Shift+Down modify-selection path (same fixture, same
+    // rationale: a caret/edge sitting on a zero-width `.sidekickHiddenMarker`
+    // run must not have its raw column count trusted as a verified vertical
+    // step just because the SOURCE line happens to contain a hidden marker).
+
+    func test_shiftDown_fromHiddenMarkerSource_trustsSuperNotNaiveColumnGuess() {
+        let body = "**Bold** text\n0123456789ABCDEF"
+        XCTAssertEqual((body as NSString).substring(with: NSRange(location: 6, length: 2)), "**",
+                       "sanity: offset 6 must be the closing bold marker's hidden run")
+        let lineTwoStart = offset(of: "0123456789ABCDEF", in: body)
+        let buggyNaiveGuess = lineTwoStart + 6   // what the pre-fix code returned directly
+
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 6, length: 0))
+        runner.key(.shiftDown)
+
+        let edge = NSMaxRange(runner.selection)
+        XCTAssertEqual(runner.selection.location, 6, "anchor must stay at the caret's start")
+        XCTAssertNotEqual(edge, buggyNaiveGuess,
+                          "Shift+Down must not trust the raw-column guess as a verified step near a hidden marker")
+        XCTAssertLessThan(edge, buggyNaiveGuess,
+                          "line 2 has no hidden characters, so any on-screen-x-preserving edge must land before the raw-column-6 guess")
+        XCTAssertGreaterThanOrEqual(edge, lineTwoStart, "edge must still land on line 2")
     }
 }
