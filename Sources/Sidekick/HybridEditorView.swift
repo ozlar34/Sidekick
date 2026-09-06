@@ -560,6 +560,17 @@ class HybridTextView: NSTextView {
         super.setConstrainedFrameSize(size)
     }
 
+    /// Explicit direction of caret travel for the five snap-rescue helpers
+    /// below, mirroring `FormattingToolbarView.AtomicMarkerDeleteDirection`.
+    /// Every rescue used to infer this by comparing `target` against a
+    /// `previous` location it was handed; callers now compute it themselves
+    /// and pass it in — `setSelectedRanges` still derives it from its own
+    /// position comparison (`target > previous`), so behavior is unchanged
+    /// today, but a caller that already knows the direction (e.g. a future
+    /// keyboard override reacting to the arrow key pressed) no longer needs
+    /// to reconstruct it from two positions.
+    enum CaretSnapDirection { case forward, backward }
+
     /// Compute the position to snap a caret to when `target` lands on a
     /// thematic-break line. Returns `nil` if no snap is needed (target is
     /// not on an HR line, or the line is the entire document so there is
@@ -575,15 +586,19 @@ class HybridTextView: NSTextView {
     /// the line above or below keeps user mental model coherent (matches
     /// Bear / iA Writer).
     ///
-    /// Direction inferred from `previous`:
-    ///   * `target > previous` → caret moving forward, snap DOWN to the
-    ///     start of the line below HR.
-    ///   * `target ≤ previous` → moving backward, snap UP to the end of
-    ///     the line above HR.
+    /// `previous` is still needed here for the same-line exemption below —
+    /// unlike the other four rescues, this one has to know where the caret
+    /// WAS, not just which way it's headed. The caller-supplied `direction`
+    /// replaces the old `target > previous` ordering check for the
+    /// above/below tie-break:
+    ///   * `.forward` → caret moving forward, snap DOWN to the start of the
+    ///     line below HR.
+    ///   * `.backward` → moving backward, snap UP to the end of the line
+    ///     above HR.
     /// If only one neighbor exists, that wins regardless of direction.
     /// If neither exists (HR is the whole document), return `nil` and
     /// leave the caret alone — degenerate case, no good answer.
-    private func snapCaretOutOfHR(target: Int, previous: Int) -> Int? {
+    private func snapCaretOutOfHR(target: Int, previous: Int, direction: CaretSnapDirection) -> Int? {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target >= 0, target <= n else { return nil }
@@ -623,7 +638,7 @@ class HybridTextView: NSTextView {
             }
         }
 
-        return hrNeighborLocation(hrLineRange: lineRange, preferBelow: target > previous)
+        return hrNeighborLocation(hrLineRange: lineRange, preferBelow: direction == .forward)
     }
 
     /// Nearest inhabitable neighbor location for a caret leaving an HR line.
@@ -825,10 +840,10 @@ class HybridTextView: NSTextView {
     /// begins with the `- [ ] ` characters but did not parse as a task list
     /// carries no marker and is left freely editable.
     ///
-    /// Direction inferred from `previous` (mirrors `snapCaretOutOfHR`):
-    ///   * `target > previous` → moving forward, snap to content start (line+6)
-    ///   * `target ≤ previous` → moving backward, snap to line start (line+0)
-    private func snapCaretOutOfChecklistGap(target: Int, previous: Int) -> Int? {
+    /// Direction is caller-supplied (mirrors `snapCaretOutOfHR`):
+    ///   * `.forward` → moving forward, snap to content start (line+6)
+    ///   * `.backward` → moving backward, snap to line start (line+0)
+    private func snapCaretOutOfChecklistGap(target: Int, direction: CaretSnapDirection) -> Int? {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target >= 0, target <= n else { return nil }
@@ -845,7 +860,7 @@ class HybridTextView: NSTextView {
         let contentStart = lineRange.location + 6
         guard target > lineRange.location, target < contentStart else { return nil }
 
-        return target > previous ? contentStart : lineRange.location
+        return direction == .forward ? contentStart : lineRange.location
     }
 
     /// Compute the position to snap a caret to when `target` lands strictly
@@ -861,9 +876,9 @@ class HybridTextView: NSTextView {
     /// `.sidekickLinkChip` anchor — a combination unique to rendered link
     /// chips, so heading / list / emphasis hidden markers are left untouched.
     ///
-    /// Direction mirrors `snapCaretOutOfHR`: forward → run end, backward → run
-    /// start.
-    private func snapCaretOutOfLinkChip(target: Int, previous: Int) -> Int? {
+    /// Direction is caller-supplied (mirrors `snapCaretOutOfHR`): `.forward` →
+    /// run end, `.backward` → run start.
+    private func snapCaretOutOfLinkChip(target: Int, direction: CaretSnapDirection) -> Int? {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target > 0, target < n else { return nil }
@@ -901,7 +916,7 @@ class HybridTextView: NSTextView {
         guard target > chipStart else { return nil }
 
         let runEnd = runRange.location + runRange.length
-        return target > previous ? runEnd : chipStart
+        return direction == .forward ? runEnd : chipStart
     }
 
     /// Compute the position to snap a caret to when `target` lands inside the
@@ -919,9 +934,10 @@ class HybridTextView: NSTextView {
     /// construct), so `longestEffectiveRange` always yields precisely the
     /// tail's own bounds — no chip-anchor disambiguation needed here.
     ///
-    /// Direction mirrors `snapCaretOutOfHR`/`snapCaretOutOfChecklistGap`:
-    /// forward → tail end, backward → tail start.
-    private func snapCaretOutOfLinkTail(target: Int, previous: Int) -> Int? {
+    /// Direction is caller-supplied (mirrors `snapCaretOutOfHR` /
+    /// `snapCaretOutOfChecklistGap`): `.forward` → tail end, `.backward` →
+    /// tail start.
+    private func snapCaretOutOfLinkTail(target: Int, direction: CaretSnapDirection) -> Int? {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target > 0, target < n else { return nil }
@@ -937,7 +953,7 @@ class HybridTextView: NSTextView {
         let runEnd = runRange.location + runRange.length
         guard target > runRange.location, target < runEnd else { return nil }
 
-        return target > previous ? runEnd : runRange.location
+        return direction == .forward ? runEnd : runRange.location
     }
 
     /// Compute the position to snap a caret to when `target` lands strictly
@@ -979,9 +995,9 @@ class HybridTextView: NSTextView {
     /// is kept anyway as a direct, ordering-independent guard rather than an
     /// assumption.)
     ///
-    /// Direction mirrors the other four: forward → run end, backward → run
-    /// start.
-    private func snapCaretOutOfHiddenMarkerRun(target: Int, previous: Int) -> Int? {
+    /// Direction is caller-supplied (mirrors the other four): `.forward` →
+    /// run end, `.backward` → run start.
+    private func snapCaretOutOfHiddenMarkerRun(target: Int, direction: CaretSnapDirection) -> Int? {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target > 0, target < n else { return nil }
@@ -1029,7 +1045,7 @@ class HybridTextView: NSTextView {
             return nil
         }
 
-        return target > previous ? runEnd : runRange.location
+        return direction == .forward ? runEnd : runRange.location
     }
 
     /// Selection-change funnel — every keyboard, mouse, and programmatic
@@ -1072,6 +1088,7 @@ class HybridTextView: NSTextView {
            storage.length > 0 {
             let n = storage.length
             let previous = selectedRange().location
+            let direction: CaretSnapDirection = proposed.location > previous ? .forward : .backward
             // [11] Cheap gate before the three rescues: each recomputes lineRange
             // and the HR rescue enumerates the whole line, so running all three on
             // every caret move is wasteful. A zero-length caret only needs a
@@ -1095,11 +1112,11 @@ class HybridTextView: NSTextView {
             // on a leftover `.sidekickHiddenMarker` run — bold, strikethrough,
             // underline, or any other future marker pair. First non-nil wins.
             if nearManagedRegion,
-               let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfChecklistGap(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfLinkChip(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfLinkTail(target: proposed.location, previous: previous)
-                ?? snapCaretOutOfHiddenMarkerRun(target: proposed.location, previous: previous) {
+               let snapped = snapCaretOutOfHR(target: proposed.location, previous: previous, direction: direction)
+                ?? snapCaretOutOfChecklistGap(target: proposed.location, direction: direction)
+                ?? snapCaretOutOfLinkChip(target: proposed.location, direction: direction)
+                ?? snapCaretOutOfLinkTail(target: proposed.location, direction: direction)
+                ?? snapCaretOutOfHiddenMarkerRun(target: proposed.location, direction: direction) {
                 effectiveRanges = [NSValue(range: NSRange(location: snapped, length: 0))]
             }
         }
