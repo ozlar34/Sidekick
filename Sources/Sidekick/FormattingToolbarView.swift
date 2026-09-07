@@ -1145,10 +1145,9 @@ struct FormattingToolbarView: View {
         }
 
         // Adjacency predicate (D-02: inside the run also fires; D-08: symmetric,
-        // inclusive at both ends, identical for both directions). `dir` is kept
-        // in the signature to document call-site symmetry even though the body
-        // no longer branches on it.
-        func isAdjacent(_ markerRange: NSRange, _ caret: Int, _ dir: AtomicMarkerDeleteDirection) -> Bool {
+        // inclusive at both ends, identical for both directions — hence no
+        // direction parameter, unlike `isAdjacentBareURL` below).
+        func isAdjacent(_ markerRange: NSRange, _ caret: Int) -> Bool {
             return caret >= markerRange.location && caret <= markerRange.location + markerRange.length
         }
 
@@ -1182,39 +1181,44 @@ struct FormattingToolbarView: View {
         }
         var candidates: [Candidate] = []
 
-        // Shared candidate-builder for the four identical-shaped marker/content
-        // passes below (underline, bold, strikethrough, inline code, italic).
-        func addPairCandidate(openRange: NSRange, closeRange: NSRange, contentRange: NSRange) {
-            guard isAdjacent(openRange, caret, direction) || isAdjacent(closeRange, caret, direction) else { return }
-            let spanStart = openRange.location
-            let spanEnd   = closeRange.location + closeRange.length
+        // Shared Candidate constructor — every pass below resolves its own
+        // range shape down to a span + replacement, then builds the
+        // deleteRange/postCaret/Candidate the same way through here, so the
+        // three call sites (link, bare-URL, pair-shaped) stay uniform even
+        // though what feeds them differs.
+        func makeCandidate(spanStart: Int, spanEnd: Int, replacement: String) -> Candidate {
             let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-            let replacement = ns.substring(with: contentRange)
             let postCaret = spanStart + (replacement as NSString).length
-            candidates.append(Candidate(
+            return Candidate(
                 openStart: spanStart,
                 closeEnd: spanEnd,
                 result: AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+            )
+        }
+
+        // Shared candidate-builder for the five identical-shaped marker/content
+        // passes below (underline, bold, strikethrough, inline code, italic).
+        func addPairCandidate(openRange: NSRange, closeRange: NSRange, contentRange: NSRange) {
+            guard isAdjacent(openRange, caret) || isAdjacent(closeRange, caret) else { return }
+            candidates.append(makeCandidate(
+                spanStart: openRange.location,
+                spanEnd: closeRange.location + closeRange.length,
+                replacement: ns.substring(with: contentRange)
             ))
         }
 
         // 1. Link pass — highest priority (outer structure).
         for m in MarkdownInlineParser.findLinkRanges(in: body) {
-            let adjacentToMarker = isAdjacent(m.openBracketRange, caret, direction)
-                || isAdjacent(m.closeBracketRange, caret, direction)
-                || isAdjacent(m.openParenRange, caret, direction)
-                || isAdjacent(m.urlRange, caret, direction)
-                || isAdjacent(m.closeParenRange, caret, direction)
+            let adjacentToMarker = isAdjacent(m.openBracketRange, caret)
+                || isAdjacent(m.closeBracketRange, caret)
+                || isAdjacent(m.openParenRange, caret)
+                || isAdjacent(m.urlRange, caret)
+                || isAdjacent(m.closeParenRange, caret)
             if adjacentToMarker {
-                let spanStart = m.openBracketRange.location
-                let spanEnd   = m.closeParenRange.location + m.closeParenRange.length
-                let deleteRange = NSRange(location: spanStart, length: spanEnd - spanStart)
-                let replacement = ns.substring(with: m.labelRange)   // D-03: keep label only
-                let postCaret = spanStart + (replacement as NSString).length
-                candidates.append(Candidate(
-                    openStart: spanStart,
-                    closeEnd: spanEnd,
-                    result: AtomicMarkerDeleteResult(deleteRange: deleteRange, replacement: replacement, postCaret: postCaret)
+                candidates.append(makeCandidate(
+                    spanStart: m.openBracketRange.location,
+                    spanEnd: m.closeParenRange.location + m.closeParenRange.length,
+                    replacement: ns.substring(with: m.labelRange)   // D-03: keep label only
                 ))
             }
         }
@@ -1235,14 +1239,10 @@ struct FormattingToolbarView: View {
         //     (see that predicate's doc comment above).
         for urlRange in MarkdownInlineParser.findAutoLinkRanges(in: body) {
             if isAdjacentBareURL(urlRange, caret, direction) {
-                candidates.append(Candidate(
-                    openStart: urlRange.location,
-                    closeEnd: urlRange.location + urlRange.length,
-                    result: AtomicMarkerDeleteResult(
-                        deleteRange: urlRange,
-                        replacement: "",
-                        postCaret: urlRange.location
-                    )
+                candidates.append(makeCandidate(
+                    spanStart: urlRange.location,
+                    spanEnd: urlRange.location + urlRange.length,
+                    replacement: ""
                 ))
             }
         }
