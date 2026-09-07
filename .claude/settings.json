@@ -1,6 +1,5 @@
 {
   "disabledMcpjsonServers": [
-    "notebooklm-mcp",
     "notion",
     "gmail",
     "google-calendar",
