@@ -1,3 +1,19 @@
+/// `FormattingToolbarView` — the markdown formatting toolbar and its popover.
+///
+/// This file holds the view struct, its `body`, and the private subviews
+/// (button, popover trigger, popover, paragraph-style row). The static
+/// formatting logic is split across extensions:
+///   * `FormattingToolbarView+InlineFormatting.swift` — `applyMarkdownWrap`,
+///     inline-kind detection, armed-wrap helpers, `performWrap`.
+///   * `FormattingToolbarView+BlockTransforms.swift` — `LinePrefix` detection
+///     and the pure block-format string transforms.
+///   * `FormattingToolbarView+BlockCommands.swift` — the `perform*` NSTextView
+///     block commands, checklist click toggle, thematic-break insert.
+///   * `FormattingToolbarView+AtomicMarkerDelete.swift` — atomic marker delete
+///     and its Backspace / forward-delete handlers.
+///   * `FormattingToolbarView+KeyHandlers.swift` — Return / Backspace /
+///     forward-delete list and HR handlers, plus `lineContentEnd`.
+
 import AppKit
 import SwiftUI
 
