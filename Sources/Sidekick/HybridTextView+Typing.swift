@@ -168,11 +168,10 @@ extension HybridTextView {
         // If `lineEnd < storage.length` there is already content (or at least
         // a `\n`) below — the escape is not needed and must not fire.
         guard lineEnd == storage.length else { return }
-        // Double-check: the line must NOT already end with `\n` (which would
-        // mean there IS a line below and `lineEnd == storage.length` was a
-        // coincidence of the trailing-newline inclusive lineRange).
-        let lastChar = ns.character(at: lineEnd - 1)
-        guard lastChar != 0x0A && lastChar != 0x0D else { return }
+        // Double-check: the line must NOT already end with a line terminator
+        // (which would mean there IS a line below and `lineEnd == storage.length`
+        // was a coincidence of the trailing-newline inclusive lineRange).
+        guard FormattingToolbarView.lineContentEnd(lineRange, in: ns) == lineEnd else { return }
 
         // Append a single `\n` at the end of the document via the undo-safe
         // shouldChangeText/replaceCharacters/didChangeText sandwich.
@@ -217,12 +216,8 @@ extension HybridTextView {
         let lineRange = ns.lineRange(for: sel)
         guard lineRange.length > 0 else { return false }
 
-        // Strip any trailing newline to get the visible content of the line.
-        var contentLength = lineRange.length
-        if contentLength > 0 {
-            let lastChar = ns.character(at: lineRange.location + contentLength - 1)
-            if lastChar == 0x0A || lastChar == 0x0D { contentLength -= 1 }
-        }
+        // Strip any trailing line terminator to get the visible content of the line.
+        let contentLength = FormattingToolbarView.lineContentEnd(lineRange, in: ns) - lineRange.location
         guard contentLength > 0 else { return false }
         let lineContent = ns.substring(with: NSRange(location: lineRange.location, length: contentLength))
 
