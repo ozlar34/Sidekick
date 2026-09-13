@@ -12,8 +12,8 @@ Package.resolved
 .claude/scheduled_tasks.lock
 .claude/agent-memory/
 
-# GSD planning workspace (local-only)
-.planning/
+# Archived history (local-only)
+.archive/
 
 # Debug harness (local-only)
 Scripts/debug-harness/__pycache__/

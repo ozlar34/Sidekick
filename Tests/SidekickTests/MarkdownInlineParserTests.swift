@@ -7,7 +7,6 @@ import XCTest
 /// deterministically on any CI.
 ///
 /// Pattern source: FormattingToolbarTests.swift (pure-function XCTest style).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-T-01.
 final class MarkdownInlineParserTests: XCTestCase {
 
     // MARK: - Bold happy path

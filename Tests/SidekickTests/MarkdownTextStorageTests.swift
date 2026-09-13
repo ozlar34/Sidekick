@@ -11,8 +11,6 @@ import AppKit
 ///     that's layout-manager territory and harder to test window-less)
 ///
 /// Pattern source: PerformWrapTests.swift (windowless AppKit + @MainActor).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md
-///   D-T-02, D-T-03, D-T-04.
 @MainActor
 final class MarkdownTextStorageTests: XCTestCase {
 

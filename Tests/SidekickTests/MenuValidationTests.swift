@@ -14,8 +14,7 @@ import AppKit
 ///
 /// Positive cases (enabled when panel visible AND selection AND editor is
 /// first responder) require a live NSPanel + NSTextView fixture which is
-/// impractical for XCTest — those are covered by the manual checklist in
-/// `.planning/phases/08-menu-bar-keyboard-shortcuts/08-VALIDATION.md`.
+/// impractical for XCTest — those are verified manually.
 @MainActor
 final class MenuValidationTests: XCTestCase {
 

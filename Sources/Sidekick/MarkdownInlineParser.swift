@@ -8,7 +8,6 @@
 ///
 /// Pattern source: FormattingToolbarView.applyMarkdownWrap (static-funcs-on-
 /// a-type + UTF-16 discipline at Sources/Sidekick/FormattingToolbarView.swift:87-127).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-PS-01, D-PS-05, D-MH-04.
 import Foundation
 
 // MARK: - Result types

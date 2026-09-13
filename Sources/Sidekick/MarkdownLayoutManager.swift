@@ -10,7 +10,6 @@
 /// the hidden markers like any other character. No setSelectedRange override.
 ///
 /// Pattern source: Apple "Text System Architecture" — setGlyphs override pattern.
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-MH-01, D-MH-02, D-MH-03.
 import AppKit
 import CoreText
 

@@ -15,12 +15,12 @@
 /// Pattern source: FormattingToolbarView.swift (UTF-16 discipline + NSString
 /// line/paragraph arithmetic), PerformWrapTests.swift (windowless AppKit test
 /// pattern — used by the companion test file).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md
-///   D-ES-02 (storage owns both text + attributes),
-///   D-PS-02 (paragraph-range + fence-expansion reparse),
-///   D-PS-03 (fenced code block as paragraph-style block),
-///   D-MH-02 (.sidekickHiddenMarker attribute key),
-///   D-T-03 (byte-identical round trip).
+/// Design decisions:
+///   - storage owns both text + attributes
+///   - paragraph-range + fence-expansion reparse
+///   - fenced code block as paragraph-style block
+///   - .sidekickHiddenMarker attribute key
+///   - byte-identical round trip
 import AppKit
 
 final class MarkdownTextStorage: NSTextStorage {

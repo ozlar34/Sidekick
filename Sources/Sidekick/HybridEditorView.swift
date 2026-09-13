@@ -15,8 +15,6 @@
 /// Pattern source: ResizeHandleView.swift (NSViewRepresentable + final-class
 /// AppKit wrapper), FormattingToolbarView.swift (NSTextView edit-sandwich —
 /// we don't re-implement but must not break it).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md
-///   D-ES-01, D-ES-03, D-ES-04, D-ST-01, D-ST-02.
 import AppKit
 import SwiftUI
 
