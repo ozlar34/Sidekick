@@ -413,6 +413,19 @@ final class MarkdownTextStorageTests: XCTestCase {
                       "blockquote content must be italicized")
     }
 
+    func test_blockQuoteContent_crlf_excludesCarriageReturn() {
+        // Regression: on "> quoted\r\n" the "\r" at index 8 used to be styled
+        // as blockquote content.
+        let storage = makeStorage("> quoted\r\n")
+        let lastContent = storage.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(lastContent, NSColor.secondaryLabelColor, "'d' at index 7 is still content")
+        let cr = storage.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? NSColor
+        XCTAssertNotEqual(cr, NSColor.secondaryLabelColor, "'\\r' at index 8 must not be tinted as content")
+        let crFont = storage.attribute(.font, at: 8, effectiveRange: nil) as? NSFont
+        XCTAssertFalse(crFont?.fontDescriptor.symbolicTraits.contains(.italic) == true,
+                       "'\\r' at index 8 must not be italicized as content")
+    }
+
     func test_explicitH1_paragraphSpacing_survivesEditOnLaterLine() {
         let storage = makeStorage("# Title\n\npara 2\n\npara 3")
         let styleBefore = storage.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle

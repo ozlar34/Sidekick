@@ -995,13 +995,7 @@ struct FormattingToolbarView: View {
 
         let lineRange = nsBody.lineRange(for: selection)
         // Strip trailing newline for content inspection.
-        var lineEnd = lineRange.location + lineRange.length
-        if lineEnd > lineRange.location {
-            let lastChar = nsBody.character(at: lineEnd - 1)
-            if lastChar == 0x0A /* \n */ || lastChar == 0x0D /* \r */ {
-                lineEnd -= 1
-            }
-        }
+        let lineEnd = lineContentEnd(lineRange, in: nsBody)
         let lineLen = lineEnd - lineRange.location
         guard lineLen >= 6 else { return false }
         let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
@@ -1372,11 +1366,7 @@ struct FormattingToolbarView: View {
 
         // Caret-only — Paths A and B collapse to one branch.
         let lineRange = nsBody.lineRange(for: selection)
-        var lineEnd = lineRange.location + lineRange.length
-        if lineEnd > lineRange.location {
-            let lastChar = nsBody.character(at: lineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
-        }
+        let lineEnd = lineContentEnd(lineRange, in: nsBody)
         let lineLen = lineEnd - lineRange.location
         guard lineLen >= 6 else { return false }
         let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
@@ -1410,11 +1400,7 @@ struct FormattingToolbarView: View {
         guard selection.length == 0 else { return false }   // selections handled by Backspace path
 
         let lineRange = nsBody.lineRange(for: selection)
-        var lineEnd = lineRange.location + lineRange.length
-        if lineEnd > lineRange.location {
-            let lastChar = nsBody.character(at: lineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D { lineEnd -= 1 }
-        }
+        let lineEnd = lineContentEnd(lineRange, in: nsBody)
         let lineLen = lineEnd - lineRange.location
         guard lineLen >= 6 else { return false }
         let prefix = nsBody.substring(with: NSRange(location: lineRange.location, length: 6))
@@ -1470,11 +1456,7 @@ struct FormattingToolbarView: View {
 
         // Guard: caret's own line must be EMPTY (content length 0, i.e. only a
         // newline terminator or end-of-doc) AND caret must be at line start.
-        var caretLineEnd = caretLine.location + caretLine.length
-        if caretLineEnd > caretLine.location {
-            let lastChar = nsBody.character(at: caretLineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
-        }
+        let caretLineEnd = lineContentEnd(caretLine, in: nsBody)
         let contentLen = caretLineEnd - caretLine.location
         // Fire at the START of the line directly below an HR — empty or not.
         guard selection.location == caretLine.location else { return false }
@@ -1530,11 +1512,7 @@ struct FormattingToolbarView: View {
         let caretLine = nsBody.lineRange(for: selection)
 
         // Guard: caret's own line must be EMPTY.
-        var caretLineEnd = caretLine.location + caretLine.length
-        if caretLineEnd > caretLine.location {
-            let lastChar = nsBody.character(at: caretLineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D { caretLineEnd -= 1 }
-        }
+        let caretLineEnd = lineContentEnd(caretLine, in: nsBody)
         let contentLen = caretLineEnd - caretLine.location
         // Fire at the END of the line directly above an HR — empty or not. (For
         // an empty line, caretLineEnd == line start, so this still holds.)
@@ -1579,13 +1557,7 @@ struct FormattingToolbarView: View {
         guard selection.length == 0 else { return false }
 
         let lineRange = nsBody.lineRange(for: selection)
-        var lineEnd = lineRange.location + lineRange.length
-        if lineEnd > lineRange.location {
-            let lastChar = nsBody.character(at: lineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D {
-                lineEnd -= 1
-            }
-        }
+        let lineEnd = lineContentEnd(lineRange, in: nsBody)
         let lineLen = lineEnd - lineRange.location
         guard lineLen >= 2 else { return false }
         let first = nsBody.character(at: lineRange.location)
@@ -1640,13 +1612,7 @@ struct FormattingToolbarView: View {
         guard selection.length == 0 else { return false }
 
         let lineRange = nsBody.lineRange(for: selection)
-        var lineEnd = lineRange.location + lineRange.length
-        if lineEnd > lineRange.location {
-            let lastChar = nsBody.character(at: lineEnd - 1)
-            if lastChar == 0x0A || lastChar == 0x0D {
-                lineEnd -= 1
-            }
-        }
+        let lineEnd = lineContentEnd(lineRange, in: nsBody)
         let lineLen = lineEnd - lineRange.location
         guard lineLen >= 3 else { return false }
 
@@ -2472,5 +2438,14 @@ private struct ParagraphStyleRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+}
+
+extension FormattingToolbarView {
+    /// End of `lineRange`'s content, excluding its terminator (`\n`, `\r` or `\r\n`).
+    static func lineContentEnd(_ lineRange: NSRange, in ns: NSString) -> Int {
+        var contentsEnd = 0
+        ns.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: lineRange.location, length: 0))
+        return contentsEnd
     }
 }

@@ -509,15 +509,12 @@ enum MarkdownInlineParser {
         ns.substring(with: trimTrailingNewline(lineRange, in: ns))
     }
 
-    /// Returns `lineRange` with a trailing `\n` or `\r` stripped (if present).
+    /// Returns `lineRange` with its trailing `\r\n`, `\n` or `\r` stripped (if present).
     private static func trimTrailingNewline(_ lineRange: NSRange, in ns: NSString) -> NSRange {
-        guard lineRange.length > 0 else { return lineRange }
-        let lastIdx = lineRange.location + lineRange.length - 1
-        let last = ns.substring(with: NSRange(location: lastIdx, length: 1))
-        if last == "\n" || last == "\r" {
-            return NSRange(location: lineRange.location, length: lineRange.length - 1)
-        }
-        return lineRange
+        var length = lineRange.length
+        if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0A /* \n */ { length -= 1 }
+        if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0D /* \r */ { length -= 1 }
+        return NSRange(location: lineRange.location, length: length)
     }
 
     private static func isPipeLine(_ line: String) -> Bool {

@@ -473,16 +473,10 @@ final class MarkdownTextStorage: NSTextStorage {
             backing.addAttribute(.paragraphStyle, value: Self.blockQuoteParagraphStyle, range: lineRange)
 
             // Content is everything after `> ` on this line, excluding the
-            // trailing newline if present.
+            // line terminator (`\n`, `\r` or `\r\n`).
             let contentStart = shifted.location + shifted.length
-            let lineEnd = lineRange.location + lineRange.length
-            var contentEnd = lineEnd
-            if contentEnd > contentStart {
-                let lastChar = (backing.string as NSString).character(at: contentEnd - 1)
-                if lastChar == 0x0A /* \n */ || lastChar == 0x0D /* \r */ {
-                    contentEnd -= 1
-                }
-            }
+            var contentEnd = 0
+            (backing.string as NSString).getLineStart(nil, end: nil, contentsEnd: &contentEnd, for: shifted)
             let contentLen = max(0, contentEnd - contentStart)
             guard contentLen > 0 else { continue }
             let contentRange = NSRange(location: contentStart, length: contentLen)

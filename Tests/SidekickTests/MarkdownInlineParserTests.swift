@@ -581,17 +581,13 @@ final class MarkdownInlineParserTests: XCTestCase {
         XCTAssertTrue(matches[1].isChecked)
     }
 
-    func test_checklist_crlf_trailingCarriageReturnLeaksIntoContent_quirk() {
-        // DO NOT "fix" silently: only ONE line-ending char is trimmed when
-        // computing matchLength (see hasTrailingNewline / matchLength in
-        // findChecklistPrefixes), so a CRLF line's trailing "\r" is NOT
-        // stripped and ends up inside contentRange. Pinning the current
-        // (arguably wrong, but unchanged) behavior.
+    func test_checklist_crlf_contentExcludesCarriageReturn() {
+        // Regression: a CRLF line used to keep its "\r" inside contentRange.
         let body = "- [ ] a\r\n"
         let matches = MarkdownInlineParser.findChecklistPrefixes(in: body)
         XCTAssertEqual(matches.count, 1)
-        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 2),
-                       "quirk: content is 'a\\r' (2 units) — the CRLF's \\r leaks into content")
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 1),
+                       "content is 'a' only — the CRLF terminator is excluded")
         XCTAssertFalse(matches[0].isChecked)
     }
 
