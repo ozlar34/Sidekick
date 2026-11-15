@@ -9,7 +9,13 @@ struct EditorPaneView: View {
 
     @State private var localTitle: String = ""
     @State private var localBody: String = ""
-    @State private var debouncer = Debouncer(interval: 0.5)
+    /// The latest edit whose save has not landed yet (scheduled or in flight).
+    private struct PendingEdit: Equatable {
+        let id: UUID
+        let title: String
+        let body: String
+    }
+    @State private var pendingEdit: PendingEdit?
     @Environment(\.setDocumentEdited) private var setDocumentEdited
 
     // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
@@ -204,15 +210,25 @@ struct EditorPaneView: View {
             autoReloadIfSafe()
         }
         .onChange(of: note.id) { _, _ in
+            // Save the old note's pending edit now instead of letting the
+            // next note's keystrokes replace it in the shared debouncer.
+            // An edit for the note we are returning to is kept pending and
+            // re-seeded below, since the store's copy may not have caught up.
+            let returning = pendingEdit?.id == note.id ? pendingEdit : nil
+            if returning == nil {
+                let autosave = store.autosave
+                Task { await autosave.flush() }
+            }
             // EDIT-02 echo guard: bump the push token BEFORE reseeding
             // localBody so HybridEditorView.updateNSView sees the advanced
             // token and classifies the new body as a genuine external push.
             editorController.externalPushToken += 1
-            localTitle = note.title
-            localBody = note.body
+            localTitle = returning?.title ?? note.title
+            localBody = returning?.body ?? note.body
             diskWriteError = false
-            // Freshly-mounted note has no unsaved local edits yet.
-            hasPendingEdits = false
+            // Freshly-mounted note has no unsaved local edits yet, unless its
+            // last edit is still being saved.
+            hasPendingEdits = returning != nil
             seedFocusForCurrentNote()
             autoReloadIfSafe()
         }
@@ -229,13 +245,18 @@ struct EditorPaneView: View {
         hasPendingEdits = true
 
         let id = note.id
+        let edit = PendingEdit(id: id, title: title, body: body)
+        pendingEdit = edit
         let editedSetter = setDocumentEdited
         let storeRef = store
         Task {
-            await debouncer.schedule {
+            await storeRef.autosave.schedule {
                 do {
                     try await storeRef.update(id, title: title, body: body)
                     await MainActor.run {
+                        // A newer edit (this note or another) owns the flags.
+                        guard pendingEdit == edit else { return }
+                        pendingEdit = nil
                         editedSetter(false)
                         hasPendingEdits = false
                     }

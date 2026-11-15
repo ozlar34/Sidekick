@@ -45,6 +45,36 @@ final class DebounceTests: XCTestCase {
         XCTAssertEqual(value, 0)
     }
 
+    func testFlush_RunsPendingWorkImmediately() async throws {
+        let debouncer = Debouncer(interval: 5)  // would never fire on its own in this test
+        let counter = Counter()
+        await debouncer.schedule { await counter.increment() }
+        await debouncer.flush()
+        let value = await counter.value
+        XCTAssertEqual(value, 1, "flush() must run the pending work and wait for it")
+    }
+
+    func testFlush_RunsWorkOnlyOnce() async throws {
+        let debouncer = Debouncer(interval: 0.05)
+        let counter = Counter()
+        await debouncer.schedule { await counter.increment() }
+        await debouncer.flush()
+        try await Task.sleep(nanoseconds: 150_000_000)  // past the original interval
+        let value = await counter.value
+        XCTAssertEqual(value, 1, "the cancelled timer must not run the work a second time")
+    }
+
+    func testFlush_WithNothingPendingIsNoOp() async throws {
+        let debouncer = Debouncer(interval: 0.05)
+        let counter = Counter()
+        await debouncer.flush()
+        await debouncer.schedule { await counter.increment() }
+        await debouncer.cancel()
+        await debouncer.flush()
+        let value = await counter.value
+        XCTAssertEqual(value, 0, "a cancelled schedule is not resurrected by flush()")
+    }
+
     // Test helper actor
     actor Counter {
         private(set) var value: Int = 0
