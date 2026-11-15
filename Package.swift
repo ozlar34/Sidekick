@@ -17,6 +17,16 @@ let package = Package(
             ],
             path: "Sources/Sidekick"
         ),
+        // Pure note-document module: Foundation only. The app does not depend on it yet.
+        .target(
+            name: "NoteDocument",
+            path: "Sources/NoteDocument"
+        ),
+        .testTarget(
+            name: "NoteDocumentTests",
+            dependencies: ["NoteDocument"],
+            path: "Tests/NoteDocumentTests"
+        ),
         .testTarget(
             name: "SidekickTests",
             dependencies: ["Sidekick"],

@@ -1,0 +1,56 @@
+import Foundation
+
+/// Fixed corpus for the markdown-in / markdown-out seam. Extend by appending to `synthetic`
+/// (shapes of real notes; never paste private note content) or by adding a file to
+/// `Scripts/debug-harness/fixtures/`. Every entry is also run with CRLF line endings and with
+/// the final newline removed, see `all`.
+enum Corpus {
+    struct Entry { let name: String; let text: String }
+
+    static let synthetic: [Entry] = [
+        .init(name: "empty", text: ""),
+        .init(name: "only-newlines", text: "\n\n\n"),
+        .init(name: "single-line-no-newline", text: "just one line"),
+        .init(name: "title-and-paragraphs", text: "# Weekly sync\n\nFirst paragraph with **bold** text.\nSecond line right below.\n\n## Agenda\n\nSomething __else__ here.\n"),
+        .init(name: "all-heading-levels", text: "# one\n## two\n### three\n#### four\n##### five\n###### six\n####### seven is text\n"),
+        .init(name: "heading-spacing", text: "#   wide gap\n#\ttab\n#\n# \n#nospace\n  # indented\n"),
+        .init(name: "bold-forms", text: "**a** __b__ **a****b** ** not bold** **not bold ** ***x*** __ __ a**b**c\n"),
+        .init(name: "escapes", text: "\\*literal\\* snake_case \\_ \\\\ \\# trailing\\\n\\# not a heading\n\\\\# also text\n"),
+        .init(name: "unsupported-literals", text: "- bullet\n* star bullet\n1. numbered\n- [ ] todo\n- [x] done\n> quote\n---\n***\n![img](x.png)\n<div>html</div>\n[^1]: footnote\n[ref]: http://example.com\nSetext\n======\n"),
+        .init(name: "code-fence", text: "```swift\n# comment\nlet x = **y**\n```\nafter\n"),
+        .init(name: "table", text: "| a | b |\n|---|---|\n| **1** | 2 |\n"),
+        .init(name: "urls-and-links", text: "see https://example.com/a_b_c and [label](http://x.y/__z__) now\n"),
+        .init(name: "unicode", text: "# Caf\u{e9} e\u{301} \u{1F44D}\u{1F3FD} \u{4E2D}\u{6587}\n**\u{1F600}** \u{FEFF}bom-ish\n"),
+        .init(name: "whitespace-edges", text: "trailing spaces   \n\ttabbed\n   \n"),
+        .init(name: "lone-cr", text: "a\rb\r\nc\r"),
+        .init(name: "mixed-endings", text: "a\r\nb\nc\r\n\nd"),
+        .init(name: "trailing-blank-lines", text: "x\n\n\n"),
+        .init(name: "long-line", text: String(repeating: "word **w** ", count: 2000) + "\n"),
+    ]
+
+    /// Existing fixtures of the debug harness (real-shaped, no private content).
+    static func fixtures() -> [Entry] {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Scripts/debug-harness/fixtures")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.sorted() ?? []
+        return names.filter { $0.hasSuffix(".md") }.compactMap { name in
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(name)),
+                  let text = String(data: data, encoding: .utf8) else { return nil }
+            return Entry(name: "fixture/\(name)", text: text)
+        }
+    }
+
+    /// Base entries plus a CRLF variant and a no-final-newline variant of each.
+    static var all: [Entry] {
+        var out: [Entry] = []
+        for e in synthetic + fixtures() {
+            out.append(e)
+            out.append(.init(name: e.name + " [crlf]", text: e.text.replacingOccurrences(of: "\n", with: "\r\n")))
+            if e.text.hasSuffix("\n") {
+                out.append(.init(name: e.name + " [no-final-newline]", text: String(e.text.dropLast())))
+            }
+        }
+        return out
+    }
+}
