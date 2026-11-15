@@ -280,7 +280,9 @@ extension HybridTextView {
             super.moveRight(sender)
             return
         }
-        setSelectedRange(NSRange(location: corrected, length: 0))
+        // A rescue that lands on a line start (e.g. across a divider) goes
+        // on past a hidden opening marker there, as AppKit's own step does.
+        setSelectedRange(NSRange(location: hiddenPrefixEnd(ifLineStartAt: corrected) ?? corrected, length: 0))
     }
 
     /// Override of `NSResponder.moveLeft(_:)` — fired by the Left arrow key.
@@ -348,13 +350,16 @@ extension HybridTextView {
     /// AppKit's stepping, which can move against the key there. Forward with
     /// no line below appends one (A3 rule); backward with no line above
     /// stays. A forward landing on a checklist line start goes on to its
-    /// content start, as `moveRight` does. Returns `false` when `source` is
+    /// content start, and one on a hidden line prefix (`*`, `# `) goes past
+    /// it, as `moveRight` does. Returns `false` when `source` is
     /// not on a divider, so the caller's normal path runs.
     private func moveOffHRRun(from source: Int, direction: CaretSnapDirection) -> Bool {
         guard let exit = hrRunExit(from: source, direction: direction) else { return false }
         switch exit {
         case .neighbor(let location):
-            let landing = direction == .forward ? (checklistContentStart(ifLineStartAt: location) ?? location) : location
+            let landing = direction == .forward
+                ? (checklistContentStart(ifLineStartAt: location) ?? hiddenPrefixEnd(ifLineStartAt: location) ?? location)
+                : location
             setSelectedRange(NSRange(location: landing, length: 0))
         case .appendBelow:
             appendLineBelowTrailingHR()

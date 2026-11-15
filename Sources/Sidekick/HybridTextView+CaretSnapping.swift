@@ -404,6 +404,34 @@ extension HybridTextView {
         return location + 6
     }
 
+    /// End of the zero-width hidden marker run (italic/bold opener, heading
+    /// `# `, link `[`) that BEGINS the line at `location`, or `nil` when
+    /// `location` is not such a line start. A caret before that run sits at
+    /// the same on-screen point as a caret after it, and typing there lands
+    /// outside the styling. AppKit's own Right step across a line break
+    /// already skips the run; this lets the divider-crossing paths do the
+    /// same. Divider lines, link chips (they draw a pill) and checklists
+    /// (`checklistContentStart`) are left to their own rules.
+    func hiddenPrefixEnd(ifLineStartAt location: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard location >= 0, location < n else { return nil }
+        let ns = storage.string as NSString
+        var lineStart = 0, contentsEnd = 0
+        ns.getLineStart(&lineStart, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
+        guard lineStart == location, contentsEnd > location else { return nil }
+        let line = NSRange(location: location, length: contentsEnd - location)
+        let attrs = storage.attributes(at: location, effectiveRange: nil)
+        guard attrs[.sidekickHiddenMarker] != nil,
+              attrs[.sidekickThematicBreak] == nil,
+              attrs[.sidekickLinkChip] == nil,
+              attrs[.sidekickChecklistMarker] == nil else { return nil }
+        var run = NSRange(location: NSNotFound, length: 0)
+        _ = storage.attribute(.sidekickHiddenMarker, at: location, longestEffectiveRange: &run, in: line)
+        let end = run.location + run.length
+        return end > location ? end : nil
+    }
+
     /// Compute the position to snap a caret to when `target` lands strictly
     /// INSIDE a collapsed link-chip run — a bare URL, or a `[url](url)` chip
     /// whose characters all carry `.sidekickHiddenMarker` and render as a
