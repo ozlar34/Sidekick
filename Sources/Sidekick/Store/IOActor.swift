@@ -11,9 +11,16 @@ import Foundation
 actor IOActor {
 
     let folder: URL
+    /// Moves a file to the Trash. Tests inject a plain removal so they never touch the real Trash.
+    private let trash: @Sendable (URL) throws -> Void
 
-    init(folder: URL) {
+    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil) {
         self.folder = folder
+        self.trash = trash ?? { url in
+            var resultURL: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
+            NSLog("[Sidekick] trashed \(url.lastPathComponent) → \(resultURL?.path ?? "?")")
+        }
     }
 
     // MARK: - Notes
@@ -24,6 +31,17 @@ actor IOActor {
         // .atomic writes to a sibling temp file and rename(2)s into place.
         // Single watcher event; no partial-write window.
         try data.write(to: url, options: [.atomic])
+    }
+
+    /// Atomic write that only happens when the file's current bytes equal `baseline`. When
+    /// `newFilename` differs the note moves there, and the old file goes after the new one is in place.
+    /// Throws `NoteStoreError.conflict` (and writes nothing) when the file changed or is gone.
+    func writeConditional(_ data: Data, filename: String, newFilename: String, baseline: Data) throws {
+        let url = folder.appendingPathComponent(filename)
+        guard let current = try? Data(contentsOf: url), current == baseline else { throw NoteStoreError.conflict }
+        let target = folder.appendingPathComponent(newFilename)
+        try data.write(to: target, options: [.atomic])
+        if newFilename != filename { try FileManager.default.removeItem(at: url) }
     }
 
     func readNote(filename: String) throws -> String {
@@ -44,9 +62,7 @@ actor IOActor {
 
     func trashNote(filename: String) throws {
         let url = folder.appendingPathComponent(filename)
-        var resultURL: NSURL?
-        try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
-        NSLog("[Sidekick] trashed \(filename) → \(resultURL?.path ?? "?")")
+        try trash(url)
     }
 
     func renameNote(oldFilename: String, newFilename: String) throws {

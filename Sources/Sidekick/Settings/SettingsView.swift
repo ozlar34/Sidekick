@@ -138,6 +138,13 @@ struct SettingsView: View {
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url {
             notesFolder = url.path
+            // Take effect now: the running store moves to the new folder (pending saves go to the old one first).
+            if let store = (NSApp.delegate as? AppDelegate)?.store {
+                Task {
+                    do { try await store.applyNotesFolderSetting(url.path) }
+                    catch { NSLog("[Sidekick] settings folder rebind failed: \(error.localizedDescription)") }
+                }
+            }
         }
     }
 

@@ -12,6 +12,32 @@ import Dispatch
 /// IMPORTANT: watches the *parent directory*, never individual files, because
 /// atomic writes replace the file inode and destroy per-file watchers.
 /// See RESEARCH.md Anti-Patterns.
+/// What the watcher compares between two looks at the folder: per `.md` file, its change time and size.
+enum FolderSnapshot {
+    struct Stamp: Equatable {
+        let mtime: Date
+        let size: Int
+    }
+
+    static func take(_ folder: URL) -> [String: Stamp] {
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys,
+                                                                 options: [.skipsHiddenFiles])) ?? []
+        var result: [String: Stamp] = [:]
+        for url in urls where url.pathExtension == "md" {
+            let v = try? url.resourceValues(forKeys: Set(keys))
+            guard v?.isRegularFile == true else { continue }
+            result[url.lastPathComponent] = Stamp(mtime: v?.contentModificationDate ?? .distantPast, size: v?.fileSize ?? 0)
+        }
+        return result
+    }
+
+    /// Files added, removed or changed between two snapshots.
+    static func changedFiles(from old: [String: Stamp], to new: [String: Stamp]) -> Set<String> {
+        Set(old.keys).union(new.keys).filter { old[$0] != new[$0] }
+    }
+}
+
 final class FolderWatcher {
 
     // MARK: - Public API
@@ -25,6 +51,7 @@ final class FolderWatcher {
     private var source: DispatchSourceFileSystemObject?
     private var fd: Int32 = -1
     private var debounceWorkItem: DispatchWorkItem?
+    private var snapshot: [String: FolderSnapshot.Stamp] = [:]
     private var continuation: AsyncStream<FolderEvent>.Continuation?
     private let debounce: DispatchTimeInterval = .milliseconds(150)  // RESEARCH.md Pattern 1 — 150ms coalesces atomic-write burst
 
@@ -37,6 +64,7 @@ final class FolderWatcher {
     }
 
     func start() throws {
+        snapshot = FolderSnapshot.take(url)
         fd = open(url.path, O_EVTONLY)
         guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
 
@@ -67,7 +95,13 @@ final class FolderWatcher {
     private func scheduleEmit() {
         debounceWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            self?.continuation?.yield(.mayHaveChanged)
+            // Runs on `queue`, like every other touch of `snapshot`.
+            guard let self else { return }
+            let now = FolderSnapshot.take(self.url)
+            let changed = FolderSnapshot.changedFiles(from: self.snapshot, to: now)
+            self.snapshot = now
+            // A folder that vanished or was renamed shows as every file gone: still a change.
+            if !changed.isEmpty { self.continuation?.yield(.filesChanged(changed)) }
         }
         debounceWorkItem = work
         queue.asyncAfter(deadline: .now() + debounce, execute: work)

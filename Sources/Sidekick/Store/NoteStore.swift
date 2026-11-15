@@ -27,7 +27,16 @@ final class NoteStore: ObservableObject {
     /// Open notes of this session, by note id. A note's undo history lives as long as its entry.
     private var openNotes: [UUID: OpenNote] = [:]
 
+    /// Notes whose last save failed for a reason other than a conflict (disk error, note unknown to the
+    /// store), until a save of that note succeeds. The pane shows the retry message while this is not
+    /// empty, so a failure of a note that is no longer shown is still reported.
+    @Published private(set) var failedSaveIDs: Set<UUID> = []
+
     private var folder: URL
+    /// The folder the store is bound to.
+    var notesFolderURL: URL { folder }
+    private let persistFolder: (URL) -> Void
+    private let trash: (@Sendable (URL) throws -> Void)?
     private var io: IOActor
     private var watcher: FolderWatcher
     private var watcherTask: Task<Void, Never>?
@@ -49,14 +58,18 @@ final class NoteStore: ObservableObject {
     ///   - startWatcherImmediately: Pass `false` to skip FSEvent watcher
     ///     spin-up. Production callers always use the default `true`.
     ///     DEBUG preview fixtures pass `false` per D-PF-04.
-    init(folder: URL, startWatcherImmediately: Bool = true) throws {
+    init(folder: URL, startWatcherImmediately: Bool = true,
+         trash: (@Sendable (URL) throws -> Void)? = nil,
+         persistFolder: ((URL) -> Void)? = nil) throws {
         try FileManager.default.createDirectory(
             at: folder,
             withIntermediateDirectories: true,
             attributes: nil
         )
         self.folder = folder
-        self.io = IOActor(folder: folder)
+        self.trash = trash
+        self.persistFolder = persistFolder ?? { Defaults.store.set($0.path, forKey: Defaults.notesFolder) }
+        self.io = IOActor(folder: folder, trash: trash)
         self.watcher = FolderWatcher(url: folder)
 
         var cont: AsyncStream<ChangeEvent>.Continuation!
@@ -98,8 +111,17 @@ final class NoteStore: ObservableObject {
         if let existing = openNotes[id] { return existing }
         guard let note = notes.first(where: { $0.id == id }) else { return nil }
         let open = OpenNote(id: id, title: note.title, fileURL: folder.appendingPathComponent(note.filename),
-                            scheduler: scheduler) { [weak self] title, body in
-            try await self?.update(id, title: title, body: body)
+                            scheduler: scheduler) { [weak self] title, body, baseline in
+            guard let self else { throw NoteStoreError.unknownNote }
+            do {
+                try await self.save(id, title: title, body: body, baseline: baseline)
+                self.failedSaveIDs.remove(id)
+            } catch NoteStoreError.conflict {
+                throw NoteStoreError.conflict          // the conflict banner reports it, not the retry message
+            } catch {
+                self.failedSaveIDs.insert(id)
+                throw error
+            }
         }
         openNotes[id] = open
         return open
@@ -110,7 +132,36 @@ final class NoteStore: ObservableObject {
         for open in Array(openNotes.values) { await open.flush() }
     }
 
+    /// Retries every note whose last save failed.
+    func retryFailedSaves() async {
+        for id in failedSaveIDs {
+            if let open = openNotes[id] { await open.retrySave() } else { failedSaveIDs.remove(id) }
+        }
+    }
+
+    // MARK: - Serial queue
+
+    /// Tail of the queue of folder operations. Each operation waits for the one before it, so list,
+    /// create, rename, delete, pin, reorder, save and reconcile never interleave at their `await`s.
+    /// An operation must not call another gated operation (it would wait for itself): gated methods
+    /// are thin wrappers around `...Impl` bodies that only call `Impl` bodies.
+    private var queueTail: Task<Void, Never>?
+
+    private func serialized<T>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        let previous = queueTail
+        let run = Task { @MainActor () async -> Result<T, Error> in
+            await previous?.value
+            do { return .success(try await operation()) } catch { return .failure(error) }
+        }
+        queueTail = Task { _ = await run.value }
+        return try await run.value.get()
+    }
+
     func create() async throws -> Note {
+        try await serialized { try await self.createImpl() }
+    }
+
+    private func createImpl() async throws -> Note {
         let id = UUID()
         let uuid8 = String(id.uuidString.prefix(8)).lowercased()
         let filename = "untitled-\(uuid8).md"
@@ -138,9 +189,21 @@ final class NoteStore: ObservableObject {
         return note
     }
 
+    /// Unconditional save used by the old editor, which has no disk baseline.
     func update(_ id: UUID, title: String, body: String) async throws {
+        try await serialized { try await self.updateImpl(id, title: title, body: body, baseline: nil) }
+    }
+
+    /// Conditional save: `baseline` is the exact bytes the caller last read from or wrote to the file.
+    /// When the file's bytes differ (or the file is gone) nothing is written and `.conflict` is thrown.
+    /// A note the store does not know throws `.unknownNote`.
+    func save(_ id: UUID, title: String, body: String, baseline: Data) async throws {
+        try await serialized { try await self.updateImpl(id, title: title, body: body, baseline: baseline) }
+    }
+
+    private func updateImpl(_ id: UUID, title: String, body: String, baseline: Data?) async throws {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
-        guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
+        guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { throw NoteStoreError.unknownNote }
 
         var entry = currentIndex.notes[entryIdx]
         let oldFilename = entry.filename
@@ -156,25 +219,32 @@ final class NoteStore: ObservableObject {
             }
         }
 
-        // Persist title + filename if either changed.
-        if newFilename != oldFilename || titleChanged {
-            if newFilename != oldFilename {
-                try await io.renameNote(oldFilename: oldFilename, newFilename: newFilename)
+        if let baseline {
+            // Check and write in one step: a changed file is never replaced, and nothing is renamed.
+            try await io.writeConditional(Data(body.utf8), filename: oldFilename, newFilename: newFilename, baseline: baseline)
+            if newFilename != oldFilename || titleChanged {
                 entry.filename = newFilename
+                entry.title = title
+                currentIndex.notes[entryIdx] = entry
+                try await io.saveIndex(currentIndex)
             }
-            entry.title = title
-            currentIndex.notes[entryIdx] = entry
-            try await io.saveIndex(currentIndex)
+        } else {
+            // Persist title + filename if either changed.
+            if newFilename != oldFilename || titleChanged {
+                if newFilename != oldFilename {
+                    try await io.renameNote(oldFilename: oldFilename, newFilename: newFilename)
+                    entry.filename = newFilename
+                }
+                entry.title = title
+                currentIndex.notes[entryIdx] = entry
+                try await io.saveIndex(currentIndex)
+            }
+            try await io.writeNote(body, filename: newFilename)
         }
 
-        // Record the authored baseline BEFORE writing so the watcher event this
-        // write triggers can't see a divergence (the in-flight-write race). If we
-        // recorded it after the write, a watcher tick landing during io.writeNote
-        // would compare disk (new) against a stale baseline and flag falsely.
+        // Every operation is serial, so the watcher event this write triggers is handled after this
+        // point and sees the authored baseline.
         lastAuthoredBodyByID[id] = body
-
-        // Write body to disk.
-        try await io.writeNote(body, filename: newFilename)
 
         openNotes[id]?.fileURL = folder.appendingPathComponent(newFilename)
 
@@ -188,6 +258,10 @@ final class NoteStore: ObservableObject {
     }
 
     func delete(_ id: UUID) async throws {
+        try await serialized { try await self.deleteImpl(id) }
+    }
+
+    private func deleteImpl(_ id: UUID) async throws {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
         guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
         let filename = currentIndex.notes[entryIdx].filename
@@ -203,12 +277,17 @@ final class NoteStore: ObservableObject {
 
         notes.removeAll { $0.id == id }
         openNotes[id] = nil
+        failedSaveIDs.remove(id)
         lastAuthoredBodyByID[id] = nil
         // Re-sort to maintain dense order.
         notes.sort { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
     }
 
     func reloadNote(id: UUID) async {
+        _ = try? await serialized { await self.reloadNoteImpl(id: id) }
+    }
+
+    private func reloadNoteImpl(id: UUID) async {
         guard let index = await io.loadIndex(),
               let entry = index.notes.first(where: { $0.id == id }) else { return }
         do {
@@ -229,6 +308,10 @@ final class NoteStore: ObservableObject {
     }
 
     func setPinned(_ id: UUID, _ pinned: Bool) async throws {
+        try await serialized { try await self.setPinnedImpl(id, pinned) }
+    }
+
+    private func setPinnedImpl(_ id: UUID, _ pinned: Bool) async throws {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
         guard let entryIdx = currentIndex.notes.firstIndex(where: { $0.id == id }) else { return }
         currentIndex.notes[entryIdx].pinned = pinned
@@ -240,6 +323,10 @@ final class NoteStore: ObservableObject {
     }
 
     func reorder(_ ids: [UUID]) async throws {
+        try await serialized { try await self.reorderImpl(ids) }
+    }
+
+    private func reorderImpl(_ ids: [UUID]) async throws {
         var currentIndex = await io.loadIndex() ?? NoteIndex(version: 1, notes: [])
 
         // Re-order entries to match provided ids sequence.
@@ -266,6 +353,11 @@ final class NoteStore: ObservableObject {
     }
 
     func reload() async {
+        _ = try? await serialized { await self.reloadImpl(changedFiles: nil) }
+    }
+
+    /// `changedFiles` (from the watcher) limits which note files are read again; `nil` reads them all.
+    private func reloadImpl(changedFiles: Set<String>?) async {
         // Folder-deletion recovery (RESEARCH Pitfall 2):
         // If the notes folder was deleted, publish folderMissing=true so the UI
         // can react, then recreate it and restart the watcher (T-02-09 mitigation).
@@ -292,7 +384,7 @@ final class NoteStore: ObservableObject {
         let existingIndex = await io.loadIndex()
         let (newIndex, changed) = reconcile(snapshot: snapshot, index: existingIndex)
         if changed { try? await io.saveIndex(newIndex) }
-        await applyIndex(newIndex)
+        await applyIndex(newIndex, changedFiles: changedFiles)
     }
 
     /// G-06: Repoint this NoteStore at a new folder URL without destroying
@@ -301,9 +393,17 @@ final class NoteStore: ObservableObject {
     /// to work. Also writes UserDefaults inside rebind so the two sources
     /// of truth (UserDefaults[notesFolder], self.folder) cannot drift.
     func rebind(to newFolder: URL) async throws {
-        // 0. Pending saves belong to the old folder: write them there first.
+        // 0. Pending saves belong to the old folder: write them there first. Each save is its own
+        //    queued operation, so they all run before the rebind below.
         await flushOpenNotes()
+        try await serialized { try await self.rebindImpl(to: newFolder) }
+    }
+
+    private func rebindImpl(to newFolder: URL) async throws {
         openNotes.removeAll()
+        failedSaveIDs = []
+        externallyChangedIDs = []
+        lastAuthoredBodyByID = [:]
 
         // 1. Stop the existing watcher and cancel its consumer task.
         watcherTask?.cancel()
@@ -320,41 +420,56 @@ final class NoteStore: ObservableObject {
         // 3. Rebuild the downstream collaborators pointing at newFolder.
         //    IOActor.folder is `let`, so we reconstruct rather than mutate.
         self.folder = newFolder
-        self.io = IOActor(folder: newFolder)
+        self.io = IOActor(folder: newFolder, trash: trash)
         self.watcher = FolderWatcher(url: newFolder)
 
-        // 4. Persist the new path to UserDefaults — inside the rebind —
-        //    so there is only one source of truth for "where notes live."
-        Defaults.store.set(newFolder.path, forKey: Defaults.notesFolder)
+        // 4. Persist the new path — inside the rebind — so there is only one source of truth
+        //    for "where notes live."
+        persistFolder(newFolder)
 
         // 5. Restart watcher + reload notes from the new folder.
         startWatcher()
-        await reload()
+        await reloadImpl(changedFiles: nil)
+    }
+
+    /// Settings changed the notes folder: bind the running store to it now. An empty path means the
+    /// default location; the folder the store already uses changes nothing.
+    func applyNotesFolderSetting(_ path: String) async throws {
+        let target = path.isEmpty ? StorageLocation.defaultNotesFolder : URL(fileURLWithPath: path)
+        guard target.resolvingSymlinksInPath().path != folder.resolvingSymlinksInPath().path else { return }
+        try await rebind(to: target)
     }
 
     // MARK: - Reconciliation
 
-    private func handleExternalChange() async {
-        // Snapshot current ids to diff AFTER reconcile for externalChanges emission.
-        let beforeIds = Set(self.notes.map(\.id))
-        await self.reload()
-        let afterIds = Set(self.notes.map(\.id))
-        let afterBodiesByID = Dictionary(uniqueKeysWithValues: self.notes.map { ($0.id, $0.body) })
+    /// The watcher reported these files. Reconciles the folder, then tells each affected note: an open
+    /// note reloads silently when it has no unsaved edits and raises its conflict banner otherwise;
+    /// a note without an open note is flagged in `externallyChangedIDs` (old editor).
+    func handleExternalChange(files: Set<String>) async {
+        let changedIDs: Set<UUID> = (try? await serialized { await self.reconcileAfterExternalChange(files: files) }) ?? []
+        // Outside the queue: an open note waits for its own running save, and that save is queued.
+        var flagged: Set<UUID> = []
+        for id in changedIDs {
+            if let open = openNotes[id] { await open.externalChange() } else { flagged.insert(id) }
+        }
+        if !flagged.isEmpty {
+            externallyChangedIDs.formUnion(flagged)
+            changesContinuation?.yield(.externalModification(ids: flagged))
+        }
+    }
 
-        // ids that appeared OR disappeared OR changed body
+    private func reconcileAfterExternalChange(files: Set<String>) async -> Set<UUID> {
+        let beforeIds = Set(self.notes.map(\.id))
+        await self.reloadImpl(changedFiles: files)
+        let afterIds = Set(self.notes.map(\.id))
+
         var changedIDs = beforeIds.symmetricDifference(afterIds)
-        for id in beforeIds.intersection(afterIds) {
-            // Echo-suppression: a body counts as externally changed only when
-            // disk diverges from what the app itself last authored. The earlier
-            // approach diffed the live in-memory body before/after reload, which
-            // raced with in-flight self-writes and produced the spurious banner;
-            // the authored baseline is timing-independent.
-            if afterBodiesByID[id] != lastAuthoredBodyByID[id] { changedIDs.insert(id) }
+        for note in self.notes where beforeIds.contains(note.id) && files.contains(note.filename) {
+            // Echo-suppression: a body counts as externally changed only when disk diverges from what
+            // the app itself last authored.
+            if note.body != lastAuthoredBodyByID[note.id] { changedIDs.insert(note.id) }
         }
-        if !changedIDs.isEmpty {
-            externallyChangedIDs.formUnion(changedIDs)
-            changesContinuation?.yield(.externalModification(ids: changedIDs))
-        }
+        return changedIDs
     }
 
     func acknowledgeExternalChange(id: UUID) {
@@ -373,11 +488,10 @@ final class NoteStore: ObservableObject {
         self.watcherTask?.cancel()
         self.watcherTask = Task { [weak self] in
             guard let self else { return }
-            for await _ in self.watcher.events {
-                // External filesystem change detected — reconcile and emit.
-                // Per RESEARCH §Pattern 2 and Anti-Patterns, we don't try to
-                // diff individual events; always run a full reconcile.
-                await self.handleExternalChange()
+            for await event in self.watcher.events {
+                // The watcher names the files that changed; the store reconciles and tells those notes.
+                guard case .filesChanged(let files) = event else { continue }
+                await self.handleExternalChange(files: files)
             }
         }
     }
@@ -390,7 +504,7 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Internal helpers
 
-    private func applyIndex(_ index: NoteIndex) async {
+    private func applyIndex(_ index: NoteIndex, changedFiles: Set<String>? = nil) async {
         var materialized: [Note] = []
         var migratedIndex = index
         var didMigrate = false
@@ -400,11 +514,19 @@ final class NoteStore: ObservableObject {
             // "" only for a genuinely new/unreadable note. Prevents a transient
             // read error from zeroing the model and then propagating "" to disk
             // on the next save. Mirrors reloadNote's guard.
-            let body = (try? await io.readNote(filename: entry.filename))
-                ?? lastAuthoredBodyByID[entry.id]
-                ?? notes.first(where: { $0.id == entry.id })?.body
-                ?? ""
-            let modified = await io.mtime(filename: entry.filename)
+            // A file the watcher did not report keeps the body already in memory (no re-read).
+            let unchanged = changedFiles.map { !$0.contains(entry.filename) } ?? false
+            let known = unchanged ? notes.first(where: { $0.id == entry.id && $0.filename == entry.filename }) : nil
+            let body: String
+            if let kept = known?.body {
+                body = kept
+            } else if let read = try? await io.readNote(filename: entry.filename) {
+                body = read
+            } else {
+                body = lastAuthoredBodyByID[entry.id] ?? notes.first(where: { $0.id == entry.id })?.body ?? ""
+            }
+            let modified: Date?
+            if let kept = known { modified = kept.modified } else { modified = await io.mtime(filename: entry.filename) }
             // Seed the echo-suppression baseline for notes the app is adopting
             // for the first time (initial load, rebind, or a newly-discovered
             // external create). Already-tracked ids are left untouched so a

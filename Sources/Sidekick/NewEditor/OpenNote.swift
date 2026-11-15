@@ -46,8 +46,9 @@ final class OpenNote: ObservableObject {
         case unreadable(message: String)
     }
 
-    /// Writes title and markdown to the notes folder (the store's `update`).
-    typealias Save = (_ title: String, _ markdown: String) async throws -> Void
+    /// Writes title and markdown to the notes folder (the store's conditional `save`). `baseline` is the
+    /// file's bytes as this note last read or wrote them; the store refuses with `.conflict` when they differ.
+    typealias Save = (_ title: String, _ markdown: String, _ baseline: Data) async throws -> Void
 
     let id: UUID
     let content: NoteContent
@@ -60,6 +61,10 @@ final class OpenNote: ObservableObject {
     /// True after a save failed, until a save succeeds. The note stays dirty meanwhile.
     @Published private(set) var saveFailed = false
 
+    /// True while the file on disk was changed by another process and this note has unsaved edits: the
+    /// banner offers `reload()` and `keepMine()`. Nothing is written while it is set.
+    @Published private(set) var hasConflict = false
+
     /// Called when `isDirty` changes (the panel's unsaved dot).
     var onDirtyChange: ((Bool) -> Void)?
     /// Called when a save fails (the "Could not save" message).
@@ -68,6 +73,7 @@ final class OpenNote: ObservableObject {
     private(set) var title: String
     /// Disk baseline: what the app last read from or wrote to the file.
     private var baselineMarkdown = ""
+    private var baselineData = Data()
     private var baselineTitle: String
     private let scheduler: SaveScheduling
     private let save: Save
@@ -92,6 +98,7 @@ final class OpenNote: ObservableObject {
     /// Reloads the note from its file (external change, explicit reload). Drops the undo history.
     func reload() {
         scheduler.cancel()
+        hasConflict = false
         loadFromDisk()
     }
 
@@ -103,6 +110,7 @@ final class OpenNote: ObservableObject {
                 return
             }
             baselineMarkdown = text
+            baselineData = data
             baselineTitle = title
             content.isEditable = true
             content.reload(markdown: text)
@@ -111,6 +119,22 @@ final class OpenNote: ObservableObject {
         } catch {
             enterUnreadable("\u{201C}\(fileURL.lastPathComponent)\u{201D} could not be read (\(error.localizedDescription)), so Sidekick shows it read-only and never changes it.")
         }
+    }
+
+    /// The watcher saw this note's file change. Unsaved edits: raise the conflict banner. None: reload
+    /// silently. Bytes equal to the baseline are the echo of this note's own save and mean nothing.
+    func externalChange() async {
+        await inFlight?.value
+        guard case .editable = state, let onDisk = try? Data(contentsOf: fileURL), onDisk != baselineData else { return }
+        if isDirty { hasConflict = true } else { reload() }
+    }
+
+    /// "Keep mine": accept the file as it is now as the baseline and save this note's text over it.
+    func keepMine() async {
+        guard case .editable = state else { return }
+        if let onDisk = try? Data(contentsOf: fileURL) { baselineData = onDisk }
+        hasConflict = false
+        await flush()
     }
 
     private func enterUnreadable(_ message: String) {
@@ -167,14 +191,19 @@ final class OpenNote: ObservableObject {
     }
 
     private func writeIfNeeded() async {
-        guard case .editable = state else { return }
+        guard case .editable = state, !hasConflict else { return }
         let text = markdown, currentTitle = title
         guard text != baselineMarkdown || currentTitle != baselineTitle else { return }
         do {
-            try await save(currentTitle, text)
+            try await save(currentTitle, text, baselineData)
+            baselineData = Data(text.utf8)
             baselineMarkdown = text
             baselineTitle = currentTitle
             saveFailed = false
+        } catch NoteStoreError.conflict {
+            NSLog("[Sidekick] \(fileURL.lastPathComponent) changed on disk since it was loaded; save refused")
+            hasConflict = true
+            return
         } catch {
             NSLog("[Sidekick] save failed for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             saveFailed = true

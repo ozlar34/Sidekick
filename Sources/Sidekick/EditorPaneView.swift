@@ -77,26 +77,18 @@ struct EditorPaneView: View {
             // edits (reloading would discard them). The safe case auto-reloads
             // silently via autoReloadIfSafe(). A closing Divider separates the
             // strip from the title zone so it doesn't crowd the rounded panel top.
-            if showExternalChangeBanner {
+            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+                ConflictBannerView(openNote: open)
+            } else if showExternalChangeBanner {
                 VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.orange)
-                        Text("File changed on disk")
-                            .font(.system(size: 13))
-                        Text("— Reload discards your unsaved edits")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Reload") {
-                            Task { await reloadFromDisk() }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.yellow.opacity(0.12))
+                    ExternalChangeBannerContent(
+                        reload: { Task { await reloadFromDisk() } },
+                        keepMine: {
+                            // The old editor has no disk baseline: acknowledging the change and saving
+                            // again writes this note's text over the file.
+                            store.acknowledgeExternalChange(id: note.id)
+                            scheduleAutoSave(title: localTitle, body: localBody)
+                        })
                     Divider()
                 }
             }
@@ -195,7 +187,7 @@ struct EditorPaneView: View {
             // Disk-write failure toast (REL-01) — bottom of editor. A top
             // Divider separates it from the footer, mirroring the external-edit
             // banner treatment at the top of the pane.
-            if diskWriteError {
+            if diskWriteError || (NewEditorSwitch.isOn && !store.failedSaveIDs.isEmpty) {
                 VStack(spacing: 0) {
                     Divider()
                     HStack(spacing: 8) {
@@ -206,8 +198,9 @@ struct EditorPaneView: View {
                         Spacer()
                         Button("Retry") {
                             diskWriteError = false
-                            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
-                                Task { await open.retrySave() }
+                            if NewEditorSwitch.isOn {
+                                // Every note whose save failed, not only the one shown.
+                                Task { await store.retryFailedSaves() }
                             } else {
                                 scheduleAutoSave(title: localTitle, body: localBody)
                             }
@@ -358,23 +351,16 @@ struct EditorPaneView: View {
         Task { await reloadFromDisk() }
     }
 
-    /// New editor: listen to the current open note's dirty and save-failure reports.
+    /// New editor: listen to the current open note's dirty reports. Save failures are not bound per
+    /// note: the store keeps them (`failedSaveIDs`), so a failure of a note that is no longer shown
+    /// still reaches the retry message.
     private func bindOpenNote() {
         boundOpenNote?.onDirtyChange = nil
-        boundOpenNote?.onSaveFailure = nil
         guard let open = store.openNote(note.id) else { boundOpenNote = nil; return }
         let setter = setDocumentEdited
         open.onDirtyChange = { dirty in
             setter(dirty)
             hasPendingEdits = dirty
-        }
-        open.onSaveFailure = {
-            diskWriteError = true
-            setter(false)
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                diskWriteError = false
-            }
         }
         boundOpenNote = open
         setter(open.isDirty)
@@ -461,4 +447,46 @@ struct EditorPaneView: View {
         FormattingToolbarView.performInsertThematicBreak(in: tv)
     }
 
+}
+
+/// "File changed on disk" strip with both choices.
+private struct ExternalChangeBannerContent: View {
+    let reload: () -> Void
+    let keepMine: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+            Text("File changed on disk")
+                .font(.system(size: 13))
+            Text("— Reload discards your unsaved edits")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Keep mine", action: keepMine)
+            Button("Reload", action: reload)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.yellow.opacity(0.12))
+    }
+}
+
+/// New editor: the banner follows the open note's conflict state (changed on disk, unsaved edits).
+private struct ConflictBannerView: View {
+    @ObservedObject var openNote: OpenNote
+
+    var body: some View {
+        if openNote.hasConflict {
+            VStack(spacing: 0) {
+                ExternalChangeBannerContent(
+                    reload: { openNote.reload() },
+                    keepMine: { Task { await openNote.keepMine() } })
+                Divider()
+            }
+        }
+    }
 }

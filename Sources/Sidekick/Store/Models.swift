@@ -41,4 +41,12 @@ enum ChangeEvent: Equatable {
     case externalModification(ids: Set<UUID>)
 }
 
-enum FolderEvent { case mayHaveChanged }  // internal, used by plan 02-02 watcher
+/// What the folder watcher reports: the `.md` files that were added, removed or changed.
+enum FolderEvent { case filesChanged(Set<String>) }
+
+enum NoteStoreError: Error, Equatable {
+    /// The file on disk is not what the caller last read or wrote.
+    case conflict
+    /// The store has no note with this id.
+    case unknownNote
+}

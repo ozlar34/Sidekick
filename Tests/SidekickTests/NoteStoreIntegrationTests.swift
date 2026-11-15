@@ -469,25 +469,21 @@ final class NoteStoreIntegrationTests: XCTestCase {
     /// authored) must STILL be flagged, otherwise the conflict banner /
     /// auto-reload would never fire. This is the boundary echo-suppression must
     /// not cross.
+    /// Deterministic: no real watcher and no sleeps. The test plays the watcher's part and reports the
+    /// file itself, so the outcome never depends on FSEvents timing or machine load.
     func test_genuineExternalEdit_isStillFlagged() async throws {
         let tmp = TempFolder()
-        let store = try NoteStore(folder: tmp.url)
+        let store = try NoteStore(folder: tmp.url, startWatcherImmediately: false)
         let note = try await store.create()
         try await store.update(note.id, title: "Note", body: "original")
         let filename = try XCTUnwrap(store.notes.first?.filename)
 
-        // Settle the app's own writes (so they are not what gets detected).
-        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
-
         // Overwrite from "outside" with content the app never authored.
         let fileURL = tmp.url.appendingPathComponent(filename)
         try "edited by another app".write(to: fileURL, atomically: true, encoding: .utf8)
+        await store.handleExternalChange(files: [filename])
 
-        try await waitFor(
-            { store.externallyChangedIDs.contains(note.id) },
-            timeout: 3.0,
-            description: "externallyChangedIDs contains id after a genuine external edit"
-        )
+        XCTAssertTrue(store.externallyChangedIDs.contains(note.id))
         XCTAssertEqual(store.notes.first?.body, "edited by another app")
     }
 
@@ -497,17 +493,15 @@ final class NoteStoreIntegrationTests: XCTestCase {
     /// the authored baseline, not a body-vs-in-memory diff.
     func test_externalWriteIdenticalToAuthored_doesNotFlag() async throws {
         let tmp = TempFolder()
-        let store = try NoteStore(folder: tmp.url)
+        let store = try NoteStore(folder: tmp.url, startWatcherImmediately: false)
         let note = try await store.create()
         try await store.update(note.id, title: "Note", body: "same bytes")
         let filename = try XCTUnwrap(store.notes.first?.filename)
 
-        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
-
-        // Re-write the exact authored content from "outside".
+        // Re-write the exact authored content from "outside" and report the file.
         let fileURL = tmp.url.appendingPathComponent(filename)
         try "same bytes".write(to: fileURL, atomically: true, encoding: .utf8)
-        try await Task.sleep(nanoseconds: 400_000_000) // 400ms — past debounce
+        await store.handleExternalChange(files: [filename])
 
         XCTAssertTrue(store.externallyChangedIDs.isEmpty,
                       "Re-writing identical authored content must not be flagged")
