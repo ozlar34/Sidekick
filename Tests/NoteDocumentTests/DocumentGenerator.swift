@@ -8,39 +8,69 @@ struct DocumentGenerator {
     init(seed: UInt64) { rng = SeededRNG(seed: seed) }
 
     enum LineShape: CaseIterable {
-        case blank, paragraph, heading, literalOther, nasty
+        case blank, paragraph, heading, bullet, numbered, checklist, quote, divider, literalOther, nasty
     }
 
     mutating func int(_ n: Int) -> Int { Int(rng.next() % UInt64(n)) }
     mutating func pick<T>(_ xs: [T]) -> T { xs[int(xs.count)] }
 
     static let words = ["alpha", "beta", "gamma", "x", "snake_case", "a*b", "_", "*", "\\", "#", "##", "caf\u{e9}", "e\u{301}",
-                        "\u{1F600}", "\u{4E2D}", "- item", "> q", "1.", "[l](u)", "https://a.b/c_d", "__", "**", "\\*", "\\#", "\t", " "]
+                        "\u{1F600}", "\u{4E2D}", "- item", "> q", "1.", "[l](u)", "https://a.b/c_d", "__", "**", "\\*", "\\#", "\t", " ",
+                        "~", "~~", "`", "<u>", "</u>", "[", "]", "](", "http://x.y", "https://", "[ ] t", "---", "\\:", "!"]
 
     mutating func plainText() -> String {
         (0..<(1 + int(4))).map { _ in pick(Self.words) }.joined(separator: pick(["", " ", "  "]))
+    }
+
+    /// One inline piece in file spelling: plain text or one of the marks, sometimes nested.
+    mutating func piece(depth: Int = 0) -> String {
+        switch int(depth > 0 ? 6 : 14) {
+        case 0: return "**" + plainText() + "**"
+        case 1: return "__" + plainText() + "__"
+        case 2: let d = pick(["*", "_"]); return d + plainText() + d
+        case 3: return "<u>" + plainText() + "</u>"
+        case 4: return "~~" + plainText() + "~~"
+        case 5: return "`" + plainText() + "`"
+        case 6: return "[" + plainText() + "](" + pick(["http://x.y/z", "u", "", "a_b"]) + ")"
+        case 7: return pick(["https://a.b/c_d", "http://x.y", "https://e.f/g?h=1", "(https://x.y/z)"]) + pick(["", "", ".", ","])
+        case 8: let u = pick(["https://a.b", "http://x.y/z"]); return "[" + u + "](" + u + ")"
+        case 9, 10: // nested
+            let outer = pick(["**", "__", "*", "_", "~~"])
+            let close = outer
+            return outer + piece(depth: 1) + plainText() + piece(depth: 1) + close
+        case 11: return "<u>" + piece(depth: 1) + "</u>"
+        case 12: return "[" + piece(depth: 1) + "](u)"
+        default: return plainText() + pick(["", " "])
+        }
+    }
+
+    mutating func inline() -> String {
+        var s = ""
+        for _ in 0..<(1 + int(4)) { s += piece() + pick(["", "", " "]) }
+        return s
     }
 
     /// A line of markdown source (no terminator).
     mutating func line(_ shape: LineShape) -> String {
         switch shape {
         case .blank: return pick(["", "", "  ", "\t"])
-        case .paragraph:
-            var s = ""
-            for _ in 0..<(1 + int(4)) {
-                switch int(4) {
-                case 0: s += "**" + plainText() + "**"
-                case 1: s += "__" + plainText() + "__"
-                default: s += plainText() + pick(["", " "])
-                }
-            }
-            return s
+        case .paragraph: return inline()
         case .heading:
-            return String(repeating: "#", count: 1 + int(6)) + pick([" ", "  ", "\t", " "]) + line(.paragraph)
+            return String(repeating: "#", count: 1 + int(6)) + pick([" ", "  ", "\t", " "]) + inline()
+        case .bullet:
+            return pick(["", "", "  ", "\t"]) + pick(["-", "*"]) + pick([" ", " ", "  ", "\t"]) + inline()
+        case .numbered:
+            return pick(["", "", " "]) + String(1 + int(120)) + pick([".", ")"]) + pick([" ", " ", "  "]) + inline()
+        case .checklist:
+            return pick(["", "", "  "]) + pick(["-", "*"]) + " " + pick(["[ ]", "[x]", "[X]"]) + pick([" ", " ", "  "]) + inline()
+        case .quote:
+            return ">" + pick([" ", " ", "\t"]) + inline()
+        case .divider:
+            return pick(["", "", " "]) + pick(["---", "***", "___", "-----", "*****", "____"]) + pick(["", "", " "])
         case .literalOther:
-            return pick(["- [ ] todo", "* a", "1. one", "> quote", "---", "```", "| a | b |", "![i](x)", "<u>x</u>", "    indented", "  # indented"])
+            return pick(["```", "| a | b |", "![i](x)", "    indented", "  # indented", "+ plus", "-x", "1.x", ">x", "- [ ]x", "- []", "* * *", "- - -", "--", "<div>", "[^1]: n"])
         case .nasty:
-            return pick(["** **", "**", "****", "___", "\\#", "\\\\#", "# ", "#", "#######", "**a **b** c**", "a\\", "**a\\**"])
+            return pick(["** **", "**", "****", "___", "\\#", "\\\\#", "# ", "#", "#######", "**a **b** c**", "a\\", "**a\\**", "***a**", "***a*", "**a***b*", "*a***b**", "*a **b***", "_a_b_", "- ", "> ", "1. ", "- [ ] ", "\\- x", "\\\\- x", "~~a~b~~", "[a](b", "[a]()", "<u>a</u", "`a``b`"])
         }
     }
 
@@ -59,21 +89,59 @@ struct DocumentGenerator {
         return out
     }
 
-    mutating func runs() -> [Run] {
-        (0..<int(5)).map { _ in
-            Run(plainText(), bold: pick([nil, nil, BoldDelimiter.asterisks, BoldDelimiter.underscores]))
+    mutating func run() -> Run {
+        var r = Run(plainText())
+        if int(3) == 0 { r.bold = pick([BoldDelimiter.asterisks, .underscores]) }
+        if int(4) == 0 { r.italic = pick([ItalicDelimiter.asterisk, .underscore]) }
+        if int(6) == 0 { r.underline = true }
+        if int(6) == 0 { r.strikethrough = true }
+        if int(8) == 0 { r.link = pick(["http://x.y", "u", ""]) }
+        if int(10) == 0 { r.code = true }
+        if int(8) == 0 { r.text = pick(["https://a.b/c", "http://x.y"]); r.pill = pick([PillForm.bare, .link]) }
+        return r
+    }
+
+    mutating func runs() -> [Run] { (0..<int(5)).map { _ in run() } }
+
+    mutating func kind() -> BlockKind {
+        switch int(10) {
+        case 0: return .heading(level: 1 + int(6))
+        case 1: return .bullet
+        case 2: return .numbered
+        case 3: return .checklist(checked: int(2) == 0)
+        case 4: return .quote
+        case 5: return .divider
+        default: return .paragraph
         }
     }
 
-    mutating func kind() -> BlockKind {
-        int(3) == 0 ? .heading(level: 1 + int(6)) : .paragraph
+    mutating func mark() -> Mark {
+        pick([Mark.bold, .italic, .underline, .strikethrough, .code, .link("http://l.k")])
     }
 
-    /// A random edit valid for a document with `count` blocks.
-    mutating func edit(blockCount count: Int) -> Edit {
-        let roll = int(10)
-        if count == 0 || roll < 2 { return .insert(at: int(count + 1), kind: kind(), runs: runs()) }
-        if roll < 3 { return .remove(at: int(count)) }
-        return .replace(at: int(count), kind: kind(), runs: runs())
+    /// A random edit valid for `doc`.
+    mutating func edit(in doc: NoteDocument) -> Edit {
+        let count = doc.blocks.count
+        if count == 0 { return .insert(at: 0, kind: kind(), runs: runs()) }
+        let i = int(count)
+        let length = doc.blocks[i].text.utf16.count
+        func offset(_ g: inout DocumentGenerator) -> Int { g.int(length + 2) }
+        func range(_ g: inout DocumentGenerator) -> Range<Int> {
+            let a = g.int(length + 2), b = g.int(length + 2); return min(a, b)..<max(a, b)
+        }
+        switch int(16) {
+        case 0: return .insert(at: int(count + 1), kind: kind(), runs: runs())
+        case 1: return .remove(at: i)
+        case 2, 3: return .replace(at: i, kind: kind(), runs: runs())
+        case 4, 5: return .insertText(block: i, offset: offset(&self), text: plainText())
+        case 6: return .deleteText(block: i, range: range(&self))
+        case 7, 8: return .setMark(block: i, range: range(&self), mark: mark())
+        case 9: return .clearMark(block: i, range: range(&self), mark: mark())
+        case 10: return .setKind(block: i, kind: kind())
+        case 11: return .toggleCheckbox(block: i)
+        case 12, 13: return .split(block: i, offset: offset(&self))
+        default:
+            return i + 1 < count ? .join(block: i) : .toggleCheckbox(block: i)
+        }
     }
 }

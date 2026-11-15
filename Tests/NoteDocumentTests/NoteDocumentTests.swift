@@ -2,7 +2,7 @@ import XCTest
 import Foundation
 import NoteDocument
 
-/// Criterion -> test map (ticket 02-note-document-first-path)
+/// Criterion -> test map (ticket 02-note-document-first-path; ticket 03 is in NoteDocumentLineBlocksTests.swift)
 /// 1. byte-identical no-edit round trip (generated, corpus, CRLF, no final newline)
 ///      -> testRoundTripIsByteIdentical_corpus, testRoundTripIsByteIdentical_generated
 /// 2. an edit in one block changes only that block's bytes
@@ -123,12 +123,14 @@ final class NoteDocumentTests: XCTestCase {
         forEachSeed { seed, gen in
             var doc = NoteDocument(markdown: gen.markdown())
             for step in 0..<FuzzConfig.stepsPerSeed {
-                let e = gen.edit(blockCount: doc.blocks.count)
+                let e = gen.edit(in: doc)
                 doc.apply(e)
                 let md = doc.markdown()
                 let reloaded = NoteDocument(markdown: md)
                 if reloaded != doc {
-                    XCTFail("seed \(seed) step \(step) edit \(e) -> \(md.debugDescription): reload differs\n\(doc.blocks)\nvs\n\(reloaded.blocks)")
+                    let first = doc.blocks.indices.first { $0 >= reloaded.blocks.count || doc.blocks[$0] != reloaded.blocks[$0] } ?? 0
+                    let line = md.components(separatedBy: "\n").dropFirst(first).first.map { $0.debugDescription } ?? "?"
+                    XCTFail("seed \(seed) step \(step) edit \(e): block \(first) written as \(line) reloads differently\n\(doc.blocks[first])\nvs\n\(first < reloaded.blocks.count ? "\(reloaded.blocks[first])" : "missing")")
                     return false
                 }
                 if reloaded.markdown().utf8.elementsEqual(md.utf8) == false {
@@ -142,12 +144,15 @@ final class NoteDocumentTests: XCTestCase {
     // MARK: 4. unknown markdown stays literal
 
     func testUnsupportedMarkdownLoadsAsLiteralParagraphs() {
-        let lines = ["- bullet", "* star", "1. one", "- [ ] todo", "> quote", "---", "```swift", "| a | b |", "![i](x.png)", "<div>x</div>", "[^1]: n", "  # indented", "#######", "#nospace"]
+        let lines = ["```swift", "| a | b |", "![i](x.png)", "<div>x</div>", "[^1]: n", "  # indented", "#######", "#nospace",
+                     "+ plus", "-x", "1.x", ">x", "- []", "- [ ]x", "--", "* * *x", "- - -x"]
         let doc = NoteDocument(markdown: lines.joined(separator: "\n") + "\n")
         XCTAssertEqual(doc.blocks.count, lines.count)
         for (b, l) in zip(doc.blocks, lines) {
+            // `* * *x`, `- - -x`, `- []`, `- [ ]x` are bullets whose text starts with brackets or dashes; the rest stay paragraphs.
+            if l.hasPrefix("* ") || l.hasPrefix("- ") { XCTAssertEqual(b.kind, .bullet, l); continue }
             XCTAssertEqual(b.kind, .paragraph, l)
-            XCTAssertEqual(b.runs, [Run(l)], l)
+            XCTAssertEqual(b.text, l.hasPrefix("![") ? "![i](x.png)" : l, l)
         }
     }
 
