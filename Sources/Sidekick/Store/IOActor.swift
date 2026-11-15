@@ -14,8 +14,13 @@ actor IOActor {
     /// Moves a file to the Trash. Tests inject a plain removal so they never touch the real Trash.
     private let trash: @Sendable (URL) throws -> Void
 
-    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil) {
+    /// Tests inject a failure for the index step; production passes nothing.
+    private let indexSaveFault: (@Sendable () throws -> Void)?
+
+    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil,
+         indexSaveFault: (@Sendable () throws -> Void)? = nil) {
         self.folder = folder
+        self.indexSaveFault = indexSaveFault
         self.trash = trash ?? { url in
             var resultURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
@@ -38,8 +43,15 @@ actor IOActor {
     /// Throws `NoteStoreError.conflict` (and writes nothing) when the file changed or is gone.
     func writeConditional(_ data: Data, filename: String, newFilename: String, baseline: Data) throws {
         let url = folder.appendingPathComponent(filename)
-        guard let current = try? Data(contentsOf: url), current == baseline else { throw NoteStoreError.conflict }
         let target = folder.appendingPathComponent(newFilename)
+        let current = try? Data(contentsOf: url)
+        if current == nil, newFilename != filename, (try? Data(contentsOf: target)) == baseline {
+            // Retry of a rename whose file move succeeded but whose index step failed: the note is
+            // already at its new name.
+            try data.write(to: target, options: [.atomic])
+            return
+        }
+        guard let current, current == baseline else { throw NoteStoreError.conflict }
         try data.write(to: target, options: [.atomic])
         if newFilename != filename { try FileManager.default.removeItem(at: url) }
     }
@@ -95,6 +107,7 @@ actor IOActor {
     }
 
     func saveIndex(_ index: NoteIndex) throws {
+        try indexSaveFault?()
         let url = folder.appendingPathComponent(".index.json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

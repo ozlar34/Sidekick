@@ -67,8 +67,6 @@ final class OpenNote: ObservableObject {
 
     /// Called when `isDirty` changes (the panel's unsaved dot).
     var onDirtyChange: ((Bool) -> Void)?
-    /// Called when a save fails (the "Could not save" message).
-    var onSaveFailure: (() -> Void)?
 
     private(set) var title: String
     /// Disk baseline: what the app last read from or wrote to the file.
@@ -200,6 +198,15 @@ final class OpenNote: ObservableObject {
             baselineMarkdown = text
             baselineTitle = currentTitle
             saveFailed = false
+        } catch NoteStoreError.fileWrittenIndexFailed {
+            // The text is on disk, so the baseline follows it (a retry must not see its own bytes as a
+            // conflict). The title baseline stays: the retry writes again and redoes the index step.
+            baselineData = Data(text.utf8)
+            baselineMarkdown = text
+            NSLog("[Sidekick] \(fileURL.lastPathComponent) written, index not saved")
+            saveFailed = true
+            setDirty(true)
+            return
         } catch NoteStoreError.conflict {
             NSLog("[Sidekick] \(fileURL.lastPathComponent) changed on disk since it was loaded; save refused")
             hasConflict = true
@@ -207,7 +214,6 @@ final class OpenNote: ObservableObject {
         } catch {
             NSLog("[Sidekick] save failed for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             saveFailed = true
-            onSaveFailure?()
             return
         }
         // Typing during the write: still dirty, and its own save is already scheduled.

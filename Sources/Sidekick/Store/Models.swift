@@ -49,4 +49,6 @@ enum NoteStoreError: Error, Equatable {
     case conflict
     /// The store has no note with this id.
     case unknownNote
+    /// The file was written, but the index step failed. The caller's baseline must follow the file.
+    case fileWrittenIndexFailed
 }

@@ -21,12 +21,16 @@ final class SafeSavesTests: XCTestCase {
     /// Records what the store would have written to the shared defaults.
     final class PersistedFolders: @unchecked Sendable { var paths: [String] = [] }
 
-    private func makeEnv(_ bodies: [String]) async throws -> (Env, [Note]) {
+    /// Index saves fail while this is set (the file write before it has already succeeded).
+    final class IndexFault: @unchecked Sendable { var failing = false }
+
+    private func makeEnv(_ bodies: [String], indexFault: IndexFault = IndexFault()) async throws -> (Env, [Note]) {
         let folder = TempFolder()
         let persisted = PersistedFolders()
         let store = try NoteStore(folder: folder.url, startWatcherImmediately: false,
                                   trash: { try FileManager.default.removeItem(at: $0) },
-                                  persistFolder: { persisted.paths.append($0.path) })
+                                  persistFolder: { persisted.paths.append($0.path) },
+                                  indexSaveFault: { if indexFault.failing { throw CocoaError(.fileWriteUnknown) } })
         var ids: [UUID] = []
         for body in bodies {
             let n = try await store.create()
@@ -154,6 +158,32 @@ final class SafeSavesTests: XCTestCase {
         try await env.store.save(id, title: "", body: "new\n", baseline: Data("alpha\n".utf8))
         XCTAssertEqual(try env.bytes(notes[0]), Data("new\n".utf8))
         XCTAssertEqual(env.store.notes.first { $0.id == id }?.body, "new\n")
+    }
+
+    /// The file write succeeded and only the index step failed: the note's baseline must follow the
+    /// file, or the retry would compare against its own bytes and raise a false conflict.
+    func testIndexFailureAfterASuccessfulWriteDoesNotCauseAFalseConflictOnRetry() async throws {
+        let fault = IndexFault()
+        let (env, notes) = try await makeEnv(["alpha\n"], indexFault: fault)
+        let a = env.open(notes[0])
+        let h = host(a)
+        h.type("x")
+        a.setTitle("Renamed")
+        fault.failing = true
+        await a.flush()
+        XCTAssertTrue(a.saveFailed, "the index failure is still reported")
+        XCTAssertFalse(a.hasConflict)
+        XCTAssertTrue(env.store.failedSaveIDs.contains(notes[0].id))
+
+        fault.failing = false
+        await a.retrySave()
+
+        XCTAssertFalse(a.hasConflict, "no false conflict against its own bytes")
+        XCTAssertFalse(a.saveFailed)
+        XCTAssertFalse(a.isDirty)
+        let saved = env.store.notes.first { $0.id == notes[0].id }!
+        XCTAssertEqual(saved.title, "Renamed")
+        XCTAssertEqual(try env.bytes(saved), Data(h.string.utf8), "file == editor")
     }
 
     func testAConflictRenamesNothing() async throws {
@@ -293,5 +323,29 @@ final class SafeSavesTests: XCTestCase {
         XCTAssertEqual(ha.string, "alpha changed\n", "reported file reloaded")
         XCTAssertEqual(b.markdown, "beta\n", "a file the watcher did not report is not touched")
         XCTAssertEqual(env.store.notes.first { $0.id == notes[1].id }?.body, "beta\n")
+    }
+
+    // MARK: 5. End to end with the real watcher
+
+    /// The real FolderWatcher feeds the store: an outside write is reported per file and reaches the
+    /// open note. Waits on a condition with a generous timeout, never a fixed sleep.
+    func testRealWatcherReportsAnOutsideWriteToTheOpenNote() async throws {
+        let folder = TempFolder()
+        let store = try NoteStore(folder: folder.url, startWatcherImmediately: true,
+                                  trash: { try FileManager.default.removeItem(at: $0) },
+                                  persistFolder: { _ in })
+        let n = try await store.create()
+        try await store.update(n.id, title: "", body: "alpha\n")
+        let note = store.notes.first { $0.id == n.id }!
+        let a = store.openNote(note.id, scheduler: ManualScheduler())!
+        let h = host(a)
+        try Data("theirs\n".utf8).write(to: folder.url.appendingPathComponent(note.filename))
+
+        let deadline = Date().addingTimeInterval(10)
+        while h.string != "theirs\n", Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+
+        XCTAssertEqual(h.string, "theirs\n", "the watcher event reloaded the clean open note")
+        XCTAssertFalse(a.hasConflict)
+        XCTAssertEqual(store.notes.first { $0.id == n.id }?.body, "theirs\n")
     }
 }

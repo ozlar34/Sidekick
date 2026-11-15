@@ -37,6 +37,7 @@ final class NoteStore: ObservableObject {
     var notesFolderURL: URL { folder }
     private let persistFolder: (URL) -> Void
     private let trash: (@Sendable (URL) throws -> Void)?
+    private let indexSaveFault: (@Sendable () throws -> Void)?
     private var io: IOActor
     private var watcher: FolderWatcher
     private var watcherTask: Task<Void, Never>?
@@ -60,7 +61,8 @@ final class NoteStore: ObservableObject {
     ///     DEBUG preview fixtures pass `false` per D-PF-04.
     init(folder: URL, startWatcherImmediately: Bool = true,
          trash: (@Sendable (URL) throws -> Void)? = nil,
-         persistFolder: ((URL) -> Void)? = nil) throws {
+         persistFolder: ((URL) -> Void)? = nil,
+         indexSaveFault: (@Sendable () throws -> Void)? = nil) throws {
         try FileManager.default.createDirectory(
             at: folder,
             withIntermediateDirectories: true,
@@ -68,8 +70,9 @@ final class NoteStore: ObservableObject {
         )
         self.folder = folder
         self.trash = trash
+        self.indexSaveFault = indexSaveFault
         self.persistFolder = persistFolder ?? { Defaults.store.set($0.path, forKey: Defaults.notesFolder) }
-        self.io = IOActor(folder: folder, trash: trash)
+        self.io = IOActor(folder: folder, trash: trash, indexSaveFault: indexSaveFault)
         self.watcher = FolderWatcher(url: folder)
 
         var cont: AsyncStream<ChangeEvent>.Continuation!
@@ -208,6 +211,7 @@ final class NoteStore: ObservableObject {
         var entry = currentIndex.notes[entryIdx]
         let oldFilename = entry.filename
         let titleChanged = entry.title != title
+        var indexFailure: Error?
 
         // Compute new filename from title (was: first heading of body).
         var newFilename = oldFilename
@@ -226,7 +230,11 @@ final class NoteStore: ObservableObject {
                 entry.filename = newFilename
                 entry.title = title
                 currentIndex.notes[entryIdx] = entry
-                try await io.saveIndex(currentIndex)
+                do { try await io.saveIndex(currentIndex) } catch {
+                    // The bytes are on disk: keep the note's state in step, then report the failure.
+                    NSLog("[Sidekick] index save failed after writing \(newFilename): \(error.localizedDescription)")
+                    indexFailure = error
+                }
             }
         } else {
             // Persist title + filename if either changed.
@@ -255,6 +263,7 @@ final class NoteStore: ObservableObject {
             notes[noteIdx].filename = newFilename
             notes[noteIdx].modified = Date()
         }
+        if indexFailure != nil { throw NoteStoreError.fileWrittenIndexFailed }
     }
 
     func delete(_ id: UUID) async throws {
@@ -420,7 +429,7 @@ final class NoteStore: ObservableObject {
         // 3. Rebuild the downstream collaborators pointing at newFolder.
         //    IOActor.folder is `let`, so we reconstruct rather than mutate.
         self.folder = newFolder
-        self.io = IOActor(folder: newFolder, trash: trash)
+        self.io = IOActor(folder: newFolder, trash: trash, indexSaveFault: indexSaveFault)
         self.watcher = FolderWatcher(url: newFolder)
 
         // 4. Persist the new path — inside the rebind — so there is only one source of truth
