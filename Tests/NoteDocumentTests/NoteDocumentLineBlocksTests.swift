@@ -158,6 +158,29 @@ final class NoteDocumentLineBlocksTests: XCTestCase {
         }
     }
 
+    /// Review finding B: an edited block never loses its marks to a catch-all fallback. These inputs used to need it
+    /// (code content that looks like the closer of an outer mark; a link whose label is its address).
+    func testPathologicalMarksAreKeptNotCollapsed() {
+        let cases: [(BlockKind, [Run])] = [
+            (.bullet, [Run("</u>xx", underline: true, code: true)]),
+            (.paragraph, [Run("\\#  ~~", bold: .asterisks, strikethrough: true, code: true)]),
+            (.numbered, [Run("[ ] t", italic: .asterisk, code: true, link: "u")]),
+            (.paragraph, [Run("http://x.y", link: "http://x.y")]),
+            (.paragraph, [Run("a", bold: .asterisks, code: true), Run("b ~~ c", strikethrough: true, code: true)]),
+        ]
+        for (kind, runs) in cases {
+            var doc = NoteDocument(markdown: "")
+            doc.apply(.insert(at: 0, kind: kind, runs: runs))
+            let block = doc.blocks[0]
+            XCTAssertEqual(block.text, runs.map(\.text).joined(), "\(runs)")
+            XCTAssertTrue(block.runs.contains { !($0.bold == nil && $0.italic == nil && !$0.underline && !$0.strikethrough && !$0.code && $0.link == nil && $0.pill == nil) },
+                          "marks dropped for \(runs): \(doc.markdown().debugDescription)")
+            XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc, "\(runs)")
+        }
+        // Code content does not close an outer mark.
+        XCTAssertEqual(NoteDocument(markdown: "<u>`</u>x`</u>\n").blocks[0].runs, [Run("</u>x", underline: true, code: true)])
+    }
+
     // MARK: 3. checklist toggle
 
     func testToggleChangesOnlyTheBracketCharacter() {

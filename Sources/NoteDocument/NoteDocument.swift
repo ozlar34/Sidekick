@@ -238,6 +238,11 @@ public struct NoteDocument: Equatable, Sendable {
     /// (fidelity rule 3). Most text is escaped on write. Forms that cannot be told apart whatever the escapes
     /// (a bare URL followed by text, an `_` italic against a word, `*` against `**`) are respelled: bare URL to link
     /// form, then the other delimiter, before anything else changes. The visible text never changes.
+    private static func markCount(_ r: Run) -> Int {
+        (r.bold != nil ? 1 : 0) + (r.italic != nil ? 1 : 0) + (r.underline ? 1 : 0) + (r.strikethrough ? 1 : 0)
+            + (r.code ? 1 : 0) + (r.link != nil ? 1 : 0) + (r.pill != nil ? 1 : 0)
+    }
+
     static func settle(_ block: Block) -> Block {
         func fixed(_ b: Block) -> Bool {
             let p = parseLine(b.body, id: b.id, terminator: b.terminator)
@@ -279,7 +284,14 @@ public struct NoteDocument: Equatable, Sendable {
                 }
             }
         }
-        // Last resort: the text without its marks (the visible text is kept).
+        // Last resort: the runs that carry the most marks lose their marks (their text stays), one at a time, until
+        // the block is stable. Visible text is never changed; the formatting lost is only what cannot be written.
+        var runs = block.runs
+        let order = runs.indices.sorted { markCount(runs[$0]) > markCount(runs[$1]) }
+        for k in order where markCount(runs[k]) > 0 {
+            runs[k] = Run(runs[k].text)
+            if let b = attempt(runs) { return b }
+        }
         return Block(id: block.id, kind: block.kind, runs: [Run(block.text)], prefix: block.prefix,
                      terminator: block.terminator, origin: nil)
     }

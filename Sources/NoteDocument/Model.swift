@@ -233,7 +233,14 @@ public struct Block: Equatable, Sendable {
             if r.strikethrough, r.text.unicodeScalars.allSatisfy({ $0.properties.isWhitespace }) { r.strikethrough = false }
             return r
         }
-        return merge(blankFixed)
+        // A link whose label is its address and nothing else is a pill (the reader reads `[u](u)` that way).
+        let pilled = blankFixed.map { r -> Run in
+            var r = r
+            if let url = r.link, r.pill == nil, !r.code, r.bold == nil, r.italic == nil, !r.underline, !r.strikethrough,
+               url.utf8.elementsEqual(r.text.utf8) { r.link = nil; r.pill = .link }
+            return r
+        }
+        return merge(pilled)
     }
 
     /// A link address cannot hold a line break or `)` (the reader ends the address there).

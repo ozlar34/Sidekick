@@ -6,6 +6,51 @@ extension NSAttributedString.Key {
     static let noteBlockKind = NSAttributedString.Key("sidekick.noteBlockKind")
     /// Bold mark with the delimiter spelling the file used (NSString "**" or "__"). Absent = not bold.
     static let noteBold = NSAttributedString.Key("sidekick.noteBold")
+    /// Every other mark of a run (`NoteRunStyle`): italic, underline, strikethrough, code, link, pill. Absent = none.
+    static let noteStyle = NSAttributedString.Key("sidekick.noteStyle")
+}
+
+/// The marks of a run other than bold, as one attribute value, so that the buffer carries a note document
+/// losslessly. Styling them is left to later tickets. A pill carries its address and a number that makes it a
+/// separate object even next to another pill; characters typed next to it that inherit the value no longer match
+/// the address, and are read back as plain text.
+final class NoteRunStyle: NSObject {
+    let italic: ItalicDelimiter?
+    let underline: Bool
+    let strikethrough: Bool
+    let code: Bool
+    let link: String?
+    let pill: PillForm?
+    let pillText: String?
+    let pillID: Int
+
+    init?(_ run: Run, pillID: Int) {
+        guard run.italic != nil || run.underline || run.strikethrough || run.code || run.link != nil || run.pill != nil else { return nil }
+        italic = run.italic; underline = run.underline; strikethrough = run.strikethrough
+        code = run.code; link = run.link; pill = run.pill
+        pillText = run.pill == nil ? nil : run.text
+        self.pillID = run.pill == nil ? 0 : pillID
+    }
+
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let o = object as? NoteRunStyle else { return false }
+        return italic == o.italic && underline == o.underline && strikethrough == o.strikethrough && code == o.code
+            && link == o.link && pill == o.pill && pillText == o.pillText && pillID == o.pillID
+    }
+    override var hash: Int { pillID &* 31 &+ (link?.hashValue ?? 0) }
+
+    /// The runs for `text` carrying these marks (bold is added by the caller). Text typed next to a pill inherits the
+    /// attribute; the part that is not the address is plain text again.
+    func runs(_ text: String) -> [Run] {
+        let base = Run(text, italic: italic, underline: underline, strikethrough: strikethrough, code: code, link: link)
+        guard let form = pill, let address = pillText, text != address else {
+            var r = base; r.pill = pill; return [r]
+        }
+        func piece(_ s: String, pill: Bool) -> Run { var r = base; r.text = s; r.pill = pill ? form : nil; return r }
+        if text.hasPrefix(address) { return [piece(address, pill: true), piece(String(text.dropFirst(address.count)), pill: false)] }
+        if text.hasSuffix(address) { return [piece(String(text.dropLast(address.count)), pill: false), piece(address, pill: true)] }
+        return [piece(text, pill: false)]
+    }
 }
 
 /// The buffer form of a note document: visible characters only, one text paragraph per block,
@@ -53,12 +98,14 @@ enum NoteBuffer {
     static func attributed(for document: NoteDocument) -> (text: NSAttributedString, tailKind: BlockKind) {
         let out = NSMutableAttributedString()
         var tailKind = BlockKind.paragraph
+        var pillID = 1
         let blocks = document.blocks
         for (i, block) in blocks.enumerated() {
             let kindAttr = attributeValue(block.kind)
             for run in block.runs {
                 var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
                 if let d = run.bold { attrs[.noteBold] = d.rawValue }
+                if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
                 out.append(NSAttributedString(string: run.text, attributes: attrs))
             }
             let isLast = i == blocks.count - 1
@@ -103,9 +150,22 @@ enum NoteBuffer {
             else { kind = Self.kind(fromAttribute: text.attribute(.noteBlockKind, at: isTail ? r.location + r.length - 1 : r.location + r.length, effectiveRange: nil)) }
             var runs: [Run] = []
             if r.length > 0 {
-                text.enumerateAttribute(.noteBold, in: r, options: []) { value, range, _ in
+                text.enumerateAttribute(.noteBold, in: r, options: []) { value, boldRange, _ in
                     let delimiter = (value as? String).flatMap(BoldDelimiter.init(rawValue:))
-                    runs.append(Run(ns.substring(with: range), bold: delimiter))
+                    text.enumerateAttribute(.noteStyle, in: boldRange, options: []) { style, range, _ in
+                        let substring = ns.substring(with: range)
+                        for var run in (style as? NoteRunStyle)?.runs(substring) ?? [Run(substring)] {
+                        run.bold = delimiter
+                        // Same marks as the run before (a pill never merges): attributes such as the font split ranges.
+                        if var last = runs.last, last.pill == nil, run.pill == nil {
+                            let (a, b) = (last.text, run.text)
+                            last.text = ""; run.text = ""
+                            if last == run { runs[runs.count - 1].text = a + b; continue }
+                            run.text = b
+                        }
+                        runs.append(run)
+                        }
+                    }
                 }
             }
             out.append(Paragraph(kind: kind, runs: runs))

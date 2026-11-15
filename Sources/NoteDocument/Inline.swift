@@ -101,12 +101,20 @@ enum InlineReader {
             return runs
         }
 
+        /// Index after the code span that opens at `k` (a backtick with another one after at least one scalar), or nil.
+        /// Span closers skip code spans, so that code content never closes an outer mark.
+        func codeEnd(_ k: Int, _ hi: Int) -> Int? {
+            guard s[k] == "`", k + 2 < hi, let j = (k + 1..<hi).first(where: { s[$0] == "`" }), j > k + 1 else { return nil }
+            return j + 1
+        }
+
         /// First index of `needle` at or after `from` that is not escaped.
         func find(_ needle: String, from: Int, _ hi: Int) -> Int? {
             let n = Array(needle.unicodeScalars)
             var k = from
             while k + n.count <= hi {
                 if s[k] == "\\", k + 1 < hi, isEscapable(s[k + 1]) { k += 2; continue }
+                if let e = codeEnd(k, hi) { k = e; continue }
                 if s[k..<k + n.count].elementsEqual(n) { return k }
                 k += 1
             }
@@ -117,6 +125,7 @@ enum InlineReader {
             var k = j
             while k < hi {
                 if s[k] == "\\", k + 1 < hi, isEscapable(s[k + 1]) { k += 2; continue }
+                if let e = codeEnd(k, hi) { k = e; continue }
                 if s[k] == "~" { return (k + 1 < hi && s[k + 1] == "~" && k > j) ? k : nil }
                 k += 1
             }
@@ -128,6 +137,7 @@ enum InlineReader {
             var k = i + 1
             while k < hi {
                 if s[k] == "\\", k + 1 < hi, isEscapable(s[k + 1]) { k += 2; continue }
+                if let e = codeEnd(k, hi) { k = e; continue }
                 if s[k] == "]" { break }
                 k += 1
             }
@@ -171,6 +181,7 @@ enum InlineReader {
             var k = j
             while k < hi {
                 if s[k] == "\\", k + 1 < hi, isEscapable(s[k + 1]) { k += 2; continue }
+                if let e = codeEnd(k, hi) { k = e; continue }
                 guard s[k] == c else { k += 1; continue }
                 let m = runLength(k, hi, c)
                 let prevOK = k > j && !isBlank(s[k - 1])
@@ -193,6 +204,7 @@ enum InlineReader {
             var k = j
             while k < hi {
                 if s[k] == "\\", k + 1 < hi, isEscapable(s[k + 1]) { k += 2; continue }
+                if let e = codeEnd(k, hi) { k = e; continue }
                 guard s[k] == c else { k += 1; continue }
                 let m = runLength(k, hi, c)
                 let prevOK = k > j && !isBlank(s[k - 1])
