@@ -1,0 +1,20 @@
+# Job "test": runs the full SwiftPM test suite on a macOS runner for every
+# push and pull request. No tests are skipped on CI: the hosted macOS runner
+# has a window server, and snapshot tests only compare (never record) unless
+# SIDEKICK_RECORD_SNAPSHOTS=1, which this workflow never sets.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Run tests
+        run: swift test
