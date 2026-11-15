@@ -25,12 +25,25 @@ enum NoteBuffer {
         switch kind {
         case .paragraph: return 0
         case .heading(let level): return NSNumber(value: level)
+        case .bullet: return 10
+        case .numbered: return 11
+        case .checklist(let checked): return checked ? 13 : 12
+        case .quote: return 14
+        case .divider: return 15
         }
     }
 
     static func kind(fromAttribute value: Any?) -> BlockKind {
         guard let n = (value as? NSNumber)?.intValue, n >= 1 else { return .paragraph }
-        return .heading(level: min(6, n))
+        switch n {
+        case 10: return .bullet
+        case 11: return .numbered
+        case 12: return .checklist(checked: false)
+        case 13: return .checklist(checked: true)
+        case 14: return .quote
+        case 15: return .divider
+        default: return .heading(level: min(6, n))
+        }
     }
 
     // MARK: Document -> buffer
@@ -104,7 +117,8 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph: return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider:   // styling of these kinds is tickets 07/08
+            return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .heading(let level):
             let size: CGFloat = level == 1 ? 28 : level == 2 ? 22 : 18
             return NSFont.systemFont(ofSize: size, weight: bold ? .bold : .semibold)
@@ -118,7 +132,7 @@ enum NoteBuffer {
             return s
         }
         switch kind {
-        case .paragraph: return style(20, 1)
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider: return style(20, 1)
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)
         }
     }

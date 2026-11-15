@@ -25,6 +25,11 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
             switch b.kind {
             case .paragraph: return "p"
             case .heading(let level): return "h\(level)"
+            case .bullet: return "bullet"
+            case .numbered: return "numbered"
+            case .checklist(let checked): return checked ? "checked" : "todo"
+            case .quote: return "quote"
+            case .divider: return "divider"
             }
         }
     }
