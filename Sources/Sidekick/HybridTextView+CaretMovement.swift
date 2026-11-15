@@ -302,7 +302,10 @@ extension HybridTextView {
             super.moveLeft(sender)
             return
         }
-        let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
+        var corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
+        if let rescued = corrected, let past = stepBackPastCollapsedMarkers(landing: rescued, source: current.location) {
+            corrected = past
+        }
         let landing = corrected ?? naive
         if checklistContentStart(ifLineStartAt: landing) != nil {
             guard landing > 0 else { return }
@@ -320,6 +323,34 @@ extension HybridTextView {
             return
         }
         setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
+    /// Mirror of AppKit's own Right step, which crosses one visible character
+    /// AND the zero-width hidden markers after it in one press (`a **bold**`:
+    /// Right 7 → 10). The backward rescues instead snap to the START of a
+    /// hidden run (Left 10 → 8), which sits at the same on-screen point as
+    /// the source: a press with no visible move, and typing there lands
+    /// inside the bold. When every character between `landing` and `source`
+    /// is a zero-width hidden marker (a link chip is excluded: it draws a
+    /// pill), this continues one more character back through the rescue
+    /// chain, so Left 10 → 7 reverses Right 7 → 10. Returns `nil` when no
+    /// continuation applies (a visible move already happened, or nothing
+    /// lies before `landing`).
+    private func stepBackPastCollapsedMarkers(landing: Int, source: Int) -> Int? {
+        guard let storage = textStorage, landing > 0, landing < source, source <= storage.length else { return nil }
+        var onlyHiddenMarkers = true
+        storage.enumerateAttributes(in: NSRange(location: landing, length: source - landing), options: []) { attrs, _, stop in
+            if attrs[.sidekickHiddenMarker] == nil || attrs[.sidekickLinkChip] != nil {
+                onlyHiddenMarkers = false
+                stop.pointee = true
+            }
+        }
+        guard onlyHiddenMarkers else { return nil }
+        let ns = storage.string as NSString
+        let previousCharacter = ns.rangeOfComposedCharacterSequence(at: landing - 1).location
+        let past = correctedCaretTarget(fromNaive: previousCharacter, previous: landing, direction: .backward, naiveIsVerifiedStep: true)
+            ?? previousCharacter
+        return past < landing ? past : nil
     }
 
     /// Override of `NSResponder.moveDown(_:)` — fired by the Down arrow key.

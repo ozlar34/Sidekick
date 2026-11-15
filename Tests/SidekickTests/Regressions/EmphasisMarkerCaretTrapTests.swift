@@ -249,4 +249,44 @@ final class EmphasisMarkerCaretTrapTests: XCTestCase {
         tv.setSelectedRange(NSRange(location: 12, length: 0))   // close "`", backward from 15
         XCTAssertEqual(tv.selectedRange().location, 12, "A 1-char marker run has no interior — the caret already lands correctly")
     }
+
+    // MARK: - Left arrow reverses Right across a hidden run (right-arrow A1)
+    //
+    // Pre-fix: in "a **bold**\nnext", Right went 7 → 10 (over "d" and the
+    // hidden close "**"), but Left went 11 → 10 → 8 → 7: the 10 → 8 press
+    // snapped to the hidden run's start, the same on-screen point, and typing
+    // at 8 landed inside the bold. Left now crosses the run and one visible
+    // character in one press, the exact reverse of Right.
+
+    private func arrowWalk(_ body: String, from start: Int, _ key: KeystrokeRunner.Key, presses: Int) -> [Int] {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        return (0..<presses).map { _ in runner.key(key); return runner.selection.location }
+    }
+
+    func test_left_boldAtLineEnd_reversesRight() {
+        XCTAssertEqual(arrowWalk("a **bold**\nnext", from: 11, .left, presses: 6), [10, 7, 6, 5, 4, 1])
+    }
+
+    func test_left_styledLinkAtLineEnd_reversesRight() {
+        XCTAssertEqual(arrowWalk("a [link](u)\nnext", from: 12, .left, presses: 3), [11, 6, 5])
+    }
+
+    func test_left_boldMidLine_reversesRight() {
+        XCTAssertEqual(arrowWalk("a **bold** c", from: 11, .left, presses: 3), [10, 7, 6])
+    }
+
+    /// The composed-character step keeps an emoji before the run intact.
+    func test_left_emojiBeforeHiddenRun_stepsWholeEmoji() {
+        XCTAssertEqual(arrowWalk("a **b😀**\nn", from: 9, .left, presses: 2), [5, 4])
+    }
+
+    /// A heading prefix on the first line has nothing before it: Left stops at 0.
+    func test_left_headingPrefixOnFirstLine_stopsAtDocumentStart() {
+        XCTAssertEqual(arrowWalk("# H", from: 2, .left, presses: 1), [0])
+    }
+
+    /// 1-char code markers were already symmetric; they stay so.
+    func test_left_codeAtLineEnd_unchanged() {
+        XCTAssertEqual(arrowWalk("a `code`\nnext", from: 8, .left, presses: 1), [6])
+    }
 }
