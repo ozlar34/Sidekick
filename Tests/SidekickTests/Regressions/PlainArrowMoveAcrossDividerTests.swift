@@ -86,13 +86,15 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
     }
 
     /// The broken case: a hidden bold-opening marker immediately after the
-    /// divider's line break.
+    /// divider's line break. One Right lands AFTER the hidden opener (the
+    /// spot before it looks identical and cost an extra, invisible press;
+    /// HiddenPrefixAfterDividerTests).
     func test_right_plainAbove_boldBelow() {
         let body = "before\n---\n**Bold below**"
         let start = offset(after: "before", in: body)
         let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
         runner.key(.right)
-        runner.assertSelection(NSRange(location: offset(of: "**Bold", in: body), length: 0))
+        runner.assertSelection(NSRange(location: offset(after: "\n---\n**", in: body), length: 0))
         XCTAssertGreaterThanOrEqual(runner.selection.location, start)
     }
 
@@ -101,7 +103,7 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         let start = offset(after: "before", in: body)
         let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
         runner.key(.right)
-        runner.assertSelection(NSRange(location: offset(of: "*Italic", in: body), length: 0))
+        runner.assertSelection(NSRange(location: offset(after: "\n---\n*", in: body), length: 0))
         XCTAssertGreaterThanOrEqual(runner.selection.location, start)
     }
 
@@ -110,7 +112,7 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         let start = offset(after: "before", in: body)
         let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
         runner.key(.right)
-        runner.assertSelection(NSRange(location: offset(of: "<u>Underline", in: body), length: 0))
+        runner.assertSelection(NSRange(location: offset(after: "\n---\n<u>", in: body), length: 0))
         XCTAssertGreaterThanOrEqual(runner.selection.location, start)
     }
 
@@ -119,7 +121,7 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
         let start = offset(after: "before", in: body)
         let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
         runner.key(.right)
-        runner.assertSelection(NSRange(location: offset(of: "~~Strike", in: body), length: 0))
+        runner.assertSelection(NSRange(location: offset(after: "\n---\n~~", in: body), length: 0))
         XCTAssertGreaterThanOrEqual(runner.selection.location, start)
     }
 
@@ -288,7 +290,9 @@ final class PlainArrowMoveAcrossDividerTests: XCTestCase {
     }
 
     /// The broken case: a hidden bold-opening marker immediately after the
-    /// divider's line break.
+    /// divider's line break. One Right lands AFTER the hidden opener (the
+    /// spot before it looks identical and cost an extra, invisible press;
+    /// HiddenPrefixAfterDividerTests).
     func test_down_plainAbove_boldBelow() {
         let body = "before\n---\n**Bold below**"
         let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: 0, length: 0))
