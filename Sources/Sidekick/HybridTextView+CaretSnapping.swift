@@ -27,7 +27,8 @@ extension HybridTextView {
     /// nowhere to go).
     ///
     /// HR lines are uninhabitable by design: the dash glyphs are zero-width
-    /// (`.sidekickHiddenMarker` ORs `.null` into the glyph property), so
+    /// (`MarkdownLayoutManager` lays them out as zero-advancement control
+    /// glyphs), so
     /// every caret position INSIDE the line collapses to a single visual
     /// point. Letting the caret rest there produces a misleading position
     /// — natural NSTextView puts it at x=0 (left edge), older overrides
@@ -177,19 +178,6 @@ extension HybridTextView {
         case .backward:
             return first.location > 0 ? .neighbor(first.location - 1) : .stay
         }
-    }
-
-    /// Start of the line above the run of adjacent HR lines that contains
-    /// `location`; 0 when the run starts the document or `location` is not
-    /// on an HR line.
-    func lineStartAboveHRRun(containing location: Int) -> Int {
-        guard let storage = textStorage, storage.length > 0 else { return 0 }
-        let ns = storage.string as NSString
-        let lineRange = ns.lineRange(for: NSRange(location: min(max(location, 0), storage.length - 1), length: 0))
-        guard lineIsHR(lineRange) else { return 0 }
-        let first = hrRun(around: lineRange).first
-        guard first.location > 0 else { return 0 }
-        return ns.lineRange(for: NSRange(location: first.location - 1, length: 0)).location
     }
 
     /// Widens an HR line to the whole run of adjacent HR lines (consecutive

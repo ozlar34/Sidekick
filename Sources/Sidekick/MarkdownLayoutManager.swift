@@ -110,6 +110,14 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                     // `boundingBoxForControlGlyphAt` reserve an exact advance
                     // width for the square plus its gap to the content.
                     prop.insert(.controlCharacter)
+                } else if attrs[.sidekickThematicBreak] != nil {
+                    // Divider dashes: a zero-width control glyph (see
+                    // `shouldUse`), not `.null`. The typesetter skips `.null`
+                    // glyphs, so a line made only of them has no glyph of its
+                    // own: a loaded divider's dashes join the line above (the
+                    // hairline drew through it), and a typed one left that line
+                    // with stale state (AppKit Left/Right jumped to its ends).
+                    prop.insert(.controlCharacter)
                 } else if attrs[.sidekickBulletMarker] != nil {
                     // Substitute the dash/star glyph with a bullet glyph.
                     // Keep visible — do NOT set .null.
@@ -145,6 +153,10 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         // consult `boundingBoxForControlGlyphAt` for a custom advance width.
         if attrs[.sidekickLinkChip] != nil || attrs[.sidekickChecklistMarker] != nil {
             return .whitespace
+        }
+        // Divider dashes stay invisible but are laid out on their own line.
+        if attrs[.sidekickThematicBreak] != nil {
+            return .zeroAdvancement
         }
         return action
     }
@@ -221,18 +233,13 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 
             // Find the line fragment to draw the hairline in. Anchor on the
             // HR paragraph's TRAILING newline (the char immediately after the
-            // dash run), not the first dash. Why: in some glyph-layout paths
-            // (notably the full-text-replace path on note switch), the HR's
-            // .null dash glyphs get absorbed into the line fragment of the
-            // PRECEDING empty paragraph instead of starting a new line —
-            // chars `\n---` end up sharing one fragment with the dashes'
-            // trailing `\n` orphaned on its own next-line fragment. Anchoring
-            // on the trailing `\n` follows the HR's true paragraph and
-            // sidesteps that layout quirk. In the typed-incrementally path
-            // (where dashes generate their own line fragment normally), the
-            // trailing `\n` is in the SAME fragment as the dashes, so the
-            // anchor yields identical geometry. Either way the hairline lands
-            // on the HR's own line, never the line above.
+            // dash run), when there is one. History: dash glyphs used to be
+            // `.null`, and in the full-text-replace path (note switch) they
+            // were absorbed into the PRECEDING line's fragment, so a first-dash
+            // anchor drew the hairline on the line above. Dashes are now
+            // zero-advancement control glyphs on their own line (A5), so both
+            // anchors give the same fragment; the trailing `\n` anchor stays
+            // as the canonical one for the HR's own paragraph.
             let trailingNewlineChar = attrRange.location + attrRange.length
             let anchorGlyphIndex: Int
             if trailingNewlineChar < storage.length {
