@@ -27,7 +27,8 @@ extension HybridTextView {
     /// nowhere to go).
     ///
     /// HR lines are uninhabitable by design: the dash glyphs are zero-width
-    /// (`.sidekickHiddenMarker` ORs `.null` into the glyph property), so
+    /// (`MarkdownLayoutManager` lays them out as zero-advancement control
+    /// glyphs), so
     /// every caret position INSIDE the line collapses to a single visual
     /// point. Letting the caret rest there produces a misleading position
     /// — natural NSTextView puts it at x=0 (left edge), older overrides
@@ -54,6 +55,10 @@ extension HybridTextView {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target >= 0, target <= n else { return nil }
+        // After a trailing terminator, `n` is its own empty last line, not
+        // part of the line above: a caret there is never on an HR line.
+        let endsOnEmptyLastLine = lineEndsWithNewline(NSRange(location: n - 1, length: 1))
+        if target == n && endsOnEmptyLastLine { return nil }
 
         // lineRange wants an index INSIDE the string. Clamp at n-1 for
         // the end-of-doc case where target == n (one past last char).
@@ -82,8 +87,11 @@ extension HybridTextView {
         // them off the line they just typed on would be jarring. Snap
         // only takes effect when caret crosses a line boundary INTO HR
         // (arrow keys, clicks from another line, etc.).
+        // `previous == n` after a trailing terminator is on the empty last
+        // line BELOW this one, even though the n-1 clamp lands here (A3:
+        // Left/Up from below a trailing divider stopped ON the divider).
         let prevProbe = min(max(previous, 0), n - 1)
-        if prevProbe >= 0 {
+        if !(previous == n && endsOnEmptyLastLine) {
             let prevLineRange = ns.lineRange(for: NSRange(location: prevProbe, length: 0))
             if NSEqualRanges(prevLineRange, lineRange) {
                 return nil
@@ -106,42 +114,11 @@ extension HybridTextView {
     /// (where a follow-up move would snap it in the wrong direction and a
     /// delete would act on the wrong line).
     private func hrNeighborLocation(hrLineRange lineRange: NSRange, preferBelow: Bool) -> Int? {
-        guard let storage = textStorage, lineRange.length > 0 else { return nil }
-        let ns = storage.string as NSString
-        let n = ns.length
-
-        func lineIsHR(_ range: NSRange) -> Bool {
-            var found = false
-            storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
-                if (value as? Bool) == true { found = true; stop.pointee = true }
-            }
-            return found
-        }
-        // `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
-        // not just LF. A trailing terminator means a line exists below (even an
-        // empty one), so test the last scalar against ALL newline scalars, not
-        // only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
-        func endsWithNewline(_ range: NSRange) -> Bool {
-            let lastUnichar = ns.character(at: range.location + range.length - 1)
-            return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
-        }
-
-        // Widen to the whole run of adjacent HR lines.
-        var first = lineRange
-        while first.location > 0 {
-            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
-            guard above.length > 0, lineIsHR(above) else { break }
-            first = above
-        }
-        var last = lineRange
-        while endsWithNewline(last), last.location + last.length < n {
-            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
-            guard below.length > 0, lineIsHR(below) else { break }
-            last = below
-        }
+        guard textStorage != nil, lineRange.length > 0 else { return nil }
+        let (first, last) = hrRun(around: lineRange)
 
         let hasAbove = first.location > 0
-        let hasBelow = endsWithNewline(last)
+        let hasBelow = lineEndsWithNewline(last)
 
         let aboveLoc = first.location - 1
         let belowLoc = last.location + last.length
@@ -150,6 +127,97 @@ extension HybridTextView {
         if !hasAbove { return belowLoc }
         if !hasBelow { return aboveLoc }
         return preferBelow ? belowLoc : aboveLoc
+    }
+
+    /// True when `location` lies on an HR line whose run of adjacent HR lines
+    /// ends the document with no line terminator after it — a note that
+    /// already ends in a divider. The caret has no inhabitable spot below
+    /// such a run, so a forward arrow move cannot cross it. HR-01 closes this
+    /// gap for a freshly-typed divider only; `moveRight`/`moveDown` use this
+    /// to close it for a divider that was already there (e.g. loaded from disk).
+    func isOnUnterminatedTrailingHR(_ location: Int) -> Bool {
+        guard let storage = textStorage else { return false }
+        let n = storage.length
+        guard n > 0, location >= 0, location <= n else { return false }
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: min(location, n - 1), length: 0))
+        guard lineRange.length > 0, lineIsHR(lineRange) else { return false }
+        let (_, last) = hrRun(around: lineRange)
+        return last.location + last.length == n && !lineEndsWithNewline(last)
+    }
+
+    /// Where an arrow key takes a caret that sits ON a divider run.
+    enum HRRunExit: Equatable {
+        /// Start of the line below the run, or end of the line above it.
+        case neighbor(Int)
+        /// Forward with no line below: append one (the A3 rule).
+        case appendBelow
+        /// Backward with no line above: the caret does not move.
+        case stay
+    }
+
+    /// A4: a caret can sit ON a divider when the HR rescue had nowhere to send
+    /// it (an all-divider note) or a `---` was just typed there. AppKit's own
+    /// stepping over the zero-width divider glyphs then moves against the key
+    /// (`---\n---\n---`, caret 1: Right → 0, Left → 7). This returns where the
+    /// key goes instead: out of the whole run in the key's direction. `nil`
+    /// when `location` is not on a divider line (incl. the empty last line
+    /// after a trailing terminator).
+    func hrRunExit(from location: Int, direction: CaretSnapDirection) -> HRRunExit? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, location >= 0, location <= n else { return nil }
+        if location == n && lineEndsWithNewline(NSRange(location: n - 1, length: 1)) { return nil }
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: min(location, n - 1), length: 0))
+        guard lineRange.length > 0, lineIsHR(lineRange) else { return nil }
+        let (first, last) = hrRun(around: lineRange)
+        switch direction {
+        case .forward:
+            return lineEndsWithNewline(last) ? .neighbor(last.location + last.length) : .appendBelow
+        case .backward:
+            return first.location > 0 ? .neighbor(first.location - 1) : .stay
+        }
+    }
+
+    /// Widens an HR line to the whole run of adjacent HR lines (consecutive
+    /// dividers form one uninhabitable block). Returns its first and last line.
+    private func hrRun(around lineRange: NSRange) -> (first: NSRange, last: NSRange) {
+        guard let storage = textStorage else { return (lineRange, lineRange) }
+        let ns = storage.string as NSString
+        let n = ns.length
+        var first = lineRange
+        while first.location > 0 {
+            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
+            guard above.length > 0, lineIsHR(above) else { break }
+            first = above
+        }
+        var last = lineRange
+        while lineEndsWithNewline(last), last.location + last.length < n {
+            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
+            guard below.length > 0, lineIsHR(below) else { break }
+            last = below
+        }
+        return (first, last)
+    }
+
+    private func lineIsHR(_ range: NSRange) -> Bool {
+        guard let storage = textStorage else { return false }
+        var found = false
+        storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
+            if (value as? Bool) == true { found = true; stop.pointee = true }
+        }
+        return found
+    }
+
+    /// `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
+    /// not just LF. A trailing terminator means a line exists below (even an
+    /// empty one), so test the last scalar against ALL newline scalars, not
+    /// only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
+    private func lineEndsWithNewline(_ range: NSRange) -> Bool {
+        guard let storage = textStorage, range.length > 0 else { return false }
+        let lastUnichar = (storage.string as NSString).character(at: range.location + range.length - 1)
+        return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
     }
 
     /// Click-path counterpart to `snapCaretOutOfHR`: given a caret that a mouse
@@ -315,6 +383,25 @@ extension HybridTextView {
         guard target > lineRange.location, target < contentStart else { return nil }
 
         return direction == .forward ? contentStart : lineRange.location
+    }
+
+    /// Content start (line+6) of the rendered checklist line that BEGINS at
+    /// `location`, or `nil` when `location` is not such a line start. Used by
+    /// the Left/Right arrow overrides (HybridTextView+CaretMovement.swift) to
+    /// skip offset 0 of a checklist line: a click or a programmatic selection
+    /// may still rest there (see `snapCaretOutOfChecklistGap`), but an arrow
+    /// key never stops left of the checkbox, because text typed there lands
+    /// before `- [ ] ` and turns the item into a plain line. Gated on
+    /// `.sidekickChecklistMarker` like the gap rescue above.
+    func checklistContentStart(ifLineStartAt location: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard location >= 0, location < n else { return nil }
+        let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: location, length: 0))
+        guard lineRange.location == location, lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker, at: location, effectiveRange: nil) != nil
+        else { return nil }
+        return location + 6
     }
 
     /// Compute the position to snap a caret to when `target` lands strictly

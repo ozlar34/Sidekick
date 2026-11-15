@@ -173,8 +173,17 @@ extension HybridTextView {
         // was a coincidence of the trailing-newline inclusive lineRange).
         guard FormattingToolbarView.lineContentEnd(lineRange, in: ns) == lineEnd else { return }
 
-        // Append a single `\n` at the end of the document via the undo-safe
-        // shouldChangeText/replaceCharacters/didChangeText sandwich.
+        appendLineBelowTrailingHR()
+    }
+
+    /// Appends a single `\n` at the end of the document via the undo-safe
+    /// shouldChangeText/replaceCharacters/didChangeText sandwich, then parks
+    /// the caret at the start of the new empty line below a trailing divider.
+    /// Shared by the HR-01 typed escape above and by `moveRight`/`moveDown`
+    /// when a note already ends in a divider (A3).
+    // Internal (not private): also called from HybridTextView+CaretMovement.swift.
+    func appendLineBelowTrailingHR() {
+        guard let storage = textStorage, storage.length > 0 else { return }
         let editRange = NSRange(location: storage.length, length: 0)
         guard shouldChangeText(in: editRange, replacementString: "\n") else { return }
         replaceCharacters(in: editRange, with: "\n")

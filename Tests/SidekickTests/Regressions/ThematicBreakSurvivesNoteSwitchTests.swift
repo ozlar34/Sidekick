@@ -52,8 +52,8 @@ final class ThematicBreakSurvivesNoteSwitchTests: XCTestCase {
 
         // Round-trip assertion: HR attribute must be re-stamped on the dash run.
         assertHRStamped(runner.attributedString, at: hrLocation, label: "after round trip")
-        // And: glyphs for the dash chars must carry `.null` property — that's
-        // what makes the `---` invisible so the painted hairline isn't obscured.
+        // And: glyphs for the dash chars must be zero-width control glyphs —
+        // that's what makes the `---` invisible so the painted hairline isn't obscured.
         assertHRGlyphsHidden(runner: runner, charLocation: hrLocation, label: "after round trip")
         // And: drawBackground must find the HR run when called over the whole
         // glyph range — this is what paints the visible hairline. If the
@@ -204,12 +204,13 @@ final class ThematicBreakSurvivesNoteSwitchTests: XCTestCase {
         }
     }
 
-    /// Assert that each of the three dash chars at `charLocation` produces a
-    /// glyph with `.null` property. The hidden-marker mechanism (in
-    /// MarkdownLayoutManager.setGlyphs) reads `.sidekickHiddenMarker` and ORs
-    /// in `.null` on the glyph. If the glyph cache holds stale (non-null)
-    /// properties after a full-text replace, the `---` chars render as visible
-    /// dashes on top of the hairline rect — that's the reported visual bug.
+    /// Assert that each of the three dash chars at `charLocation` produces an
+    /// invisible, zero-width glyph. MarkdownLayoutManager.setGlyphs marks
+    /// divider dashes as control glyphs (laid out with `.zeroAdvancement`,
+    /// never drawn; A5 replaced `.null` so the dashes keep their own line).
+    /// If the glyph cache holds stale properties after a full-text replace,
+    /// the `---` chars render as visible dashes on top of the hairline rect —
+    /// that's the reported visual bug.
     private func assertHRGlyphsHidden(
         runner: HostedEditorRunner,
         charLocation: Int,
@@ -223,10 +224,15 @@ final class ThematicBreakSurvivesNoteSwitchTests: XCTestCase {
             let glyphIdx = lm.glyphIndexForCharacter(at: charIdx)
             let prop = lm.propertyForGlyph(at: glyphIdx)
             XCTAssertTrue(
-                prop.contains(.null),
-                "[\(label)] glyph for char \(charIdx) must carry `.null` property (got \(prop.rawValue))",
+                prop.contains(.controlCharacter),
+                "[\(label)] glyph for char \(charIdx) must be a control glyph (got \(prop.rawValue))",
                 file: file, line: line
             )
+            let width = lm.boundingRect(forGlyphRange: NSRange(location: glyphIdx, length: 1),
+                                        in: runner.inner.container).width
+            XCTAssertEqual(width, 0, accuracy: 0.01,
+                           "[\(label)] glyph for char \(charIdx) must have zero width",
+                           file: file, line: line)
         }
     }
 

@@ -148,6 +148,45 @@ final class ChecklistGapCaretTrapTests: XCTestCase {
         )
     }
 
+    // MARK: - Arrow keys skip a checklist line's start (right-arrow A2)
+    //
+    // Pre-fix: in "- [ ] a\n- [ ] b", Right from 7 stopped at 8 (left of the
+    // second checkbox) before reaching 14, and Left mirrored it (14 → 8 → 7).
+    // Typing at 8 gave "X- [ ] b" and broke the checklist. Arrow keys now never
+    // stop at a checklist line's start; clicks and programmatic selection still
+    // may (test_lineStart_notSnapped above).
+
+    private func arrowWalk(_ body: String, from start: Int, _ key: KeystrokeRunner.Key, presses: Int) -> [Int] {
+        let runner = HostedEditorRunner(initialBody: body, initialSelection: NSRange(location: start, length: 0))
+        return (0..<presses).map { _ in runner.key(key); return runner.selection.location }
+    }
+
+    func test_right_crossesIntoChecklistLine_inOnePress() {
+        XCTAssertEqual(arrowWalk("- [ ] a\n- [ ] b", from: 7, .right, presses: 2), [14, 15])
+    }
+
+    func test_left_crossesOutOfChecklistLine_inOnePress() {
+        XCTAssertEqual(arrowWalk("- [ ] a\n- [ ] b", from: 14, .left, presses: 2), [7, 6])
+    }
+
+    func test_paragraphAboveChecklist_bothDirections() {
+        XCTAssertEqual(arrowWalk("one\n- [ ] b", from: 3, .right, presses: 1), [10])
+        XCTAssertEqual(arrowWalk("one\n- [ ] b", from: 10, .left, presses: 1), [3])
+    }
+
+    /// Nothing inhabitable above (first line, or only a leading divider):
+    /// Left from content start stays put instead of stopping left of the box.
+    func test_left_noInhabitableLineAbove_staysAtContentStart() {
+        XCTAssertEqual(arrowWalk("- [ ] a", from: 6, .left, presses: 1), [6])
+        XCTAssertEqual(arrowWalk("---\n- [ ] b", from: 10, .left, presses: 1), [10])
+    }
+
+    /// Bullets carry no checkbox marker, so their line start stays a stop.
+    func test_bullets_lineStartStillAStop() {
+        XCTAssertEqual(arrowWalk("- a\n- b", from: 3, .right, presses: 1), [4])
+        XCTAssertEqual(arrowWalk("- a\n- b", from: 5, .left, presses: 2), [4, 3])
+    }
+
     // MARK: - Click-path decision ([4], via checklistGapRelocationTarget)
     //
     // The keyboard `snapCaretOutOfChecklistGap` picks its side from the stale

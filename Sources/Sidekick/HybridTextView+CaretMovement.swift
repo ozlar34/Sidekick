@@ -262,10 +262,21 @@ extension HybridTextView {
             super.moveRight(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .forward) { return }
         let naive = min(current.location + 1, storage.length)
-        guard naive != current.location,
-              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward, naiveIsVerifiedStep: true)
-        else {
+        guard naive != current.location else {
+            super.moveRight(sender)
+            return
+        }
+        if escapeBelowTrailingHR(from: current.location, toward: naive) { return }
+        let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward, naiveIsVerifiedStep: true)
+        // Never stop left of a checkbox: a step that lands on a checklist
+        // line's start continues to its content start in the same press.
+        if let contentStart = checklistContentStart(ifLineStartAt: corrected ?? naive) {
+            setSelectedRange(NSRange(location: contentStart, length: 0))
+            return
+        }
+        guard let corrected else {
             super.moveRight(sender)
             return
         }
@@ -276,20 +287,109 @@ extension HybridTextView {
     /// Mirrors `moveRight(_:)` above (same rationale: AppKit's own stepping
     /// is unreliable near a managed region, so this computes its own naive
     /// backward step and runs it through the shared rescue chain instead).
+    ///
+    /// Mirror of `moveRight`'s checklist rule: a step that lands on a
+    /// checklist line's start (left of the checkbox) continues across the
+    /// line break to the end of the line above, in the same press. When
+    /// there is no inhabitable spot above (the checklist is the first line,
+    /// or only a leading divider sits above it), the caret stays where it is.
     override func moveLeft(_ sender: Any?) {
         let current = selectedRange()
-        guard current.length == 0 else {
+        guard current.length == 0, let storage = textStorage else {
             super.moveLeft(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .backward) { return }
         let naive = max(current.location - 1, 0)
-        guard naive != current.location,
-              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
-        else {
+        guard naive != current.location else {
+            super.moveLeft(sender)
+            return
+        }
+        var corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
+        if let rescued = corrected, let past = stepBackPastCollapsedMarkers(landing: rescued, source: current.location) {
+            corrected = past
+        }
+        let landing = corrected ?? naive
+        if checklistContentStart(ifLineStartAt: landing) != nil {
+            guard landing > 0 else { return }
+            var aboveContentsEnd = 0
+            (storage.string as NSString).getLineStart(nil, end: nil, contentsEnd: &aboveContentsEnd,
+                                                      for: NSRange(location: landing - 1, length: 0))
+            let beyond = correctedCaretTarget(fromNaive: aboveContentsEnd, previous: landing, direction: .backward, naiveIsVerifiedStep: true)
+                ?? aboveContentsEnd
+            guard beyond < current.location, checklistContentStart(ifLineStartAt: beyond) == nil else { return }
+            setSelectedRange(NSRange(location: beyond, length: 0))
+            return
+        }
+        guard let corrected else {
             super.moveLeft(sender)
             return
         }
         setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
+    /// A3: a forward move (Right/Down) from text into a divider block that
+    /// ends the note with no line below has nowhere to land, so the HR rescue
+    /// sends the caret back to where it was and the key seems stuck. In that
+    /// case this extends HR-01's guarantee ("the caret never gets stranded
+    /// above the rule") to a divider that was already there: it appends one
+    /// `\n` (undo-safe) and parks the caret on the new empty line below, so
+    /// typing or Return continues under the divider and `---` stays a
+    /// divider. Returns `false` (no change) when `destination` is not on such
+    /// a block, or `source` is already on it (`moveOffHRRun` handles that).
+    private func escapeBelowTrailingHR(from source: Int, toward destination: Int) -> Bool {
+        guard isOnUnterminatedTrailingHR(destination), !isOnUnterminatedTrailingHR(source) else { return false }
+        appendLineBelowTrailingHR()
+        return true
+    }
+
+    /// A4: an arrow key from a caret that sits ON a divider leaves the whole
+    /// divider run in the key's direction (see `hrRunExit`), instead of
+    /// AppKit's stepping, which can move against the key there. Forward with
+    /// no line below appends one (A3 rule); backward with no line above
+    /// stays. A forward landing on a checklist line start goes on to its
+    /// content start, as `moveRight` does. Returns `false` when `source` is
+    /// not on a divider, so the caller's normal path runs.
+    private func moveOffHRRun(from source: Int, direction: CaretSnapDirection) -> Bool {
+        guard let exit = hrRunExit(from: source, direction: direction) else { return false }
+        switch exit {
+        case .neighbor(let location):
+            let landing = direction == .forward ? (checklistContentStart(ifLineStartAt: location) ?? location) : location
+            setSelectedRange(NSRange(location: landing, length: 0))
+        case .appendBelow:
+            appendLineBelowTrailingHR()
+        case .stay:
+            break
+        }
+        return true
+    }
+
+    /// Mirror of AppKit's own Right step, which crosses one visible character
+    /// AND the zero-width hidden markers after it in one press (`a **bold**`:
+    /// Right 7 → 10). The backward rescues instead snap to the START of a
+    /// hidden run (Left 10 → 8), which sits at the same on-screen point as
+    /// the source: a press with no visible move, and typing there lands
+    /// inside the bold. When every character between `landing` and `source`
+    /// is a zero-width hidden marker (a link chip is excluded: it draws a
+    /// pill), this continues one more character back through the rescue
+    /// chain, so Left 10 → 7 reverses Right 7 → 10. Returns `nil` when no
+    /// continuation applies (a visible move already happened, or nothing
+    /// lies before `landing`).
+    private func stepBackPastCollapsedMarkers(landing: Int, source: Int) -> Int? {
+        guard let storage = textStorage, landing > 0, landing < source, source <= storage.length else { return nil }
+        var onlyHiddenMarkers = true
+        storage.enumerateAttributes(in: NSRange(location: landing, length: source - landing), options: []) { attrs, _, stop in
+            if attrs[.sidekickHiddenMarker] == nil || attrs[.sidekickLinkChip] != nil {
+                onlyHiddenMarkers = false
+                stop.pointee = true
+            }
+        }
+        guard onlyHiddenMarkers else { return nil }
+        let ns = storage.string as NSString
+        let previousCharacter = ns.rangeOfComposedCharacterSequence(at: landing - 1).location
+        let past = correctedCaretTarget(fromNaive: previousCharacter, previous: landing, direction: .backward, naiveIsVerifiedStep: true)
+            ?? previousCharacter
+        return past < landing ? past : nil
     }
 
     /// Override of `NSResponder.moveDown(_:)` — fired by the Down arrow key.
@@ -311,6 +411,7 @@ extension HybridTextView {
             super.moveDown(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .forward) { return }
         let ns = storage.string as NSString
         var lineStart = 0, lineEnd = 0
         ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
@@ -322,6 +423,7 @@ extension HybridTextView {
         var belowStart = 0, belowContentsEnd = 0
         ns.getLineStart(&belowStart, end: nil, contentsEnd: &belowContentsEnd, for: NSRange(location: lineEnd, length: 0))
         let naive = min(belowStart + column, belowContentsEnd)
+        if escapeBelowTrailingHR(from: current.location, toward: naive) { return }
         // `naiveIsVerifiedStep: false` — this naive same-column target is a
         // GUESS (see this override's own doc comment above), not a verified
         // one-raw-character step. The ticket-08 SOURCE-side conditions must
@@ -347,6 +449,7 @@ extension HybridTextView {
             super.moveUp(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .backward) { return }
         let ns = storage.string as NSString
         var lineStart = 0
         ns.getLineStart(&lineStart, end: nil, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
