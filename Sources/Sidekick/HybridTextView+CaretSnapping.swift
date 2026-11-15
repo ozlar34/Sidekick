@@ -145,6 +145,40 @@ extension HybridTextView {
         return last.location + last.length == n && !lineEndsWithNewline(last)
     }
 
+    /// Where an arrow key takes a caret that sits ON a divider run.
+    enum HRRunExit: Equatable {
+        /// Start of the line below the run, or end of the line above it.
+        case neighbor(Int)
+        /// Forward with no line below: append one (the A3 rule).
+        case appendBelow
+        /// Backward with no line above: the caret does not move.
+        case stay
+    }
+
+    /// A4: a caret can sit ON a divider when the HR rescue had nowhere to send
+    /// it (an all-divider note) or a `---` was just typed there. AppKit's own
+    /// stepping over the zero-width divider glyphs then moves against the key
+    /// (`---\n---\n---`, caret 1: Right → 0, Left → 7). This returns where the
+    /// key goes instead: out of the whole run in the key's direction. `nil`
+    /// when `location` is not on a divider line (incl. the empty last line
+    /// after a trailing terminator).
+    func hrRunExit(from location: Int, direction: CaretSnapDirection) -> HRRunExit? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard n > 0, location >= 0, location <= n else { return nil }
+        if location == n && lineEndsWithNewline(NSRange(location: n - 1, length: 1)) { return nil }
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: min(location, n - 1), length: 0))
+        guard lineRange.length > 0, lineIsHR(lineRange) else { return nil }
+        let (first, last) = hrRun(around: lineRange)
+        switch direction {
+        case .forward:
+            return lineEndsWithNewline(last) ? .neighbor(last.location + last.length) : .appendBelow
+        case .backward:
+            return first.location > 0 ? .neighbor(first.location - 1) : .stay
+        }
+    }
+
     /// Start of the line above the run of adjacent HR lines that contains
     /// `location`; 0 when the run starts the document or `location` is not
     /// on an HR line.

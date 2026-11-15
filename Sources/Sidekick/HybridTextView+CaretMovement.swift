@@ -262,6 +262,7 @@ extension HybridTextView {
             super.moveRight(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .forward) { return }
         let naive = min(current.location + 1, storage.length)
         guard naive != current.location else {
             super.moveRight(sender)
@@ -298,6 +299,7 @@ extension HybridTextView {
             super.moveLeft(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .backward) { return }
         let naive = max(current.location - 1, 0)
         guard naive != current.location else {
             super.moveLeft(sender)
@@ -334,10 +336,31 @@ extension HybridTextView {
     /// `\n` (undo-safe) and parks the caret on the new empty line below, so
     /// typing or Return continues under the divider and `---` stays a
     /// divider. Returns `false` (no change) when `destination` is not on such
-    /// a block, or `source` is already on it (an all-divider note: A4 scope).
+    /// a block, or `source` is already on it (`moveOffHRRun` handles that).
     private func escapeBelowTrailingHR(from source: Int, toward destination: Int) -> Bool {
         guard isOnUnterminatedTrailingHR(destination), !isOnUnterminatedTrailingHR(source) else { return false }
         appendLineBelowTrailingHR()
+        return true
+    }
+
+    /// A4: an arrow key from a caret that sits ON a divider leaves the whole
+    /// divider run in the key's direction (see `hrRunExit`), instead of
+    /// AppKit's stepping, which can move against the key there. Forward with
+    /// no line below appends one (A3 rule); backward with no line above
+    /// stays. A forward landing on a checklist line start goes on to its
+    /// content start, as `moveRight` does. Returns `false` when `source` is
+    /// not on a divider, so the caller's normal path runs.
+    private func moveOffHRRun(from source: Int, direction: CaretSnapDirection) -> Bool {
+        guard let exit = hrRunExit(from: source, direction: direction) else { return false }
+        switch exit {
+        case .neighbor(let location):
+            let landing = direction == .forward ? (checklistContentStart(ifLineStartAt: location) ?? location) : location
+            setSelectedRange(NSRange(location: landing, length: 0))
+        case .appendBelow:
+            appendLineBelowTrailingHR()
+        case .stay:
+            break
+        }
         return true
     }
 
@@ -388,6 +411,7 @@ extension HybridTextView {
             super.moveDown(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .forward) { return }
         let ns = storage.string as NSString
         var lineStart = 0, lineEnd = 0
         ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
@@ -425,6 +449,7 @@ extension HybridTextView {
             super.moveUp(sender)
             return
         }
+        if moveOffHRRun(from: current.location, direction: .backward) { return }
         let ns = storage.string as NSString
         var lineStart = 0
         ns.getLineStart(&lineStart, end: nil, contentsEnd: nil, for: NSRange(location: current.location, length: 0))
