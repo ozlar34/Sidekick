@@ -1,0 +1,23 @@
+# Job "test": runs the full SwiftPM test suite on a macOS runner for every
+# push and pull request.
+#
+# One test is skipped on CI (and locally): HRProbeDiagnosticTests is an opt-in
+# diagnostic that runs only with SIDEKICK_HR_PROBE=1, which this workflow never
+# sets. Snapshot tests only compare against recorded baselines; they record
+# only when SIDEKICK_RECORD_SNAPSHOTS=1, which this workflow never sets.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Run tests
+        run: swift test

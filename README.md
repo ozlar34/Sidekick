@@ -22,6 +22,8 @@ A hotkey-summoned, edge-anchored notes panel for macOS. Tap a global shortcut, a
 - Built with the assistance of [Claude Code](https://claude.ai/code) by Anthropic
 - Covered by 35+ test files including regression guards for the editor and markdown parsing
 
+CI: the `test` job in `.github/workflows/test.yml` runs `swift test` on a macOS runner for every push and pull request.
+
 ## Build and run
 
 Requires Xcode 15+ / Swift 5.9+.
