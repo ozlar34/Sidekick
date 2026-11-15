@@ -1,7 +1,10 @@
 # Job "test": runs the full SwiftPM test suite on a macOS runner for every
-# push and pull request. No tests are skipped on CI: the hosted macOS runner
-# has a window server, and snapshot tests only compare (never record) unless
-# SIDEKICK_RECORD_SNAPSHOTS=1, which this workflow never sets.
+# push and pull request.
+#
+# One test is skipped on CI (and locally): HRProbeDiagnosticTests is an opt-in
+# diagnostic that runs only with SIDEKICK_HR_PROBE=1, which this workflow never
+# sets. Snapshot tests only compare against recorded baselines; they record
+# only when SIDEKICK_RECORD_SNAPSHOTS=1, which this workflow never sets.
 name: CI
 
 on:
