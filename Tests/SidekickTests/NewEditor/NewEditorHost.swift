@@ -26,6 +26,12 @@ final class NewEditorHost {
         window.makeFirstResponder(textView)
     }
 
+    /// A host showing an open note (its storage, undo history and edit state), as the app does.
+    convenience init(note: OpenNote, size: CGSize = CGSize(width: 900, height: 600)) {
+        self.init(markdown: "", size: size)
+        textView.attach(note.content)
+    }
+
     deinit { MainActor.assumeIsolated { window.orderOut(nil) } }
 
     var string: String { textView.string }

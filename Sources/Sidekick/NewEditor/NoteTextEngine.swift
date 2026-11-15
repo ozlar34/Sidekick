@@ -22,6 +22,11 @@ enum NoteTextEngine {
         return Stack(storage: storage, layoutManager: layoutManager, container: container)
     }
 
+    /// Makes `tv` lay out and draw `storage` (note switch). The layout manager keeps its container.
+    static func show(_ storage: NSTextStorage, in tv: NSTextView) {
+        tv.layoutManager?.replaceTextStorage(storage)
+    }
+
     // MARK: Geometry (all rects in the text view's own coordinates)
 
     /// Rect of the insertion point for a caret at UTF-16 offset `location`.

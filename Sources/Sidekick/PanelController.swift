@@ -192,6 +192,8 @@ final class PanelController {
 
     private func slideOut() {
         guard let panel, panel.isVisible else { return }
+        // Panel dismiss writes pending saves of the new editor's open notes (none with the old editor).
+        if let store { Task { await store.flushOpenNotes() } }
         let endFrame = NSRect(x: panel.frame.origin.x + slideOffset,
                               y: panel.frame.origin.y,
                               width: panel.frame.width,

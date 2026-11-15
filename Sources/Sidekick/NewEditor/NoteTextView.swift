@@ -7,17 +7,23 @@ import NoteDocument
 /// Key handling is native except one structural rule: Enter at the end of a heading starts a
 /// normal paragraph. Arrow keys, selection and clicks are not overridden.
 final class NoteTextView: NSTextView, NSTextStorageDelegate {
-    private(set) var document = NoteDocument(markdown: "")
-    private var synced: [NoteBuffer.Paragraph] = []
-    /// Kind of the tail paragraph while it has no characters (it has nothing to carry a kind).
-    private var tailKind: BlockKind = .paragraph
+    /// The note shown now: its storage, undo history and document. `attach` switches it.
+    private(set) var content = NoteContent()
+    private var tailKind: BlockKind {
+        get { content.tailKind }
+        set { content.tailKind = newValue }
+    }
 
     /// Called with the document's markdown after every edit made through the view.
     var onMarkdownChange: ((String) -> Void)?
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
 
-    var markdown: String { document.markdown() }
+    var markdown: String { content.markdown }
+    var document: NoteDocument { content.document }
+
+    /// The undo history belongs to the note shown, never to the window.
+    override var undoManager: UndoManager? { content.undoManager }
 
     /// Block kinds in document order, e.g. ["h1", "p"].
     var blockKinds: [String] {
@@ -38,7 +44,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         let stack = NoteTextEngine.makeStack()
         let tv = NoteTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 0), textContainer: stack.container)
         tv.configure()
-        stack.storage.delegate = tv
+        tv.attach(NoteContent())
         return tv
     }
 
@@ -70,20 +76,28 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: Loading
 
-    /// Replaces the whole note from markdown (note switch, reload). Not an undo step: history is cleared.
+    /// Shows another open note's content in this view: its storage, undo history and selection.
+    func attach(_ new: NoteContent) {
+        guard new !== content || textStorage !== new.storage else { return }
+        content.savedSelection = selectedRange()
+        content.storage.delegate = nil
+        content = new
+        pendingStyleRange = nil
+        NoteTextEngine.show(new.storage, in: self)
+        new.storage.delegate = self
+        isEditable = new.isEditable
+        let length = new.storage.length
+        let sel = new.savedSelection
+        setSelectedRange(NSRange(location: min(sel.location, length), length: min(sel.length, max(0, length - sel.location))))
+        refreshTailTypingAttributes()
+    }
+
+    /// Replaces the whole note from markdown (reload). Not an undo step: history is cleared.
     func load(markdown: String) {
-        document = NoteDocument(markdown: markdown)
-        let (text, tail) = NoteBuffer.attributed(for: document)
-        tailKind = tail
-        synced = NoteBuffer.paragraphs(of: document)
-        guard let storage = textStorage else { return }
-        storage.beginEditing()
-        storage.setAttributedString(text)
-        storage.endEditing()
-        normalizeStyle()
+        content.reload(markdown: markdown)
+        pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
-        undoManager?.removeAllActions()
     }
 
     /// Replaces the whole note from markdown through the user edit path (one undo step).
@@ -122,33 +136,9 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
     override func didChangeText() {
         super.didChangeText()
         normalizeStyle()
-        syncDocument()
+        content.storageDidChange()
         refreshTailTypingAttributes()
-        onMarkdownChange?(document.markdown())
-    }
-
-    private func syncDocument() {
-        guard let storage = textStorage else { return }
-        let ns = storage.string as NSString
-        if let tail = NoteBuffer.paragraphRanges(in: ns).last, tail.length > 0 {
-            tailKind = NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: NSMaxRange(tail) - 1, effectiveRange: nil))
-        }
-        let wanted = NoteBuffer.paragraphs(in: storage, tailKind: tailKind)
-        var prefix = 0
-        while prefix < wanted.count, prefix < synced.count, wanted[prefix] == synced[prefix] { prefix += 1 }
-        var suffix = 0
-        while suffix < wanted.count - prefix, suffix < synced.count - prefix,
-              wanted[wanted.count - 1 - suffix] == synced[synced.count - 1 - suffix] { suffix += 1 }
-        let newMid = Array(wanted[prefix..<(wanted.count - suffix)])
-        let oldCount = synced.count - suffix - prefix
-        for (j, p) in newMid.enumerated() {
-            if j < oldCount { document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs)) }
-            else { document.apply(.insert(at: prefix + j, kind: p.kind, runs: p.runs)) }
-        }
-        if oldCount > newMid.count {
-            for _ in 0..<(oldCount - newMid.count) { document.apply(.remove(at: prefix + newMid.count)) }
-        }
-        synced = wanted
+        onMarkdownChange?(content.markdown)
     }
 
     // MARK: Tail paragraph

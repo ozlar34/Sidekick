@@ -24,6 +24,9 @@ final class NoteStore: ObservableObject {
     /// flush the pending save on note switch and on quit.
     let autosave = Debouncer(interval: 0.5)
 
+    /// Open notes of this session, by note id. A note's undo history lives as long as its entry.
+    private var openNotes: [UUID: OpenNote] = [:]
+
     private var folder: URL
     private var io: IOActor
     private var watcher: FolderWatcher
@@ -86,6 +89,25 @@ final class NoteStore: ObservableObject {
         watcherTask?.cancel()
         watcher.stop()
         changesContinuation?.finish()
+    }
+
+    // MARK: - Open notes (new editor)
+
+    /// The open note for `id`, created on first use from the file on disk. Saves go through `update`.
+    func openNote(_ id: UUID, scheduler: SaveScheduling? = nil) -> OpenNote? {
+        if let existing = openNotes[id] { return existing }
+        guard let note = notes.first(where: { $0.id == id }) else { return nil }
+        let open = OpenNote(id: id, title: note.title, fileURL: folder.appendingPathComponent(note.filename),
+                            scheduler: scheduler) { [weak self] title, body in
+            try await self?.update(id, title: title, body: body)
+        }
+        openNotes[id] = open
+        return open
+    }
+
+    /// Writes every pending save now: note switch, panel dismiss, quit.
+    func flushOpenNotes() async {
+        for open in Array(openNotes.values) { await open.flush() }
     }
 
     func create() async throws -> Note {
@@ -154,6 +176,8 @@ final class NoteStore: ObservableObject {
         // Write body to disk.
         try await io.writeNote(body, filename: newFilename)
 
+        openNotes[id]?.fileURL = folder.appendingPathComponent(newFilename)
+
         // Update in-memory notes.
         if let noteIdx = notes.firstIndex(where: { $0.id == id }) {
             notes[noteIdx].title = title
@@ -178,6 +202,7 @@ final class NoteStore: ObservableObject {
         try await io.saveIndex(currentIndex)
 
         notes.removeAll { $0.id == id }
+        openNotes[id] = nil
         lastAuthoredBodyByID[id] = nil
         // Re-sort to maintain dense order.
         notes.sort { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
@@ -276,6 +301,10 @@ final class NoteStore: ObservableObject {
     /// to work. Also writes UserDefaults inside rebind so the two sources
     /// of truth (UserDefaults[notesFolder], self.folder) cannot drift.
     func rebind(to newFolder: URL) async throws {
+        // 0. Pending saves belong to the old folder: write them there first.
+        await flushOpenNotes()
+        openNotes.removeAll()
+
         // 1. Stop the existing watcher and cancel its consumer task.
         watcherTask?.cancel()
         watcherTask = nil

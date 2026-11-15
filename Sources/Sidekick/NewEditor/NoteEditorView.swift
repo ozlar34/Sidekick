@@ -1,14 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// SwiftUI host of the new editor view. Same contract as `HybridEditorView`: `text` is the
-/// markdown of the note; the view shows it through the note document and writes back the markdown
-/// the note document produces.
+/// SwiftUI host of the new editor view. It shows an open note: the note's storage and undo history
+/// are attached to the single text view, and edits flow to the open note, never through view state.
 struct NoteEditorView: NSViewRepresentable {
-    @Binding var text: String
+    @ObservedObject var openNote: OpenNote
     @ObservedObject var controller: HybridEditorController
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let tv = NoteTextView.make()
@@ -20,45 +17,41 @@ struct NoteEditorView: NSViewRepresentable {
         scrollView.backgroundColor = NSColor.textBackgroundColor
         scrollView.documentView = tv
 
-        context.coordinator.textView = tv
-        tv.load(markdown: text)
-        tv.onMarkdownChange = { [weak coordinator = context.coordinator] md in
-            guard let parent = coordinator?.parent, parent.text != md else { return }
-            parent.text = md
-        }
+        tv.attach(openNote.content)
         tv.onShiftTabAtStart = { [weak controller] in controller?.onShiftTabAtBodyStart?() }
         controller.textView = tv
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
-        context.coordinator.parent = self
         guard let tv = nsView.documentView as? NoteTextView else { return }
-        // Same echo guard as the old editor: only a raised push token (note switch, reload) replaces the buffer.
-        switch HybridEditorView.bindingPushDecision(
-            currentString: tv.markdown,
-            incomingText: text,
-            currentToken: controller.externalPushToken,
-            lastConsumedToken: context.coordinator.lastConsumedPushToken
-        ) {
-        case .noChange:
-            context.coordinator.lastConsumedPushToken = controller.externalPushToken
-        case .reflexiveEcho:
-            break
-        case .applyExternalPush:
-            tv.load(markdown: text)
-            context.coordinator.lastConsumedPushToken = controller.externalPushToken
-        }
+        tv.attach(openNote.content)
+        // An unreadable file keeps the view read-only; a reload that succeeded makes it editable again.
+        tv.isEditable = openNote.content.isEditable
     }
+}
 
-    final class Coordinator {
-        var parent: NoteEditorView
-        weak var textView: NoteTextView?
-        var lastConsumedPushToken: Int
+/// Strip above the editor that explains why an open note is read-only. Empty for a readable note.
+struct OpenNoteStatusView: View {
+    @ObservedObject var openNote: OpenNote
 
-        init(_ parent: NoteEditorView) {
-            self.parent = parent
-            self.lastConsumedPushToken = MainActor.assumeIsolated { parent.controller.externalPushToken }
+    var body: some View {
+        if case .unreadable(let message) = openNote.state {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.yellow.opacity(0.12))
+                Divider()
+            }
         }
     }
 }
