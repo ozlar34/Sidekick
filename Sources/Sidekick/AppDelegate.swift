@@ -441,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let store else { return .terminateNow }
         Task { @MainActor in
             await store.autosave.flush()
+            await store.flushOpenNotes()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

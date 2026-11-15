@@ -17,6 +17,8 @@ struct EditorPaneView: View {
     }
     @State private var pendingEdit: PendingEdit?
     @Environment(\.setDocumentEdited) private var setDocumentEdited
+    /// New editor only: the open note whose callbacks this pane currently listens to.
+    @State private var boundOpenNote: OpenNote?
 
     // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
     // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
@@ -60,8 +62,9 @@ struct EditorPaneView: View {
 
     /// The old hybrid editor, or the new editor view when `NewEditorSwitch` is on.
     @ViewBuilder private var editorBody: some View {
-        if NewEditorSwitch.isOn {
-            NoteEditorView(text: $localBody, controller: editorController)
+        if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+            // The open note owns the text: nothing about it passes through view state.
+            NoteEditorView(openNote: open, controller: editorController)
         } else {
             HybridEditorView(text: $localBody, controller: editorController)
         }
@@ -121,6 +124,10 @@ struct EditorPaneView: View {
                         // Skip the onAppear / note-switch reseed — it would
                         // re-write the same body to disk and bump mtime.
                         guard newValue != note.title else { return }
+                        if NewEditorSwitch.isOn {
+                            store.openNote(note.id)?.setTitle(newValue)
+                            return
+                        }
                         scheduleAutoSave(title: newValue, body: localBody)
                     }
                     .padding(.horizontal, 20)
@@ -148,6 +155,10 @@ struct EditorPaneView: View {
                 }
             }
             .background(Color(.controlBackgroundColor))
+
+            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+                OpenNoteStatusView(openNote: open)
+            }
 
             // Soft inset shadow at body top — replaces translucent Divider() that bled through panel vibrancy.
             editorBody
@@ -195,7 +206,11 @@ struct EditorPaneView: View {
                         Spacer()
                         Button("Retry") {
                             diskWriteError = false
-                            scheduleAutoSave(title: localTitle, body: localBody)
+                            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+                                Task { await open.retrySave() }
+                            } else {
+                                scheduleAutoSave(title: localTitle, body: localBody)
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -212,9 +227,13 @@ struct EditorPaneView: View {
             // updateNSView as a binding change. Without a token bump it is
             // classified as a reflexive echo and DROPPED — the launch-time
             // "note body invisible until you switch notes" bug.
-            editorController.externalPushToken += 1
             localTitle = note.title
-            localBody = note.body
+            if NewEditorSwitch.isOn {
+                bindOpenNote()
+            } else {
+                editorController.externalPushToken += 1
+                localBody = note.body
+            }
             seedFocusForCurrentNote()
             // Wire Shift-Tab @ body offset 0 → return focus to title.
             // Counterpart to title→body Tab handled by TitleField's delegate.
@@ -222,6 +241,17 @@ struct EditorPaneView: View {
             autoReloadIfSafe()
         }
         .onChange(of: note.id) { _, _ in
+            if NewEditorSwitch.isOn {
+                // The open notes keep their own text and undo history; switching writes pending saves now.
+                let storeRef = store
+                Task { await storeRef.flushOpenNotes() }
+                localTitle = note.title
+                diskWriteError = false
+                bindOpenNote()
+                seedFocusForCurrentNote()
+                autoReloadIfSafe()
+                return
+            }
             // Save the old note's pending edit now instead of letting the
             // next note's keystrokes replace it in the shared debouncer.
             // An edit for the note we are returning to is kept pending and
@@ -328,8 +358,37 @@ struct EditorPaneView: View {
         Task { await reloadFromDisk() }
     }
 
+    /// New editor: listen to the current open note's dirty and save-failure reports.
+    private func bindOpenNote() {
+        boundOpenNote?.onDirtyChange = nil
+        boundOpenNote?.onSaveFailure = nil
+        guard let open = store.openNote(note.id) else { boundOpenNote = nil; return }
+        let setter = setDocumentEdited
+        open.onDirtyChange = { dirty in
+            setter(dirty)
+            hasPendingEdits = dirty
+        }
+        open.onSaveFailure = {
+            diskWriteError = true
+            setter(false)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                diskWriteError = false
+            }
+        }
+        boundOpenNote = open
+        setter(open.isDirty)
+        hasPendingEdits = open.isDirty
+    }
+
     private func reloadFromDisk() async {
         await store.reloadNote(id: note.id)
+        if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+            open.reload()
+            store.acknowledgeExternalChange(id: note.id)
+            hasPendingEdits = false
+            return
+        }
         if let updated = store.notes.first(where: { $0.id == note.id }) {
             // EDIT-02 echo guard: bump the push token before reseeding the
             // editor body from on-disk content so updateNSView classifies it
