@@ -6,7 +6,6 @@
 /// is the whole point.
 ///
 /// Pattern source: AppKit NSAttributedString.Key extension convention.
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-MH-02.
 import AppKit
 
 extension NSAttributedString.Key {

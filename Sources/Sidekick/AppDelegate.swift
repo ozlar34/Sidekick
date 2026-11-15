@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     internal var store: NoteStore?
     private var settingsWindowController: SettingsWindowController?
     private var statusItem: NSStatusItem?
+    /// Non-nil only when launched with `--debug-port` (see DebugHarness).
+    private var debugHarness: DebugHarness?
 
     /// Test-seam initializer. Skips the hotkey registration and NoteStore
     /// construction that happen in `applicationDidFinishLaunching(_:)` so
@@ -398,8 +400,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StorageLocation.migrateDefaultLocationIfNeeded()
 
         // NoteStore root: read from UserDefaults if set, otherwise the App Support default.
+        // `--debug-notes-folder` (DebugHarness) wins for this process only —
+        // never persisted, so a harness run can't touch the real notes.
         let configuredPath = Defaults.store.string(forKey: Defaults.notesFolder)
-        let folder: URL = (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
+        let folder: URL = DebugHarness.notesFolderOverride
+            ?? (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
             ?? StorageLocation.defaultNotesFolder
         do {
             let s = try NoteStore(folder: folder)
@@ -421,6 +426,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch {
             NSLog("[Sidekick] NoteStore init failed: \(error.localizedDescription) — hotkey not registered")
+        }
+
+        if let port = DebugHarness.port {
+            let harness = DebugHarness(app: self)
+            harness.start(port: port)
+            debugHarness = harness
         }
     }
 

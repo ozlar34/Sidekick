@@ -73,14 +73,23 @@ PLIST
 # Ad-hoc code sign
 codesign --deep --force --sign - "$APP_DIR" 2>/dev/null && echo "Code signed (ad-hoc)." || echo "Code signing skipped."
 
-# Mirror into ~/Applications if that copy exists — keeps the user-level
-# install (auto-launched at login via SMAppService) in sync with the dev build.
+# NOTE: this script used to silently mirror the build into
+# ~/Applications/Sidekick.app whenever that copy existed, on the assumption
+# that Launch-at-Login (SMAppService) pointed there. In practice the
+# registered login item was found to point at /Applications/Sidekick.app
+# (verified via `sfltool dumpbtm`), so that auto-mirror was just quietly
+# recreating a second permanent .app copy every dev-loop run — the actual
+# cause of recurring "two Sidekick's" confusion (2026-09-04 cleanup). It has
+# been removed: build-and-run.sh now only ever touches /Applications/. If
+# you want a separate ~/Applications production install kept in sync,
+# re-run Scripts/install.sh explicitly — don't let this script do it as a
+# side effect.
 USER_APP_DIR="$HOME/Applications/Sidekick.app"
 if [ -d "$USER_APP_DIR" ]; then
-    rm -rf "$USER_APP_DIR"
-    cp -R "$APP_DIR" "$USER_APP_DIR"
-    touch "$USER_APP_DIR"
-    echo "Synced to $USER_APP_DIR"
+    echo "NOTE: $USER_APP_DIR also exists and was NOT touched by this script."
+    echo "      Run Scripts/install.sh if you want it refreshed too — having"
+    echo "      both /Applications/Sidekick.app and this copy installed"
+    echo "      long-term is what caused the duplicate-app confusion before."
 fi
 
 # Kill any running instance so `open` actually launches the freshly built

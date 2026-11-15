@@ -1,46 +1,22 @@
 /// Pure-function markdown range finder for the hybrid live-preview editor.
 ///
-/// Six static functions locate marker-vs-content NSRanges for bold, italic,
-/// inline code, headings (H1–H6), bullets (- / *), and fenced code blocks.
-/// All offsets are UTF-16 code units (NSRange-compatible) so output drops
-/// straight into NSTextStorage.setAttributes(_:range:). No AppKit imports —
-/// keeps the layer trivially unit-testable and main-actor-free.
-///
-/// Pattern source: FormattingToolbarView.applyMarkdownWrap (static-funcs-on-
-/// a-type + UTF-16 discipline at Sources/Sidekick/FormattingToolbarView.swift:87-127).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-PS-01, D-PS-05, D-MH-04.
+/// Locates marker-vs-content NSRanges for every supported construct (bold,
+/// italic, inline code, strikethrough, underline, headings, bullets,
+/// numbered lists, blockquotes, thematic breaks, checklists, links, fenced
+/// code, tables). All offsets are UTF-16 code units (NSRange-compatible) so
+/// output drops straight into NSTextStorage.setAttributes(_:range:). No
+/// AppKit imports — keeps the layer trivially unit-testable and
+/// main-actor-free.
 import Foundation
 
 // MARK: - Result types
 
-struct BoldMatch {
+/// Shared shape for every "marker regex whose match is open+content+close"
+/// construct: bold, italic, inline code, strikethrough, underline.
+struct MarkerPairMatch {
     let markerOpenRange: NSRange
     let contentRange: NSRange
     let markerCloseRange: NSRange
-}
-
-struct ItalicMatch {
-    let markerOpenRange: NSRange
-    let contentRange: NSRange
-    let markerCloseRange: NSRange
-}
-
-struct InlineCodeMatch {
-    let markerOpenRange: NSRange
-    let contentRange: NSRange
-    let markerCloseRange: NSRange
-}
-
-struct StrikethroughMatch {
-    let markerOpenRange: NSRange   // length 2 (`~~`)
-    let contentRange: NSRange
-    let markerCloseRange: NSRange  // length 2 (`~~`)
-}
-
-struct UnderlineMatch {
-    let markerOpenRange: NSRange   // length 3 (`<u>`)
-    let contentRange: NSRange
-    let markerCloseRange: NSRange  // length 4 (`</u>`)
 }
 
 struct HeadingMatch {
@@ -64,44 +40,33 @@ struct LinkMatch {
     let closeParenRange: NSRange      // ")", length 1
 }
 
-/// GFM task-list line prefix: `- [ ] ` (unchecked) or `- [x] ` (checked).
-/// Total prefix length is always 6 UTF-16 units (dash + space + `[` +
-/// state char + `]` + trailing space). The trailing space is intentionally
-/// left visible so the rendered result is `○ item` (with breathing room
-/// after the substituted glyph), not the tight `○item`.
+/// GFM task-list prefix `- [ ] ` / `- [x] ` (6 UTF-16 units). Trailing space
+/// stays visible so the rendered result reads `○ item`, not `○item`.
 struct ChecklistMatch {
-    /// The `-` char at line start. Length 1. Glyph-substituted to ○/●.
+    /// The `-` at line start; glyph-substituted to ○/●.
     let markerRange: NSRange
-    /// ` [ ]` or ` [x]` — the 4 chars between dash and trailing space.
-    /// Fully hidden via `.sidekickHiddenMarker`.
+    /// ` [ ]` / ` [x]` — hidden via `.sidekickHiddenMarker`.
     let hiddenRange: NSRange
-    /// Line content after the `- [ ] ` / `- [x] ` prefix, excluding any
-    /// trailing newline. Length 0 when the line is exactly the prefix.
+    /// Line content after the prefix, excluding any trailing newline.
     let contentRange: NSRange
     let isChecked: Bool
 }
 
-/// Numbered list line prefix: `N. ` where N is one or more digits.
-/// `markerRange` covers the number+dot only (`N.`), excluding the trailing
-/// space, so `.secondaryLabelColor` is applied only to the marker itself.
+/// Numbered-list prefix `N. `; `markerRange` covers just `N.` (excluding the
+/// trailing space) so `.secondaryLabelColor` applies to the marker only.
 struct NumberedMatch {
-    /// The `N.` part (digits + dot), excluding trailing space. Variable length.
     let markerRange: NSRange
-    /// The full `N. ` prefix (digits + dot + space).
-    let fullPrefixRange: NSRange
 }
 
 struct TableMatch {
-    /// Header line content (excluding trailing newline). Always non-empty.
+    /// Header line content, excluding trailing newline.
     let headerRange: NSRange
-    /// Separator line INCLUDING its trailing newline (if any). Hiding this whole
-    /// range collapses the visual line so the `| --- | --- |` row disappears.
+    /// Separator line INCLUDING its trailing newline — hiding it collapses
+    /// the `| --- | --- |` row entirely.
     let separatorRange: NSRange
-    /// Combined body lines (each row's full line range, contiguous). Length 0
-    /// when the table has only a header + separator with no body rows.
+    /// Combined body lines (contiguous); length 0 when there are no body rows.
     let bodyRange: NSRange
-    /// Every `|` character inside header + body lines (length 1 each). Used to
-    /// fade pipes to a subtle color so cells read more like a table.
+    /// Every `|` in header + body, for fading pipes to a subtle color.
     let pipeRanges: [NSRange]
 }
 
@@ -111,623 +76,273 @@ struct TableMatch {
 /// All returned NSRanges are UTF-16 offsets (NSRange-compatible).
 enum MarkdownInlineParser {
 
-    // MARK: - Cached regexes (D-RF-01 — addresses 09-REVIEW MD-01)
-    // Compiled once per process. `try!` is safe: these are compile-time-constant
-    // patterns; a compile failure indicates a code defect, not a runtime condition.
-    private static let boldRegex = try! NSRegularExpression(
-        pattern: "\\*\\*([^*]|\\*(?!\\*))+?\\*\\*",
-        options: []
-    )
-    private static let italicAsteriskRegex = try! NSRegularExpression(
-        pattern: "(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)",
-        options: []
-    )
-    private static let italicUnderscoreRegex = try! NSRegularExpression(
-        pattern: "(?<![A-Za-z0-9_])_([^_\\n]+?)_(?![A-Za-z0-9_])",
-        options: []
-    )
-    private static let inlineCodeRegex = try! NSRegularExpression(
-        pattern: "`([^`\\n]+?)`",
-        options: []
-    )
-    private static let headingRegex = try! NSRegularExpression(
-        pattern: "^(#{1,6}) (.*)$",
-        options: []
-    )
+    // MARK: - Cached regexes
+    // Compiled once per process. `try!` is safe: these are compile-time-
+    // constant patterns; a compile failure indicates a code defect, not a
+    // runtime condition.
+    private static let boldRegex = try! NSRegularExpression(pattern: "\\*\\*([^*]|\\*(?!\\*))+?\\*\\*")
+    private static let italicAsteriskRegex = try! NSRegularExpression(pattern: "(?<!\\*)\\*(?!\\*)([^*\\n]+?)(?<!\\*)\\*(?!\\*)")
+    private static let italicUnderscoreRegex = try! NSRegularExpression(pattern: "(?<![A-Za-z0-9_])_([^_\\n]+?)_(?![A-Za-z0-9_])")
+    private static let inlineCodeRegex = try! NSRegularExpression(pattern: "`([^`\\n]+?)`")
+    private static let headingRegex = try! NSRegularExpression(pattern: "^(#{1,6}) (.*)$")
     // Bullet pattern excludes task-list lines via negative lookahead: a line
     // starting with `- [ ] ` or `- [x] ` / `- [X] ` is a checklist, not a
     // plain bullet, so the dash must NOT be tagged with `.sidekickBulletMarker`
     // (would clash with `.sidekickChecklistMarker`).
-    private static let bulletRegex = try! NSRegularExpression(
-        pattern: "^(- (?!\\[[ xX]\\] )|\\* )",
-        options: []
-    )
-    private static let numberedListRegex = try! NSRegularExpression(
-        pattern: #"^\d+\."#,
-        options: []
-    )
-    private static let checklistRegex = try! NSRegularExpression(
-        pattern: "^- \\[([ xX])\\] ",
-        options: []
-    )
-    private static let blockQuoteRegex = try! NSRegularExpression(
-        pattern: "^> ",
-        options: []
-    )
-    // Thematic break: a line consisting only of three or more `-`, `*`, or `_`
-    // characters (a single marker class, no mixing), with optional surrounding
-    // whitespace. The alternation `(?:-{3,}|\*{3,}|_{3,})` requires all
-    // markers to be the same character, so `-*-` never matches. Whole-line
-    // anchoring (`^…$`) means any content character (e.g. letters in `**bold**`
-    // or `***bolditalic***`) breaks the match — this is the bold-italic
-    // disambiguation: those lines have non-marker text and cannot match.
-    // The regex is run against single-line text (newline stripped before
-    // matching) so `^…$` anchors the whole line.
-    private static let thematicBreakRegex = try! NSRegularExpression(
-        pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$",
-        options: []
-    )
-    private static let fenceRegex = try! NSRegularExpression(
-        pattern: "^```[a-zA-Z0-9]*$",
-        options: []
-    )
-    private static let linkRegex = try! NSRegularExpression(
-        pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)",
-        options: []
-    )
-    private static let strikethroughRegex = try! NSRegularExpression(
-        pattern: "~~([^~\\n]+?)~~",
-        options: []
-    )
-    // Underline is HTML, not markdown — `<u>foo</u>`. Match across non-newline
-    // content; pair-only-hide (D-MH-04) drops unclosed `<u>` tags.
-    private static let underlineRegex = try! NSRegularExpression(
-        pattern: "<u>([^\\n]+?)</u>",
-        options: []
-    )
+    private static let bulletRegex = try! NSRegularExpression(pattern: "^(- (?!\\[[ xX]\\] )|\\* )")
+    private static let numberedListRegex = try! NSRegularExpression(pattern: #"^\d+\."#)
+    private static let checklistRegex = try! NSRegularExpression(pattern: "^- \\[([ xX])\\] ")
+    private static let blockQuoteRegex = try! NSRegularExpression(pattern: "^> ")
+    // Thematic break: a line of only `-`, `*`, or `_` (3+, single marker
+    // class, optional surrounding whitespace). Whole-line anchoring is what
+    // disambiguates this from inline emphasis: `**bold**` has content
+    // characters between the markers and so can never match `^…$`.
+    private static let thematicBreakRegex = try! NSRegularExpression(pattern: "^[ \\t]*(?:-{3,}|\\*{3,}|_{3,})[ \\t]*$")
+    private static let fenceRegex = try! NSRegularExpression(pattern: "^```[a-zA-Z0-9]*$")
+    private static let linkRegex = try! NSRegularExpression(pattern: "\\[([^\\]\\n]+)\\]\\(([^)\\n]*)\\)")
+    private static let strikethroughRegex = try! NSRegularExpression(pattern: "~~([^~\\n]+?)~~")
+    // Underline is HTML, not markdown (`<u>foo</u>`); unclosed tags are
+    // dropped (pair-only-hide).
+    private static let underlineRegex = try! NSRegularExpression(pattern: "<u>([^\\n]+?)</u>")
+
+    // MARK: - Line-walking helper
+
+    /// Walks `string` line-by-line (`NSString.lineRange`), invoking `body`
+    /// with the line's full range (including its terminator), that range
+    /// with any trailing `\n`/`\r` stripped, and the trimmed range's text.
+    /// Centralizes the one infinite-loop guard needed when `lineRange` fails
+    /// to advance.
+    private static func forEachLine(in string: String, _ body: (NSRange, NSRange, String) -> Void) {
+        let ns = string as NSString
+        var lineStart = 0
+        while lineStart < ns.length {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            let contentRange = trimTrailingNewline(lineRange, in: ns)
+            body(lineRange, contentRange, ns.substring(with: contentRange))
+
+            let nextStart = lineRange.location + lineRange.length
+            if nextStart == lineStart { break }
+            lineStart = nextStart
+        }
+    }
+
+    // MARK: - Paired-marker helper
+
+    /// Shared implementation for bold / italic / inline-code / strikethrough
+    /// / underline: every one of these is "regex match → subtract marker
+    /// widths → emit (open, content, close)". `openLength`/`closeLength` are
+    /// the marker widths on each side (asymmetric for underline: `<u>`/`</u>`
+    /// are 3/4). `skipBlank` drops degenerate whitespace-only content (e.g.
+    /// `** **`) — only bold/strikethrough opt into this.
+    private static func pairedRanges(
+        _ regex: NSRegularExpression,
+        in string: String,
+        openLength: Int,
+        closeLength: Int,
+        skipBlank: Bool
+    ) -> [MarkerPairMatch] {
+        let ns = string as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
+        let rawMatches = regex.matches(in: string, range: fullRange)
+
+        return rawMatches.compactMap { match -> MarkerPairMatch? in
+            let r = match.range
+            let contentLength = r.length - openLength - closeLength
+            guard contentLength > 0 else { return nil }
+
+            if skipBlank {
+                let content = ns.substring(with: NSRange(location: r.location + openLength, length: contentLength))
+                guard !content.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            }
+
+            return MarkerPairMatch(
+                markerOpenRange: NSRange(location: r.location, length: openLength),
+                contentRange: NSRange(location: r.location + openLength, length: contentLength),
+                markerCloseRange: NSRange(location: r.location + r.length - closeLength, length: closeLength)
+            )
+        }
+    }
 
     // MARK: Bold
 
-    /// Returns ranges for all paired `**…**` bold markers in `string`.
-    ///
-    /// - Each BoldMatch contains UTF-16 NSRanges for the open marker (length 2),
-    ///   the content between markers, and the close marker (length 2).
-    /// - Unclosed pairs (e.g. `**foo` with no closing `**`) return nothing — D-MH-04.
-    /// - Degenerate empty pairs (e.g. `** **`) are skipped (zero-length content).
-    static func findBoldRanges(in string: String) -> [BoldMatch] {
-        let ns = string as NSString
-
-        let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = Self.boldRegex.matches(in: string, range: fullRange)
-
-        return rawMatches.compactMap { match -> BoldMatch? in
-            let r = match.range
-            // A valid **…** needs at least 4 characters (open + 1 content char + close)
-            // Content length is total - 4 (two 2-char markers)
-            let contentLength = r.length - 4
-            guard contentLength > 0 else { return nil }
-
-            // Skip degenerate whitespace-only pairs (e.g. "** **") — these render
-            // nothing meaningful and match the plan's "empty pair → skip" intent (D-T-01).
-            let contentNS = ns.substring(with: NSRange(location: r.location + 2, length: contentLength)) as NSString
-            let trimmed = contentNS.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { return nil }
-
-            let markerOpen = NSRange(location: r.location, length: 2)
-            let content = NSRange(location: r.location + 2, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 2, length: 2)
-            return BoldMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
-        }
+    /// Returns ranges for every paired `**…**` bold marker. Unclosed pairs
+    /// and degenerate whitespace-only pairs (e.g. `** **`) return nothing.
+    static func findBoldRanges(in string: String) -> [MarkerPairMatch] {
+        pairedRanges(boldRegex, in: string, openLength: 2, closeLength: 2, skipBlank: true)
     }
 
     // MARK: Italic
 
-    /// Returns ranges for all paired `*…*` or `_…_` italic markers in `string`.
-    ///
-    /// - Uses two passes: one for `*…*` (with look-arounds to avoid claiming `**bold**`)
-    ///   and one for `_…_` (with word-boundary look-arounds per CommonMark).
-    /// - Returns union of both passes as ItalicMatch values.
-    static func findItalicRanges(in string: String) -> [ItalicMatch] {
-        let ns = string as NSString
-        let fullRange = NSRange(location: 0, length: ns.length)
-        var results: [ItalicMatch] = []
-
-        // Pass 1: *…* — look-arounds prevent matching inside **bold**
-        let asteriskMatches = Self.italicAsteriskRegex.matches(in: string, range: fullRange)
-        for match in asteriskMatches {
-            let r = match.range
-            let contentLength = r.length - 2
-            guard contentLength > 0 else { continue }
-            let markerOpen = NSRange(location: r.location, length: 1)
-            let content = NSRange(location: r.location + 1, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
-            results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
-        }
-
-        // Pass 2: _…_ — word-boundary look-arounds per CommonMark
-        let underscoreMatches = Self.italicUnderscoreRegex.matches(in: string, range: fullRange)
-        for match in underscoreMatches {
-            let r = match.range
-            let contentLength = r.length - 2
-            guard contentLength > 0 else { continue }
-            let markerOpen = NSRange(location: r.location, length: 1)
-            let content = NSRange(location: r.location + 1, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
-            results.append(ItalicMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose))
-        }
-
-        return results
+    /// Returns ranges for every paired `*…*` or `_…_` italic marker: one
+    /// pass per delimiter. Look-arounds keep `*…*` from claiming `**bold**`;
+    /// `_…_` uses CommonMark's word-boundary look-arounds.
+    static func findItalicRanges(in string: String) -> [MarkerPairMatch] {
+        pairedRanges(italicAsteriskRegex, in: string, openLength: 1, closeLength: 1, skipBlank: false)
+            + pairedRanges(italicUnderscoreRegex, in: string, openLength: 1, closeLength: 1, skipBlank: false)
     }
 
     // MARK: Inline Code
 
-    /// Returns ranges for all paired `` `…` `` inline code markers in `string`.
-    ///
-    /// - Marker ranges are 1 UTF-16 unit each (single backtick).
-    /// - Unclosed backticks return nothing (D-MH-04 pair-only principle).
-    static func findInlineCodeRanges(in string: String) -> [InlineCodeMatch] {
-        let ns = string as NSString
-
-        let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = Self.inlineCodeRegex.matches(in: string, range: fullRange)
-
-        return rawMatches.compactMap { match -> InlineCodeMatch? in
-            let r = match.range
-            let contentLength = r.length - 2
-            guard contentLength > 0 else { return nil }
-            let markerOpen = NSRange(location: r.location, length: 1)
-            let content = NSRange(location: r.location + 1, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 1, length: 1)
-            return InlineCodeMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
-        }
+    /// Returns ranges for every paired `` `…` `` inline code marker.
+    /// Unclosed backticks return nothing.
+    static func findInlineCodeRanges(in string: String) -> [MarkerPairMatch] {
+        pairedRanges(inlineCodeRegex, in: string, openLength: 1, closeLength: 1, skipBlank: false)
     }
 
     // MARK: Strikethrough
 
-    /// Returns ranges for all paired `~~…~~` strikethrough markers in `string`.
-    /// Mirrors `findBoldRanges` shape: 2-char open + content + 2-char close,
-    /// degenerate empty/whitespace pairs skipped.
-    static func findStrikethroughRanges(in string: String) -> [StrikethroughMatch] {
-        let ns = string as NSString
-        let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = Self.strikethroughRegex.matches(in: string, range: fullRange)
-
-        return rawMatches.compactMap { match -> StrikethroughMatch? in
-            let r = match.range
-            let contentLength = r.length - 4
-            guard contentLength > 0 else { return nil }
-            let contentNS = ns.substring(with: NSRange(location: r.location + 2, length: contentLength)) as NSString
-            let trimmed = contentNS.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { return nil }
-
-            let markerOpen = NSRange(location: r.location, length: 2)
-            let content = NSRange(location: r.location + 2, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 2, length: 2)
-            return StrikethroughMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
-        }
+    /// Returns ranges for every paired `~~…~~` strikethrough marker. Mirrors
+    /// `findBoldRanges`: degenerate empty/whitespace pairs are skipped.
+    static func findStrikethroughRanges(in string: String) -> [MarkerPairMatch] {
+        pairedRanges(strikethroughRegex, in: string, openLength: 2, closeLength: 2, skipBlank: true)
     }
 
     // MARK: Underline
 
-    /// Returns ranges for all paired `<u>…</u>` underline markers in `string`.
-    /// Asymmetric markers — open is 3 chars, close is 4 chars. Total non-content
-    /// length = 7; degenerate empty pairs skipped.
-    static func findUnderlineRanges(in string: String) -> [UnderlineMatch] {
-        let ns = string as NSString
-        let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = Self.underlineRegex.matches(in: string, range: fullRange)
-
-        return rawMatches.compactMap { match -> UnderlineMatch? in
-            let r = match.range
-            let contentLength = r.length - 7
-            guard contentLength > 0 else { return nil }
-
-            let markerOpen = NSRange(location: r.location, length: 3)
-            let content = NSRange(location: r.location + 3, length: contentLength)
-            let markerClose = NSRange(location: r.location + r.length - 4, length: 4)
-            return UnderlineMatch(markerOpenRange: markerOpen, contentRange: content, markerCloseRange: markerClose)
-        }
+    /// Returns ranges for every paired `<u>…</u>` underline marker. Markers
+    /// are asymmetric: open is 3 chars, close is 4.
+    static func findUnderlineRanges(in string: String) -> [MarkerPairMatch] {
+        pairedRanges(underlineRegex, in: string, openLength: 3, closeLength: 4, skipBlank: false)
     }
 
     // MARK: Headings
 
-    /// Returns ranges for all `# `–`###### ` heading prefixes in `string`.
-    ///
-    /// - Scans line-by-line via NSString.lineRange(for:) for UTF-16 correctness.
-    /// - Requires `# ` (hash + space) at line start; `#foo` does NOT match.
-    /// - Levels 1–6 only; 7+ hashes are rejected.
-    /// - prefixRange covers the hashes + trailing space (level + 1 UTF-16 units).
-    /// - contentRange covers the heading text (trailing newline excluded).
+    /// Returns ranges for every `# ` – `###### ` heading prefix (levels 1–6
+    /// only; `#foo` with no trailing space does not match). `prefixRange`
+    /// covers the hashes + space; `contentRange` excludes the trailing
+    /// newline.
     static func findHeadingPrefixes(in string: String) -> [HeadingMatch] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [HeadingMatch] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            // Extract the line text (without the trailing newline for matching)
-            let lineEnd = lineRange.location + lineRange.length
-            // Determine if the line ends with a newline character
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
-                let lastChar = ns.substring(with: lastCharRange)
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            // Build the line content for regex matching (strip trailing newline for clean matching)
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineMatchRange = NSRange(location: lineRange.location, length: matchLength)
-            let lineText = ns.substring(with: lineMatchRange)
-
-            // Run the heading regex against this line
+        forEachLine(in: string) { lineRange, _, lineText in
             let lineNS = lineText as NSString
-            let lineFullRange = NSRange(location: 0, length: lineNS.length)
-            let headingMatches = Self.headingRegex.matches(in: lineText, range: lineFullRange)
-
-            if let m = headingMatches.first {
-                // Group 1 is the hashes, group 2 is the content
-                let hashesRange = m.range(at: 1)
-                let contentLocalRange = m.range(at: 2)
-
-                if hashesRange.location != NSNotFound && contentLocalRange.location != NSNotFound {
-                    let level = hashesRange.length
-                    // Prefix covers hashes + space = level + 1 UTF-16 units
-                    let prefixRange = NSRange(location: lineRange.location, length: level + 1)
-                    // Content range in the full string
-                    let contentRange = NSRange(
-                        location: lineRange.location + contentLocalRange.location,
-                        length: contentLocalRange.length
-                    )
-                    results.append(HeadingMatch(level: level, prefixRange: prefixRange, contentRange: contentRange))
-                }
-            }
-
-            // Advance to next line
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                // Safety: avoid infinite loop if lineRange didn't advance
-                break
-            }
+            guard let m = headingRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: lineNS.length)) else { return }
+            // Both capture groups are mandatory in a successful match — no
+            // NSNotFound guard needed.
+            let level = m.range(at: 1).length
+            let contentLocal = m.range(at: 2)
+            results.append(HeadingMatch(
+                level: level,
+                prefixRange: NSRange(location: lineRange.location, length: level + 1),
+                contentRange: NSRange(location: lineRange.location + contentLocal.location, length: contentLocal.length)
+            ))
         }
-
         return results
     }
 
     // MARK: Bullets
 
-    /// Returns prefix NSRanges for all `- ` or `* ` bullet list markers in `string`.
-    ///
-    /// - Scans line-by-line; only matches at line start.
-    /// - Each returned NSRange has length 2 (the marker + space, UTF-16 units).
-    /// - `-foo` (no trailing space) does NOT match.
+    /// Returns the `- `/`* ` prefix range (2 UTF-16 units) for every bullet
+    /// list line (line start only; `-foo` with no trailing space does not
+    /// match).
     static func findBulletPrefixes(in string: String) -> [NSRange] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [NSRange] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            // Extract line text for regex matching
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
-                let lastChar = ns.substring(with: lastCharRange)
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
-            let lineNS = lineText as NSString
-            let lineFullRange = NSRange(location: 0, length: lineNS.length)
-
-            let bulletMatches = Self.bulletRegex.matches(in: lineText, range: lineFullRange)
-            if bulletMatches.first != nil {
-                // Prefix is always 2 UTF-16 units at line start
-                let prefixRange = NSRange(location: lineRange.location, length: 2)
-                results.append(prefixRange)
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
-            }
+        forEachLine(in: string) { lineRange, _, lineText in
+            guard bulletRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) != nil else { return }
+            results.append(NSRange(location: lineRange.location, length: 2))
         }
-
         return results
     }
 
     // MARK: Numbered lists
 
-    /// Returns `NumberedMatch` values for every `N. ` numbered-list prefix in `string`.
-    ///
-    /// - Scans line-by-line; only matches `\d+\.` at line start followed by a space.
-    /// - `markerRange` covers `N.` (digits + dot, no trailing space); variable length.
-    /// - `fullPrefixRange` covers `N. ` (digits + dot + space).
+    /// Returns a `NumberedMatch` for every `N. ` numbered-list prefix at
+    /// line start. DO NOT "fix": the guard only requires one more char after
+    /// the dot, not specifically a space, so `1.foo` currently matches too.
     static func findNumberedPrefixes(in string: String) -> [NumberedMatch] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [NumberedMatch] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastChar = ns.substring(with: NSRange(location: lineEnd - 1, length: 1))
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
-            let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
-
-            if let match = Self.numberedListRegex.firstMatch(in: lineText, range: lineFullRange) {
-                // match covers `N.` — the digits+dot without the trailing space
-                let dotEnd = match.range.location + match.range.length
-                // require at least one char after the dot (the space) within the line
-                guard dotEnd < matchLength else {
-                    lineStart = lineEnd
-                    if lineStart == lineRange.location { break }
-                    continue
-                }
-                let markerLen = match.range.length  // e.g. 2 for "1.", 3 for "10."
-                let markerRange = NSRange(location: lineRange.location, length: markerLen)
-                let fullPrefixRange = NSRange(location: lineRange.location, length: markerLen + 1)
-                results.append(NumberedMatch(markerRange: markerRange, fullPrefixRange: fullPrefixRange))
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
-            }
+        forEachLine(in: string) { lineRange, _, lineText in
+            let lineNS = lineText as NSString
+            guard let match = numberedListRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: lineNS.length)) else { return }
+            let dotEnd = match.range.location + match.range.length
+            guard dotEnd < lineNS.length else { return }
+            results.append(NumberedMatch(markerRange: NSRange(location: lineRange.location, length: match.range.length)))
         }
-
         return results
     }
 
     // MARK: Blockquotes
 
-    /// Returns prefix NSRanges for all `> ` blockquote markers in `string`.
-    ///
-    /// - Scans line-by-line; only matches at line start.
-    /// - Each returned NSRange has length 2 (the `>` + space, UTF-16 units).
-    /// - `>foo` (no trailing space) does NOT match.
+    /// Returns the `> ` prefix range (2 UTF-16 units) for every blockquote
+    /// line (line start only; `>foo` with no trailing space does not match).
     static func findBlockQuotePrefixes(in string: String) -> [NSRange] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [NSRange] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
-                let lastChar = ns.substring(with: lastCharRange)
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
-            let lineNS = lineText as NSString
-            let lineFullRange = NSRange(location: 0, length: lineNS.length)
-
-            if Self.blockQuoteRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
-                let prefixRange = NSRange(location: lineRange.location, length: 2)
-                results.append(prefixRange)
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
-            }
+        forEachLine(in: string) { lineRange, _, lineText in
+            guard blockQuoteRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) != nil else { return }
+            results.append(NSRange(location: lineRange.location, length: 2))
         }
-
         return results
     }
 
     // MARK: Thematic breaks (`---` / `***` / `___`)
 
     /// Returns the line-content NSRange (no trailing newline) for every
-    /// thematic-break line in `string`. A thematic break is a line containing
-    /// only three-or-more `-`, `*`, or `_` characters (single marker class,
-    /// no mixing) with optional surrounding spaces/tabs. Whole-line anchoring
-    /// makes `*`/`_` runs unambiguous from inline emphasis: `**bold**` has
-    /// content characters between markers and cannot match.
+    /// thematic-break line. Lines inside a fenced code block are excluded —
+    /// `---` inside a fence is source text, not an HR.
     ///
-    /// Lines whose range intersects a fenced-code-block content range are
-    /// excluded — `---` inside a fence is source text, not an HR (mirrors
-    /// the `findTableBlocks` fence filter).
-    ///
-    /// NO previous-line-empty guard: CommonMark's setext-H2 disambiguation
-    /// (`Title\n---` is a heading underline, not a thematic break) does not
-    /// apply here because Sidekick does not render setext headings. Users
-    /// expect a `---` line to draw a hairline regardless of what's above.
-    /// The earlier guard also caused a paragraph-scope vs full-doc parsing
-    /// asymmetry that produced a "HR appears, then vanishes on note switch"
-    /// bug.
+    /// No previous-line-empty guard: Sidekick doesn't render setext
+    /// headings, so a `---` line is always an HR regardless of what's above
+    /// it (a prior empty-line guard caused paragraph-scoped vs full-doc
+    /// reparses to disagree, producing an HR-appears-then-vanishes bug).
     static func findThematicBreaks(in string: String) -> [NSRange] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
-        // Lines inside a fenced code block are claimed by the fence and must
-        // not be re-interpreted as a thematic break (mirrors the
-        // `findTableBlocks` fence filter at line ~875).
         let fenceContentRanges = findFencedCodeBlocks(in: string).map(\.contentRange)
         func intersectsFence(_ r: NSRange) -> Bool {
             fenceContentRanges.contains { NSIntersectionRange($0, r).length > 0 }
         }
 
         var results: [NSRange] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastChar = ns.substring(with: NSRange(location: lineEnd - 1, length: 1))
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
-            let lineFullRange = NSRange(location: 0, length: (lineText as NSString).length)
-
-            if Self.thematicBreakRegex.firstMatch(in: lineText, range: lineFullRange) != nil {
-                // The previous-line-empty guard (CommonMark setext-H2
-                // disambiguation) was removed: Sidekick doesn't render
-                // setext headings, and users expect a `---` line to render
-                // as a hairline regardless of what's above it. The previous
-                // guard also produced a substring-scoping bug — paragraph-
-                // scoped reparses saw the `---` at substring-offset 0 and
-                // accepted it, while full-doc reparses correctly rejected,
-                // making the HR appear briefly and then vanish on note
-                // switch. Treating `---` as HR unconditionally is consistent
-                // across both reparse scopes.
-                let candidate = NSRange(location: lineRange.location, length: matchLength)
-                if !intersectsFence(candidate) {
-                    results.append(candidate)
-                }
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
+        forEachLine(in: string) { _, contentRange, lineText in
+            guard thematicBreakRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) != nil else { return }
+            if !intersectsFence(contentRange) {
+                results.append(contentRange)
             }
         }
-
         return results
     }
 
     // MARK: Checklists (GFM task lists)
 
-    /// Returns matches for all `- [ ] ` / `- [x] ` task-list prefixes in `string`.
-    ///
-    /// - Scans line-by-line; only matches at line start (no indentation handling
-    ///   yet — keeping scope tight per the feature spec).
-    /// - The dash gets `markerRange` (length 1, glyph-substituted at layout time).
-    /// - The 4 chars after the dash (` [ ]` / ` [x]`) become `hiddenRange`.
-    /// - Trailing space (1 char) intentionally stays VISIBLE — gives the rendered
-    ///   `◯ ` / `◉ ` glyph breathing room before the content text.
-    /// - `isChecked` is true when the state char is `x` or `X`.
+    /// Returns a `ChecklistMatch` for every `- [ ] ` / `- [x] ` task-list
+    /// prefix at line start (no indentation handling). `isChecked` is true
+    /// for `x` or `X`.
     static func findChecklistPrefixes(in string: String) -> [ChecklistMatch] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [ChecklistMatch] = []
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
-                let lastChar = ns.substring(with: lastCharRange)
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
-            } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
+        forEachLine(in: string) { lineRange, contentRange, lineText in
             let lineNS = lineText as NSString
-            let lineFullRange = NSRange(location: 0, length: lineNS.length)
+            guard let m = checklistRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: lineNS.length)) else { return }
+            // Group 1 (the state char) is a mandatory capture in a
+            // successful match, so it's always present — no NSNotFound guard
+            // needed.
+            let isChecked = lineNS.substring(with: m.range(at: 1)).lowercased() == "x"
 
-            if let m = Self.checklistRegex.firstMatch(in: lineText, range: lineFullRange) {
-                // Group 1 is the state char (` `, `x`, or `X`).
-                let stateGroup = m.range(at: 1)
-                guard stateGroup.location != NSNotFound, stateGroup.length == 1 else {
-                    lineStart = lineEnd
-                    if lineStart == lineRange.location { break }
-                    continue
-                }
-                let stateChar = lineNS.substring(with: stateGroup).lowercased()
-                let isChecked = (stateChar == "x")
-
-                let base = lineRange.location
-                let markerRange = NSRange(location: base, length: 1)        // `-`
-                let hiddenRange = NSRange(location: base + 1, length: 4)    // ` [ ]` or ` [x]`
-                // Content starts after the trailing space (6 chars total prefix).
-                // Total prefix is always 6; line content range is the rest of the
-                // line (excluding the trailing newline if present).
-                let contentStart = base + 6
-                let contentEnd = lineRange.location + matchLength
-                let contentLen = max(0, contentEnd - contentStart)
-                let contentRange = NSRange(location: contentStart, length: contentLen)
-
-                results.append(ChecklistMatch(
-                    markerRange: markerRange,
-                    hiddenRange: hiddenRange,
-                    contentRange: contentRange,
-                    isChecked: isChecked
-                ))
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
-            }
+            let base = lineRange.location
+            let contentStart = base + 6
+            let contentEnd = contentRange.location + contentRange.length
+            results.append(ChecklistMatch(
+                markerRange: NSRange(location: base, length: 1),
+                hiddenRange: NSRange(location: base + 1, length: 4),
+                contentRange: NSRange(location: contentStart, length: max(0, contentEnd - contentStart)),
+                isChecked: isChecked
+            ))
         }
-
         return results
     }
 
     // MARK: Links
 
-    /// Finds fully-closed markdown link patterns `[label](url)` per D-LR-01 (pair-only-hide).
-    /// Returns empty when no closed pair exists. Regex pattern per D-LR-06:
-    /// `\[([^\]\n]+)\]\(([^)\n]*)\)` — capture group 1 = label, group 2 = url.
+    /// Finds fully-closed markdown link patterns `[label](url)`; returns
+    /// nothing for an unclosed pair. Group 1 = label, group 2 = url.
     /// UTF-16-safe — all NSRanges are in UTF-16 code units relative to `string`.
     static func findLinkRanges(in string: String) -> [LinkMatch] {
-        let ns = string as NSString
-        let fullRange = NSRange(location: 0, length: ns.length)
-        let rawMatches = Self.linkRegex.matches(in: string, range: fullRange)
+        let fullRange = NSRange(location: 0, length: (string as NSString).length)
+        let rawMatches = linkRegex.matches(in: string, range: fullRange)
         return rawMatches.compactMap { match -> LinkMatch? in
             let labelRange = match.range(at: 1)
             let urlRange = match.range(at: 2)
             guard labelRange.location != NSNotFound,
                   urlRange.location != NSNotFound else { return nil }
             let full = match.range
-            // Reconstruct bracket/paren ranges by construction:
-            //   "[" = full.location (length 1)
-            //   label = labelRange
-            //   "]" = labelRange.location + labelRange.length (length 1)
-            //   "(" = closeBracket.location + 1 (length 1)
-            //   url = urlRange
-            //   ")" = urlRange.location + urlRange.length (length 1)
+            // Bracket/paren ranges are reconstructed positionally around the
+            // two capture groups.
             let openBracket = NSRange(location: full.location, length: 1)
             let closeBracket = NSRange(location: labelRange.location + labelRange.length, length: 1)
             let openParen = NSRange(location: closeBracket.location + 1, length: 1)
@@ -743,43 +358,24 @@ enum MarkdownInlineParser {
         }
     }
 
-    /// Bare-URL detector for the link-chip render path (Phase B). Uses
-    /// `NSDataDetector(.link)` because manual http(s) regex chokes on URL
-    /// edge cases (parens, trailing punctuation) that DataDetector already
-    /// handles. Returns ranges that do NOT overlap any markdown link bracket
-    /// pair from `findLinkRanges`, so `[label](url)` patterns retain their
-    /// existing styled-label behavior.
+    /// Bare-URL detector for the link-chip render path, using
+    /// `NSDataDetector(.link)` because a manual http(s) regex chokes on URL
+    /// edge cases (parens, trailing punctuation) DataDetector already
+    /// handles. Excludes ranges inside any `[label](url)` span from
+    /// `findLinkRanges` — those already get styled-label treatment.
     static func findAutoLinkRanges(in string: String) -> [NSRange] {
         let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
+        guard ns.length > 0,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
 
-        let detector: NSDataDetector
-        do {
-            detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-        } catch {
-            return []
-        }
+        let claimedSpans = findLinkRanges(in: string).map { NSUnionRange($0.openBracketRange, $0.closeParenRange) }
 
-        // Build a "claimed" mask of UTF-16 ranges covered by any markdown
-        // link's `[...]( ... )` span — auto-link candidates that fall inside
-        // are dropped (the [label](url) path already styles them).
-        let mdLinks = findLinkRanges(in: string)
-        let claimedSpans: [NSRange] = mdLinks.map { m in
-            // Full bracket-paren span: openBracket → closeParen.
-            let start = m.openBracketRange.location
-            let end = m.closeParenRange.location + m.closeParenRange.length
-            return NSRange(location: start, length: end - start)
-        }
-
-        let candidates = detector.matches(in: string, range: NSRange(location: 0, length: fullLength))
+        let candidates = detector.matches(in: string, range: NSRange(location: 0, length: ns.length))
         return candidates.compactMap { r -> NSRange? in
             let range = r.range
             guard range.length > 0,
-                  range.location + range.length <= fullLength else { return nil }
-            for claimed in claimedSpans {
-                if NSIntersectionRange(range, claimed).length > 0 { return nil }
-            }
+                  range.location + range.length <= ns.length,
+                  !claimedSpans.contains(where: { NSIntersectionRange(range, $0).length > 0 }) else { return nil }
             return range
         }
     }
@@ -798,92 +394,43 @@ enum MarkdownInlineParser {
 
     // MARK: Fenced Code Blocks
 
-    /// Returns matches for all paired ` ``` `…` ``` ` fenced code blocks in `string`.
-    ///
-    /// - Scans line-by-line; a line matching `^```[a-zA-Z0-9]*$` opens a fence.
-    /// - fenceOpenRange covers the opening fence line including its trailing newline.
-    /// - contentRange covers all lines between the fences (including their newlines).
-    /// - fenceCloseRange covers the closing fence line including its trailing newline.
-    /// - Unterminated fences (no closing line) return nothing — D-MH-04 pair principle.
+    /// Returns every paired ` ``` `…` ``` ` fenced code block. A line
+    /// matching `^```[a-zA-Z0-9]*$` opens/closes a fence; an unterminated
+    /// fence (no closing line) yields nothing. Open/close ranges include
+    /// their trailing newline; contentRange spans the lines between them.
     static func findFencedCodeBlocks(in string: String) -> [FencedCodeMatch] {
-        let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
-
         var results: [FencedCodeMatch] = []
-        var inFence = false
-        var fenceOpenRange = NSRange(location: 0, length: 0)
-        var contentStart = 0
-        var lineStart = 0
-
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-
-            // Extract line text without trailing newline for fence detection
-            let hasTrailingNewline: Bool
-            if lineRange.length > 0 {
-                let lastCharRange = NSRange(location: lineEnd - 1, length: 1)
-                let lastChar = ns.substring(with: lastCharRange)
-                hasTrailingNewline = (lastChar == "\n" || lastChar == "\r")
+        var openFenceRange: NSRange?
+        forEachLine(in: string) { lineRange, _, lineText in
+            guard fenceRegex.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) != nil else { return }
+            if let fenceOpenRange = openFenceRange {
+                let contentStart = fenceOpenRange.location + fenceOpenRange.length
+                results.append(FencedCodeMatch(
+                    fenceOpenRange: fenceOpenRange,
+                    contentRange: NSRange(location: contentStart, length: max(0, lineRange.location - contentStart)),
+                    fenceCloseRange: lineRange
+                ))
+                openFenceRange = nil
             } else {
-                hasTrailingNewline = false
-            }
-
-            let matchLength = hasTrailingNewline ? lineRange.length - 1 : lineRange.length
-            let lineText = ns.substring(with: NSRange(location: lineRange.location, length: matchLength))
-            let lineNS = lineText as NSString
-            let lineFullRange = NSRange(location: 0, length: lineNS.length)
-
-            let isFenceLine = Self.fenceRegex.firstMatch(in: lineText, range: lineFullRange) != nil
-
-            if isFenceLine {
-                if !inFence {
-                    // Opening fence: record open range (includes trailing newline)
-                    inFence = true
-                    fenceOpenRange = lineRange
-                    contentStart = lineEnd
-                } else {
-                    // Closing fence: emit match
-                    inFence = false
-                    let fenceCloseRange = lineRange
-                    let contentLength = lineRange.location - contentStart
-                    let contentRange = NSRange(location: contentStart, length: max(0, contentLength))
-                    results.append(FencedCodeMatch(
-                        fenceOpenRange: fenceOpenRange,
-                        contentRange: contentRange,
-                        fenceCloseRange: fenceCloseRange
-                    ))
-                }
-            }
-
-            lineStart = lineEnd
-            if lineStart == lineRange.location {
-                break
+                openFenceRange = lineRange
             }
         }
-
-        // Unterminated fence (inFence == true at end of string): yield NO match per spec
         return results
     }
 
     // MARK: Tables
 
-    /// Returns matches for all GFM-style markdown tables in `string`.
-    ///
-    /// Detection rules (deliberately permissive):
-    ///   - Header line: contains at least one `|` and at least one non-pipe char.
-    ///   - Separator line (immediately below header): contains only whitespace,
-    ///     pipes, colons, and dashes; AND has at least one `|`; AND has at least one `-`.
-    ///   - Body lines: each subsequent line containing `|`, until the first
-    ///     non-pipe line (or end of string).
-    ///
-    /// Unterminated tables (header without a matching separator) return nothing —
-    /// matches the pair-only-hide principle (D-MH-04). All NSRanges are UTF-16.
+    /// Returns every GFM-style markdown table (deliberately permissive
+    /// detection):
+    ///   - Header line: at least one `|` and at least one non-pipe char.
+    ///   - Separator line (immediately below): only whitespace/`|`/`:`/`-`,
+    ///     with at least one `|` and one `-`.
+    ///   - Body lines: subsequent `|`-containing lines, until the first
+    ///     non-pipe line or end of string.
+    /// A header without a matching separator yields nothing.
     static func findTableBlocks(in string: String) -> [TableMatch] {
         let ns = string as NSString
-        let fullLength = ns.length
-        guard fullLength > 0 else { return [] }
+        guard ns.length > 0 else { return [] }
 
         // Lines inside a fenced code block are claimed by the fence and must not
         // be re-interpreted as table syntax (CommonMark: code spans win, and
@@ -893,15 +440,9 @@ enum MarkdownInlineParser {
             fenceContentRanges.contains { NSIntersectionRange($0, r).length > 0 }
         }
 
-        // Pre-scan: collect line ranges (location + length, with trailing newline included).
         var lineRanges: [NSRange] = []
-        var lineStart = 0
-        while lineStart < fullLength {
-            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+        forEachLine(in: string) { lineRange, _, _ in
             lineRanges.append(lineRange)
-            let nextStart = lineRange.location + lineRange.length
-            if nextStart == lineStart { break }
-            lineStart = nextStart
         }
 
         var results: [TableMatch] = []
@@ -942,11 +483,7 @@ enum MarkdownInlineParser {
                     bodyRange = NSRange(location: after, length: 0)
                 }
 
-                var pipeRanges: [NSRange] = []
-                collectPipeOffsets(in: headerRange, ns: ns, into: &pipeRanges)
-                if bodyRange.length > 0 {
-                    collectPipeOffsets(in: bodyRange, ns: ns, into: &pipeRanges)
-                }
+                let pipeRanges = collectPipeOffsets(in: headerRange, ns: ns) + collectPipeOffsets(in: bodyRange, ns: ns)
 
                 results.append(TableMatch(
                     headerRange: headerRange,
@@ -969,19 +506,15 @@ enum MarkdownInlineParser {
 
     /// Returns the line text without its trailing newline (if any).
     private static func lineContent(in ns: NSString, lineRange: NSRange) -> String {
-        let trimmed = trimTrailingNewline(lineRange, in: ns)
-        return ns.substring(with: trimmed)
+        ns.substring(with: trimTrailingNewline(lineRange, in: ns))
     }
 
-    /// Returns `lineRange` with a trailing `\n` or `\r` stripped (if present).
+    /// Returns `lineRange` with its trailing `\r\n`, `\n` or `\r` stripped (if present).
     private static func trimTrailingNewline(_ lineRange: NSRange, in ns: NSString) -> NSRange {
-        guard lineRange.length > 0 else { return lineRange }
-        let lastIdx = lineRange.location + lineRange.length - 1
-        let last = ns.substring(with: NSRange(location: lastIdx, length: 1))
-        if last == "\n" || last == "\r" {
-            return NSRange(location: lineRange.location, length: lineRange.length - 1)
-        }
-        return lineRange
+        var length = lineRange.length
+        if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0A /* \n */ { length -= 1 }
+        if length > 0, ns.character(at: lineRange.location + length - 1) == 0x0D /* \r */ { length -= 1 }
+        return NSRange(location: lineRange.location, length: length)
     }
 
     private static func isPipeLine(_ line: String) -> Bool {
@@ -1000,24 +533,14 @@ enum MarkdownInlineParser {
         return trimmed.allSatisfy { allowed.contains($0) }
     }
 
-    /// Append a length-1 NSRange for every `|` inside `range` to `out`.
-    private static func collectPipeOffsets(
-        in range: NSRange,
-        ns: NSString,
-        into out: inout [NSRange]
-    ) {
+    /// Every `|` (U+007C) inside `range`, as length-1 NSRanges, in ascending order.
+    private static func collectPipeOffsets(in range: NSRange, ns: NSString) -> [NSRange] {
         guard range.length > 0,
-              range.location >= 0,
-              range.location + range.length <= ns.length else { return }
-        let scanRange = range
-        var searchStart = scanRange.location
-        let scanEnd = scanRange.location + scanRange.length
-        while searchStart < scanEnd {
-            let remaining = NSRange(location: searchStart, length: scanEnd - searchStart)
-            let found = ns.range(of: "|", options: [], range: remaining)
-            if found.location == NSNotFound { break }
-            out.append(NSRange(location: found.location, length: 1))
-            searchStart = found.location + 1
+              range.location + range.length <= ns.length else { return [] }
+        var out: [NSRange] = []
+        for i in range.location..<(range.location + range.length) where ns.character(at: i) == 0x7C {
+            out.append(NSRange(location: i, length: 1))
         }
+        return out
     }
 }

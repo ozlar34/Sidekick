@@ -11,8 +11,6 @@ import AppKit
 ///     that's layout-manager territory and harder to test window-less)
 ///
 /// Pattern source: PerformWrapTests.swift (windowless AppKit + @MainActor).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md
-///   D-T-02, D-T-03, D-T-04.
 @MainActor
 final class MarkdownTextStorageTests: XCTestCase {
 
@@ -391,6 +389,41 @@ final class MarkdownTextStorageTests: XCTestCase {
         XCTAssertNotNil(style, "Explicit H2 must carry a paragraphStyle")
         XCTAssertEqual(Double(style?.paragraphSpacing ?? 0), 3, accuracy: 0.01,
                        "Explicit H2 paragraphSpacing is 3pt")
+    }
+
+    // MARK: - Blockquote content range/attributes (trim-plan B9 has no test — added STEP 0)
+
+    func test_blockQuoteContent_hiddenPrefixAndSecondaryItalicContent() {
+        // "> quoted" — "> " prefix hidden at {0,2}; content "quoted" at {2,6}.
+        let storage = makeStorage("> quoted")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 0, effectiveRange: nil),
+                        "'>' at location 0 must be hidden")
+        XCTAssertNotNil(storage.attribute(.sidekickHiddenMarker, at: 1, effectiveRange: nil),
+                        "space after '>' at location 1 must be hidden")
+        XCTAssertNil(storage.attribute(.sidekickHiddenMarker, at: 2, effectiveRange: nil),
+                     "content 'q' at location 2 must NOT be hidden")
+
+        let colorStart = storage.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(colorStart, NSColor.secondaryLabelColor, "blockquote content must be tinted secondaryLabelColor")
+        let colorEnd = storage.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(colorEnd, NSColor.secondaryLabelColor, "last content char (index 7, 'd') must still be tinted")
+
+        let font = storage.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.italic) == true,
+                      "blockquote content must be italicized")
+    }
+
+    func test_blockQuoteContent_crlf_excludesCarriageReturn() {
+        // Regression: on "> quoted\r\n" the "\r" at index 8 used to be styled
+        // as blockquote content.
+        let storage = makeStorage("> quoted\r\n")
+        let lastContent = storage.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(lastContent, NSColor.secondaryLabelColor, "'d' at index 7 is still content")
+        let cr = storage.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? NSColor
+        XCTAssertNotEqual(cr, NSColor.secondaryLabelColor, "'\\r' at index 8 must not be tinted as content")
+        let crFont = storage.attribute(.font, at: 8, effectiveRange: nil) as? NSFont
+        XCTAssertFalse(crFont?.fontDescriptor.symbolicTraits.contains(.italic) == true,
+                       "'\\r' at index 8 must not be italicized as content")
     }
 
     func test_explicitH1_paragraphSpacing_survivesEditOnLaterLine() {

@@ -7,7 +7,6 @@ import XCTest
 /// deterministically on any CI.
 ///
 /// Pattern source: FormattingToolbarTests.swift (pure-function XCTest style).
-/// CONTEXT reference: .planning/phases/09-hybrid-editor-foundation/09-CONTEXT.md D-T-01.
 final class MarkdownInlineParserTests: XCTestCase {
 
     // MARK: - Bold happy path
@@ -448,5 +447,167 @@ final class MarkdownInlineParserTests: XCTestCase {
         let matches = MarkdownInlineParser.findThematicBreaks(in: body)
         XCTAssertEqual(matches.count, 1,
                        "Unterminated fence yields no FencedCodeMatch → `---` outside any tracked fence is still a thematic break")
+    }
+
+    // MARK: - Characterization: numbered lists (pre-refactor pin, trim-plan STEP 0)
+
+    func test_numbered_simple() {
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: "1. Item")
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 2), "'1.' marker")
+    }
+
+    func test_numbered_multipleLines() {
+        // "1. one\n" (7) + "2. two\n" (7) + "10. three\n" (10)
+        let body = "1. one\n2. two\n10. three\n"
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: body)
+        XCTAssertEqual(matches.count, 3)
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 7, length: 2))
+        XCTAssertEqual(matches[2].markerRange, NSRange(location: 14, length: 3), "'10.' is 3 UTF-16 units")
+    }
+
+    func test_numbered_crlfLineEndings() {
+        let body = "1. a\r\n2. b\r\n"
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: body)
+        XCTAssertEqual(matches.count, 2, "CRLF-terminated lines must still be found")
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 6, length: 2), "second line starts after the 6-char CRLF line")
+    }
+
+    func test_numbered_lastLineNoTrailingNewline() {
+        let body = "1. one\n2. last"
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 7, length: 2), "last line (no trailing \\n) still matches")
+    }
+
+    func test_numbered_emojiInContentDoesNotShiftMarker() {
+        // "1. 🎉 party\n" = "1. " (3) + emoji (2 UTF-16 units) + " party" (6) + "\n" (1) = 12
+        let body = "1. 🎉 party\n2. next\n"
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 12, length: 2),
+                       "second line's marker offset correctly accounts for the emoji surrogate pair on line 1")
+    }
+
+    func test_numbered_dotFooQuirk_currentlyMatches() {
+        // DO NOT change: `1.foo` (no space after the dot) currently matches —
+        // the guard only requires a char after the dot, not specifically a space.
+        let matches = MarkdownInlineParser.findNumberedPrefixes(in: "1.foo")
+        XCTAssertEqual(matches.count, 1, "'1.foo' currently matches — pinning the quirk, not endorsing it")
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 2), "'1.' marker")
+    }
+
+    // MARK: - Characterization: blockquotes (pre-refactor pin, trim-plan STEP 0)
+
+    func test_blockquote_simple() {
+        let matches = MarkdownInlineParser.findBlockQuotePrefixes(in: "> quote")
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0], NSRange(location: 0, length: 2))
+    }
+
+    func test_blockquote_multipleLines() {
+        let body = "> one\n> two\n"
+        let matches = MarkdownInlineParser.findBlockQuotePrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0], NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1], NSRange(location: 6, length: 2))
+    }
+
+    func test_blockquote_crlfLineEndings() {
+        let body = "> a\r\n> b\r\n"
+        let matches = MarkdownInlineParser.findBlockQuotePrefixes(in: body)
+        XCTAssertEqual(matches.count, 2, "CRLF-terminated lines must still be found")
+        XCTAssertEqual(matches[0], NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1], NSRange(location: 5, length: 2), "second line starts after the 5-char CRLF line")
+    }
+
+    func test_blockquote_lastLineNoTrailingNewline() {
+        let body = "> one\n> last"
+        let matches = MarkdownInlineParser.findBlockQuotePrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[1], NSRange(location: 6, length: 2), "last line (no trailing \\n) still matches")
+    }
+
+    func test_blockquote_emojiOnPriorLineDoesNotShiftNextMarker() {
+        // "> 🎉\n" = "> " (2) + emoji (2 UTF-16 units) + "\n" (1) = 5
+        let body = "> 🎉\n> next\n"
+        let matches = MarkdownInlineParser.findBlockQuotePrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0], NSRange(location: 0, length: 2))
+        XCTAssertEqual(matches[1], NSRange(location: 5, length: 2),
+                       "second line's prefix offset correctly accounts for the emoji surrogate pair on line 1")
+    }
+
+    // MARK: - Characterization: checklists (pre-refactor pin, trim-plan STEP 0)
+
+    func test_checklist_simpleUnchecked() {
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: "- [ ] task")
+        XCTAssertEqual(matches.count, 1)
+        let m = matches[0]
+        XCTAssertEqual(m.markerRange, NSRange(location: 0, length: 1))
+        XCTAssertEqual(m.hiddenRange, NSRange(location: 1, length: 4))
+        XCTAssertEqual(m.contentRange, NSRange(location: 6, length: 4), "content 'task'")
+        XCTAssertFalse(m.isChecked)
+    }
+
+    func test_checklist_checkedLowercaseX() {
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: "- [x] done")
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertTrue(matches[0].isChecked, "lowercase 'x' must be checked")
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 4), "content 'done'")
+    }
+
+    func test_checklist_checkedUppercaseX() {
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: "- [X] Done")
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertTrue(matches[0].isChecked, "uppercase 'X' must also be checked")
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 4), "content 'Done'")
+    }
+
+    func test_checklist_multipleLines() {
+        // "- [ ] a\n" is 8 UTF-16 units
+        let body = "- [ ] a\n- [x] b\n"
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0].markerRange, NSRange(location: 0, length: 1))
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 1), "content 'a'")
+        XCTAssertFalse(matches[0].isChecked)
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 8, length: 1))
+        XCTAssertEqual(matches[1].hiddenRange, NSRange(location: 9, length: 4))
+        XCTAssertEqual(matches[1].contentRange, NSRange(location: 14, length: 1), "content 'b'")
+        XCTAssertTrue(matches[1].isChecked)
+    }
+
+    func test_checklist_crlf_contentExcludesCarriageReturn() {
+        // Regression: a CRLF line used to keep its "\r" inside contentRange.
+        let body = "- [ ] a\r\n"
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: body)
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 1),
+                       "content is 'a' only — the CRLF terminator is excluded")
+        XCTAssertFalse(matches[0].isChecked)
+    }
+
+    func test_checklist_lastLineNoTrailingNewline() {
+        let body = "- [ ] final"
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: body)
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 5), "content 'final'")
+    }
+
+    func test_checklist_emojiInContent() {
+        // "- [ ] 🎉\n" = "- [ ] " (6) + emoji (2 UTF-16 units) + "\n" (1) = 9
+        let body = "- [ ] 🎉\n- [x] next\n"
+        let matches = MarkdownInlineParser.findChecklistPrefixes(in: body)
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0].contentRange, NSRange(location: 6, length: 2), "content is the emoji, 2 UTF-16 units")
+        XCTAssertFalse(matches[0].isChecked)
+        XCTAssertEqual(matches[1].markerRange, NSRange(location: 9, length: 1))
+        XCTAssertEqual(matches[1].hiddenRange, NSRange(location: 10, length: 4))
+        XCTAssertEqual(matches[1].contentRange, NSRange(location: 15, length: 4), "content 'next', offset correctly accounts for emoji on line 1")
+        XCTAssertTrue(matches[1].isChecked)
     }
 }
