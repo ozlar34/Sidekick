@@ -11,6 +11,10 @@ extension DebugHarness {
     func setText(_ json: [String: Any]) throws -> [String: Any] {
         let tv = try textView()
         guard let text = json["text"] as? String else { throw fail("text required") }
+        if let nt = tv as? NoteTextView {
+            nt.replaceAllWithMarkdown(text)
+            return ["length": (nt.string as NSString).length]
+        }
         let full = NSRange(location: 0, length: (tv.string as NSString).length)
         guard tv.shouldChangeText(in: full, replacementString: text) else { throw fail("edit refused") }
         tv.textStorage?.replaceCharacters(in: full, with: text)

@@ -14,10 +14,11 @@ let package = Package(
             name: "Sidekick",
             dependencies: [
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+                "NoteDocument",
             ],
             path: "Sources/Sidekick"
         ),
-        // Pure note-document module: Foundation only. The app does not depend on it yet.
+        // Pure note-document module: Foundation only. The new editor view consumes it.
         .target(
             name: "NoteDocument",
             path: "Sources/NoteDocument"
@@ -29,7 +30,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SidekickTests",
-            dependencies: ["Sidekick"],
+            dependencies: ["Sidekick", "NoteDocument"],
             path: "Tests/SidekickTests"
         )
     ]

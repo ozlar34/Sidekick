@@ -21,7 +21,7 @@ import Network
 ///   GET  /glyphs                → per-character glyph rects (text-container coords)
 ///   POST /summon  /dismiss      → toggle the panel
 ///   POST /open   {id|title}     → select a note
-///   POST /set    {text}         → replace editor body through the user edit path
+///   POST /set    {text}         → replace editor body through the user edit path (markdown text; new editor: parsed through the note document)
 ///   POST /click  {x,y,count?,space?,drag_to?}   → real NSEvent click (text coords)
 ///   POST /key    {key,mods?} | {chars,mods?}    → real NSEvent key press
 ///   POST /type   {text}         → one key event per character
@@ -118,8 +118,10 @@ final class DebugHarness {
 
     var panel: SidekickPanel? { app.panelController.panel }
 
-    func textView() throws -> HybridTextView {
-        guard let panel, let tv = Self.findTextView(in: panel.contentView) as? HybridTextView else {
+    /// The editor's text view: the old `HybridTextView` or, with the switch on, the new `NoteTextView`.
+    func textView() throws -> NSTextView {
+        guard let panel, let tv = Self.findTextView(in: panel.contentView),
+              tv is HybridTextView || tv is NoteTextView else {
             throw fail("editor not mounted (summon the panel and open a note first)")
         }
         return tv
@@ -187,6 +189,14 @@ final class DebugHarness {
                     let loc = lm.location(forGlyphAt: min(glyph, max(0, lm.numberOfGlyphs - 1)))
                     ed["caretRect"] = rect(NSRect(x: frag.origin.x + loc.x, y: frag.origin.y, width: 1, height: frag.height))
                 }
+            }
+            if let nt = tv as? NoteTextView {
+                // New editor: block kinds and the markdown the note document produces.
+                ed["newEditor"] = true
+                ed["blocks"] = nt.blockKinds
+                ed["markdown"] = nt.markdown
+                ed["caretRect"] = rect(NoteTextEngine.caretRect(in: nt, at: sel.location))
+                ed["lineCount"] = NoteTextEngine.lineCount(in: nt)
             }
             if let storage = tv.textStorage {
                 var attrs: [String: Any] = [:]

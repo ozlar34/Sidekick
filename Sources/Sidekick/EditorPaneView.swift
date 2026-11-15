@@ -58,6 +58,15 @@ struct EditorPaneView: View {
         return "Edited \(NoteRowFormatting.formattedModifiedTime(edited))"
     }
 
+    /// The old hybrid editor, or the new editor view when `NewEditorSwitch` is on.
+    @ViewBuilder private var editorBody: some View {
+        if NewEditorSwitch.isOn {
+            NoteEditorView(text: $localBody, controller: editorController)
+        } else {
+            HybridEditorView(text: $localBody, controller: editorController)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // External-edit conflict banner (STORE-07) — top of editor. Only
@@ -118,7 +127,9 @@ struct EditorPaneView: View {
                     .padding(.top, 14)
                     .padding(.bottom, 2)
 
-                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02).
+                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). Hidden with the new editor on:
+                // its commands rewrite markdown in the buffer, which the new editor does not hold.
+                if !NewEditorSwitch.isOn {
                 FormattingToolbarView(
                     wrapSelection: wrapSelection,
                     applyLinePrefix: applyLinePrefix,
@@ -134,11 +145,12 @@ struct EditorPaneView: View {
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                }
             }
             .background(Color(.controlBackgroundColor))
 
             // Soft inset shadow at body top — replaces translucent Divider() that bled through panel vibrancy.
-            HybridEditorView(text: $localBody, controller: editorController)
+            editorBody
                 .onChange(of: localBody) { _, newValue in
                     // Skip the onAppear / note-switch reseed — it would
                     // re-write the same body to disk and bump mtime.
