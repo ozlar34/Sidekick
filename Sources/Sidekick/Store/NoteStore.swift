@@ -20,6 +20,10 @@ final class NoteStore: ObservableObject {
     @Published private(set) var externallyChangedIDs: Set<UUID> = []
     let externalChanges: AsyncStream<ChangeEvent>
 
+    /// Shared autosave debouncer. One instance for every note so the app can
+    /// flush the pending save on note switch and on quit.
+    let autosave = Debouncer(interval: 0.5)
+
     private var folder: URL
     private var io: IOActor
     private var watcher: FolderWatcher

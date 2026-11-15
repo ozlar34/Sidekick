@@ -435,6 +435,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Write the debounced autosave before exiting; replying later keeps
+        // the app alive until the save has landed.
+        guard let store else { return .terminateNow }
+        Task { @MainActor in
+            await store.autosave.flush()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyManager.unregister()
     }
