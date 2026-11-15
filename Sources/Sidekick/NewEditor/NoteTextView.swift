@@ -78,7 +78,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         content.storage.delegate = nil
         content = new
         pendingStyleRange = nil
-        layoutManager?.replaceTextStorage(new.storage)
+        NoteTextEngine.show(new.storage, in: self)
         new.storage.delegate = self
         isEditable = new.isEditable
         let length = new.storage.length
