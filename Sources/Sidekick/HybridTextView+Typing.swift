@@ -173,12 +173,36 @@ extension HybridTextView {
         // was a coincidence of the trailing-newline inclusive lineRange).
         guard FormattingToolbarView.lineContentEnd(lineRange, in: ns) == lineEnd else { return }
 
-        // Append a single `\n` at the end of the document via the undo-safe
-        // shouldChangeText/replaceCharacters/didChangeText sandwich.
+        appendLineBelowTrailingHR()
+    }
+
+    /// Appends a single `\n` at the end of the document via the undo-safe
+    /// shouldChangeText/replaceCharacters/didChangeText sandwich, then parks
+    /// the caret at the start of the new empty line below a trailing divider.
+    /// Shared by the HR-01 typed escape above and by `moveRight`/`moveDown`
+    /// when a note already ends in a divider (A3).
+    // Internal (not private): also called from HybridTextView+CaretMovement.swift.
+    func appendLineBelowTrailingHR() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let relayoutStart = lineStartAboveHRRun(containing: storage.length - 1)
         let editRange = NSRange(location: storage.length, length: 0)
         guard shouldChangeText(in: editRange, replacementString: "\n") else { return }
         replaceCharacters(in: editRange, with: "\n")
         didChangeText()
+        // AppKit layout quirk: after an incremental edit next to a divider,
+        // the line above keeps a stale layout, and AppKit's own Left/Right on
+        // it jump to the line's ends (Left 3 → 0, Right 0 → 3 in `one\n---`).
+        // A fresh glyph and layout pass over that line and the divider run
+        // clears it. The full repaint is needed too: the old hairline was drawn
+        // on the line above, and a range-based display invalidation (computed
+        // before the lazy relayout) leaves it on screen. A divider typed
+        // mid-note has the same quirk and is not covered here (open follow-up).
+        if let layoutManager {
+            let relayoutRange = NSRange(location: relayoutStart, length: storage.length - relayoutStart)
+            layoutManager.invalidateGlyphs(forCharacterRange: relayoutRange, changeInLength: 0, actualCharacterRange: nil)
+            layoutManager.invalidateLayout(forCharacterRange: relayoutRange, actualCharacterRange: nil)
+            needsDisplay = true
+        }
         // Park the caret at the start of the new empty line.
         setSelectedRange(NSRange(location: storage.length, length: 0))
     }

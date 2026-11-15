@@ -54,6 +54,10 @@ extension HybridTextView {
         guard let storage = textStorage else { return nil }
         let n = storage.length
         guard n > 0, target >= 0, target <= n else { return nil }
+        // After a trailing terminator, `n` is its own empty last line, not
+        // part of the line above: a caret there is never on an HR line.
+        let endsOnEmptyLastLine = lineEndsWithNewline(NSRange(location: n - 1, length: 1))
+        if target == n && endsOnEmptyLastLine { return nil }
 
         // lineRange wants an index INSIDE the string. Clamp at n-1 for
         // the end-of-doc case where target == n (one past last char).
@@ -82,8 +86,11 @@ extension HybridTextView {
         // them off the line they just typed on would be jarring. Snap
         // only takes effect when caret crosses a line boundary INTO HR
         // (arrow keys, clicks from another line, etc.).
+        // `previous == n` after a trailing terminator is on the empty last
+        // line BELOW this one, even though the n-1 clamp lands here (A3:
+        // Left/Up from below a trailing divider stopped ON the divider).
         let prevProbe = min(max(previous, 0), n - 1)
-        if prevProbe >= 0 {
+        if !(previous == n && endsOnEmptyLastLine) {
             let prevLineRange = ns.lineRange(for: NSRange(location: prevProbe, length: 0))
             if NSEqualRanges(prevLineRange, lineRange) {
                 return nil
@@ -106,42 +113,11 @@ extension HybridTextView {
     /// (where a follow-up move would snap it in the wrong direction and a
     /// delete would act on the wrong line).
     private func hrNeighborLocation(hrLineRange lineRange: NSRange, preferBelow: Bool) -> Int? {
-        guard let storage = textStorage, lineRange.length > 0 else { return nil }
-        let ns = storage.string as NSString
-        let n = ns.length
-
-        func lineIsHR(_ range: NSRange) -> Bool {
-            var found = false
-            storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
-                if (value as? Bool) == true { found = true; stop.pointee = true }
-            }
-            return found
-        }
-        // `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
-        // not just LF. A trailing terminator means a line exists below (even an
-        // empty one), so test the last scalar against ALL newline scalars, not
-        // only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
-        func endsWithNewline(_ range: NSRange) -> Bool {
-            let lastUnichar = ns.character(at: range.location + range.length - 1)
-            return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
-        }
-
-        // Widen to the whole run of adjacent HR lines.
-        var first = lineRange
-        while first.location > 0 {
-            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
-            guard above.length > 0, lineIsHR(above) else { break }
-            first = above
-        }
-        var last = lineRange
-        while endsWithNewline(last), last.location + last.length < n {
-            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
-            guard below.length > 0, lineIsHR(below) else { break }
-            last = below
-        }
+        guard textStorage != nil, lineRange.length > 0 else { return nil }
+        let (first, last) = hrRun(around: lineRange)
 
         let hasAbove = first.location > 0
-        let hasBelow = endsWithNewline(last)
+        let hasBelow = lineEndsWithNewline(last)
 
         let aboveLoc = first.location - 1
         let belowLoc = last.location + last.length
@@ -150,6 +126,76 @@ extension HybridTextView {
         if !hasAbove { return belowLoc }
         if !hasBelow { return aboveLoc }
         return preferBelow ? belowLoc : aboveLoc
+    }
+
+    /// True when `location` lies on an HR line whose run of adjacent HR lines
+    /// ends the document with no line terminator after it — a note that
+    /// already ends in a divider. The caret has no inhabitable spot below
+    /// such a run, so a forward arrow move cannot cross it. HR-01 closes this
+    /// gap for a freshly-typed divider only; `moveRight`/`moveDown` use this
+    /// to close it for a divider that was already there (e.g. loaded from disk).
+    func isOnUnterminatedTrailingHR(_ location: Int) -> Bool {
+        guard let storage = textStorage else { return false }
+        let n = storage.length
+        guard n > 0, location >= 0, location <= n else { return false }
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: min(location, n - 1), length: 0))
+        guard lineRange.length > 0, lineIsHR(lineRange) else { return false }
+        let (_, last) = hrRun(around: lineRange)
+        return last.location + last.length == n && !lineEndsWithNewline(last)
+    }
+
+    /// Start of the line above the run of adjacent HR lines that contains
+    /// `location`; 0 when the run starts the document or `location` is not
+    /// on an HR line.
+    func lineStartAboveHRRun(containing location: Int) -> Int {
+        guard let storage = textStorage, storage.length > 0 else { return 0 }
+        let ns = storage.string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: min(max(location, 0), storage.length - 1), length: 0))
+        guard lineIsHR(lineRange) else { return 0 }
+        let first = hrRun(around: lineRange).first
+        guard first.location > 0 else { return 0 }
+        return ns.lineRange(for: NSRange(location: first.location - 1, length: 0)).location
+    }
+
+    /// Widens an HR line to the whole run of adjacent HR lines (consecutive
+    /// dividers form one uninhabitable block). Returns its first and last line.
+    private func hrRun(around lineRange: NSRange) -> (first: NSRange, last: NSRange) {
+        guard let storage = textStorage else { return (lineRange, lineRange) }
+        let ns = storage.string as NSString
+        let n = ns.length
+        var first = lineRange
+        while first.location > 0 {
+            let above = ns.lineRange(for: NSRange(location: first.location - 1, length: 0))
+            guard above.length > 0, lineIsHR(above) else { break }
+            first = above
+        }
+        var last = lineRange
+        while lineEndsWithNewline(last), last.location + last.length < n {
+            let below = ns.lineRange(for: NSRange(location: last.location + last.length, length: 0))
+            guard below.length > 0, lineIsHR(below) else { break }
+            last = below
+        }
+        return (first, last)
+    }
+
+    private func lineIsHR(_ range: NSRange) -> Bool {
+        guard let storage = textStorage else { return false }
+        var found = false
+        storage.enumerateAttribute(.sidekickThematicBreak, in: range, options: []) { value, _, stop in
+            if (value as? Bool) == true { found = true; stop.pointee = true }
+        }
+        return found
+    }
+
+    /// `lineRange(for:)` ends a line on LF, CR, CRLF, U+2028, U+2029 or NEL —
+    /// not just LF. A trailing terminator means a line exists below (even an
+    /// empty one), so test the last scalar against ALL newline scalars, not
+    /// only 0x0A (else e.g. PDF-pasted U+2028 misreads "no line below").
+    private func lineEndsWithNewline(_ range: NSRange) -> Bool {
+        guard let storage = textStorage, range.length > 0 else { return false }
+        let lastUnichar = (storage.string as NSString).character(at: range.location + range.length - 1)
+        return Unicode.Scalar(UInt32(lastUnichar)).map(CharacterSet.newlines.contains) ?? false
     }
 
     /// Click-path counterpart to `snapCaretOutOfHR`: given a caret that a mouse

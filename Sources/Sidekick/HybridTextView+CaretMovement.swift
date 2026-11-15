@@ -267,6 +267,7 @@ extension HybridTextView {
             super.moveRight(sender)
             return
         }
+        if escapeBelowTrailingHR(from: current.location, toward: naive) { return }
         let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward, naiveIsVerifiedStep: true)
         // Never stop left of a checkbox: a step that lands on a checklist
         // line's start continues to its content start in the same press.
@@ -323,6 +324,21 @@ extension HybridTextView {
             return
         }
         setSelectedRange(NSRange(location: corrected, length: 0))
+    }
+
+    /// A3: a forward move (Right/Down) from text into a divider block that
+    /// ends the note with no line below has nowhere to land, so the HR rescue
+    /// sends the caret back to where it was and the key seems stuck. In that
+    /// case this extends HR-01's guarantee ("the caret never gets stranded
+    /// above the rule") to a divider that was already there: it appends one
+    /// `\n` (undo-safe) and parks the caret on the new empty line below, so
+    /// typing or Return continues under the divider and `---` stays a
+    /// divider. Returns `false` (no change) when `destination` is not on such
+    /// a block, or `source` is already on it (an all-divider note: A4 scope).
+    private func escapeBelowTrailingHR(from source: Int, toward destination: Int) -> Bool {
+        guard isOnUnterminatedTrailingHR(destination), !isOnUnterminatedTrailingHR(source) else { return false }
+        appendLineBelowTrailingHR()
+        return true
     }
 
     /// Mirror of AppKit's own Right step, which crosses one visible character
@@ -383,6 +399,7 @@ extension HybridTextView {
         var belowStart = 0, belowContentsEnd = 0
         ns.getLineStart(&belowStart, end: nil, contentsEnd: &belowContentsEnd, for: NSRange(location: lineEnd, length: 0))
         let naive = min(belowStart + column, belowContentsEnd)
+        if escapeBelowTrailingHR(from: current.location, toward: naive) { return }
         // `naiveIsVerifiedStep: false` — this naive same-column target is a
         // GUESS (see this override's own doc comment above), not a verified
         // one-raw-character step. The ticket-08 SOURCE-side conditions must
