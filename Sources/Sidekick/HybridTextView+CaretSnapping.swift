@@ -317,6 +317,25 @@ extension HybridTextView {
         return direction == .forward ? contentStart : lineRange.location
     }
 
+    /// Content start (line+6) of the rendered checklist line that BEGINS at
+    /// `location`, or `nil` when `location` is not such a line start. Used by
+    /// the Left/Right arrow overrides (HybridTextView+CaretMovement.swift) to
+    /// skip offset 0 of a checklist line: a click or a programmatic selection
+    /// may still rest there (see `snapCaretOutOfChecklistGap`), but an arrow
+    /// key never stops left of the checkbox, because text typed there lands
+    /// before `- [ ] ` and turns the item into a plain line. Gated on
+    /// `.sidekickChecklistMarker` like the gap rescue above.
+    func checklistContentStart(ifLineStartAt location: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        let n = storage.length
+        guard location >= 0, location < n else { return nil }
+        let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: location, length: 0))
+        guard lineRange.location == location, lineRange.length >= 6,
+              storage.attribute(.sidekickChecklistMarker, at: location, effectiveRange: nil) != nil
+        else { return nil }
+        return location + 6
+    }
+
     /// Compute the position to snap a caret to when `target` lands strictly
     /// INSIDE a collapsed link-chip run — a bare URL, or a `[url](url)` chip
     /// whose characters all carry `.sidekickHiddenMarker` and render as a

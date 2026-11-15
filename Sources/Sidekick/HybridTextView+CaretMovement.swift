@@ -263,9 +263,18 @@ extension HybridTextView {
             return
         }
         let naive = min(current.location + 1, storage.length)
-        guard naive != current.location,
-              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward, naiveIsVerifiedStep: true)
-        else {
+        guard naive != current.location else {
+            super.moveRight(sender)
+            return
+        }
+        let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .forward, naiveIsVerifiedStep: true)
+        // Never stop left of a checkbox: a step that lands on a checklist
+        // line's start continues to its content start in the same press.
+        if let contentStart = checklistContentStart(ifLineStartAt: corrected ?? naive) {
+            setSelectedRange(NSRange(location: contentStart, length: 0))
+            return
+        }
+        guard let corrected else {
             super.moveRight(sender)
             return
         }
@@ -276,16 +285,37 @@ extension HybridTextView {
     /// Mirrors `moveRight(_:)` above (same rationale: AppKit's own stepping
     /// is unreliable near a managed region, so this computes its own naive
     /// backward step and runs it through the shared rescue chain instead).
+    ///
+    /// Mirror of `moveRight`'s checklist rule: a step that lands on a
+    /// checklist line's start (left of the checkbox) continues across the
+    /// line break to the end of the line above, in the same press. When
+    /// there is no inhabitable spot above (the checklist is the first line,
+    /// or only a leading divider sits above it), the caret stays where it is.
     override func moveLeft(_ sender: Any?) {
         let current = selectedRange()
-        guard current.length == 0 else {
+        guard current.length == 0, let storage = textStorage else {
             super.moveLeft(sender)
             return
         }
         let naive = max(current.location - 1, 0)
-        guard naive != current.location,
-              let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
-        else {
+        guard naive != current.location else {
+            super.moveLeft(sender)
+            return
+        }
+        let corrected = correctedCaretTarget(fromNaive: naive, previous: current.location, direction: .backward, naiveIsVerifiedStep: true)
+        let landing = corrected ?? naive
+        if checklistContentStart(ifLineStartAt: landing) != nil {
+            guard landing > 0 else { return }
+            var aboveContentsEnd = 0
+            (storage.string as NSString).getLineStart(nil, end: nil, contentsEnd: &aboveContentsEnd,
+                                                      for: NSRange(location: landing - 1, length: 0))
+            let beyond = correctedCaretTarget(fromNaive: aboveContentsEnd, previous: landing, direction: .backward, naiveIsVerifiedStep: true)
+                ?? aboveContentsEnd
+            guard beyond < current.location, checklistContentStart(ifLineStartAt: beyond) == nil else { return }
+            setSelectedRange(NSRange(location: beyond, length: 0))
+            return
+        }
+        guard let corrected else {
             super.moveLeft(sender)
             return
         }
