@@ -67,5 +67,6 @@ final class MenuShiftXRoutingTests: XCTestCase {
         XCTAssertEqual(picked("g", code: 5, shift: false), "Find Next")
         XCTAssertEqual(picked("g", code: 5, shift: true), "Find Previous")
         XCTAssertEqual(picked("e", code: 14, shift: false), "Use Selection for Find")
+        XCTAssertEqual(picked("f", code: 3, shift: true), "Search All Notes")
     }
 }

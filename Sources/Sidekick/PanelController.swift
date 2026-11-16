@@ -222,8 +222,9 @@ final class PanelController {
                 // keyCode 53 == Escape. Gate on panel identity so we don't swallow
                 // Escape elsewhere in the process.
                 if event.keyCode == 53, event.window === self?.panel {
-                    // An open find bar closes first; the next Escape hides the panel.
+                    // An open find bar closes first, then a search being typed clears; the next Escape hides the panel.
                     if self?.closeFindBar() == true { return nil }
+                    if self?.clearSearchBeingTyped() == true { return nil }
                     self?.slideOut()
                     return nil   // swallow so Escape doesn't leak further
                 }
@@ -241,6 +242,22 @@ final class PanelController {
         tv.performTextFinderAction(hide)
         panel?.makeFirstResponder(tv)
         return true
+    }
+
+    /// Empties the sidebar's search while its field has the caret, and puts the caret back in the note. False when
+    /// the field is not being typed in or is already empty.
+    private func clearSearchBeingTyped() -> Bool {
+        guard !panelState.searchQuery.isEmpty,
+              let fieldEditor = panel?.firstResponder as? NSTextView, fieldEditor.isFieldEditor else { return false }
+        panelState.searchQuery = ""
+        focusEditor()
+        return true
+    }
+
+    /// Puts the caret in the open note.
+    func focusEditor() {
+        guard let tv = Self.editor(in: panel?.contentView) else { return }
+        panel?.makeFirstResponder(tv)
     }
 
     private static func editor(in view: NSView?) -> NoteTextView? {

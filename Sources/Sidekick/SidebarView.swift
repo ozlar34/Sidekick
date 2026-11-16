@@ -8,6 +8,7 @@ struct SidebarView: View {
     @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = Double(PanelSizes.defaultSidebarWidth)
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
+    @FocusState private var searchFocused: Bool
 
     private var panelController: PanelController? {
         (NSApp.delegate as? AppDelegate)?.panelController
@@ -29,6 +30,42 @@ struct SidebarView: View {
             growsRight: true
         )
         return handle.frame(width: 6)
+    }
+
+    /// Filters the sidebar to the notes that match (see NoteSearch). Return opens the first match.
+    private var searchField: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField("Search", text: $panelState.searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused($searchFocused)
+                .onSubmit(openFirstMatch)
+            if !panelState.searchQuery.isEmpty {
+                Button {
+                    panelState.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Clear Search")
+                .accessibilityLabel("Clear Search")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+        .onChange(of: panelState.searchFocusRequest) { _, _ in searchFocused = true }
+    }
+
+    private func openFirstMatch() {
+        guard let first = NoteSearch.results(store.notes, query: panelState.searchQuery).first else { return }
+        panelState.selectedNoteID = first.id
+        DispatchQueue.main.async { panelController?.focusEditor() }   // after the editor shows the note
     }
 
     var body: some View {
@@ -73,9 +110,13 @@ struct SidebarView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
 
+                    searchField
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+
                     Divider()
 
-                    NoteListView(store: store, selectedID: $panelState.selectedNoteID)
+                    NoteListView(store: store, selectedID: $panelState.selectedNoteID, query: panelState.searchQuery)
 
                     Divider()
 
@@ -163,6 +204,13 @@ struct SidebarView: View {
         // Remembered by filename, so a rename of the selected note updates it too.
         .onChange(of: selectedNote?.filename) { _, new in
             if let new { lastSelectedNoteFilename = new }   // a momentarily empty list must not forget it
+        }
+        // A note selected outside the search results (a new note, a delete's successor) must show in the sidebar.
+        .onChange(of: panelState.selectedNoteID) { _, id in
+            guard let id, !NoteSearch.terms(panelState.searchQuery).isEmpty,
+                  !NoteSearch.results(store.notes, query: panelState.searchQuery).contains(where: { $0.id == id })
+            else { return }
+            panelState.searchQuery = ""
         }
         .onChange(of: store.folderMissing) { _, missing in
             if missing { showMissingFolderSheet = true }

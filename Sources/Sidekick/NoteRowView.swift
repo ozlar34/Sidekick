@@ -95,6 +95,8 @@ struct NoteRowView: View {
     let note: Note
     @ObservedObject var store: NoteStore
     @Binding var selectedID: UUID?
+    /// While searching: the note's first line that matches, shown under the title.
+    var snippet: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -103,6 +105,14 @@ struct NoteRowView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+
+            if let snippet {
+                Text(snippet)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
 
             if let modified = note.modified {
                 Text(NoteRowFormatting.formattedModifiedTime(modified))

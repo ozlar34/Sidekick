@@ -18,4 +18,8 @@ import Combine
 @MainActor
 final class PanelState: ObservableObject {
     @Published var selectedNoteID: UUID? = nil
+    /// The sidebar's search text. Empty: the sidebar shows every note.
+    @Published var searchQuery: String = ""
+    /// Goes up by one each time Search All Notes (⇧⌘F) asks the sidebar to focus its search field.
+    @Published var searchFocusRequest: Int = 0
 }

@@ -3,11 +3,37 @@ import SwiftUI
 struct NoteListView: View {
     @ObservedObject var store: NoteStore
     @Binding var selectedID: UUID?
+    /// The sidebar's search text. Not empty: a flat list of the matching notes, pinned first, with no reordering.
+    var query: String = ""
 
     private var pinnedNotes: [Note] { store.notes.filter(\.pinned) }
     private var regularNotes: [Note] { store.notes.filter { !$0.pinned } }
 
     var body: some View {
+        if NoteSearch.terms(query).isEmpty {
+            allNotes
+        } else {
+            searchResults
+        }
+    }
+
+    private var searchResults: some View {
+        let matches = NoteSearch.results(store.notes, query: query)
+        return List {
+            ForEach(matches) { row($0, snippet: NoteSearch.snippet(for: $0, query: query)) }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .overlay {
+            if matches.isEmpty {
+                Text("No Matches")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var allNotes: some View {
         // NAV-01 fix: List(selection:) is backed by NSTableView, which
         // absorbs the first click as a first-responder/focus event in a
         // .nonactivatingPanel — so the first click never reached the
@@ -58,8 +84,8 @@ struct NoteListView: View {
     // behaviour in one place, so a future change cannot diverge between pinned
     // and regular rows. Each ForEach now only differs in its onMove closure.
     @ViewBuilder
-    private func row(_ note: Note) -> some View {
-        NoteRowView(note: note, store: store, selectedID: $selectedID)
+    private func row(_ note: Note, snippet: String? = nil) -> some View {
+        NoteRowView(note: note, store: store, selectedID: $selectedID, snippet: snippet)
             .background(
                 RoundedRectangle(cornerRadius: Self.highlightCornerRadius)
                     .fill(note.id == selectedID

@@ -142,7 +142,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ))
 
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(Self.makeFindMenuItem())
+        let findItem = Self.makeFindMenuItem()
+        let searchItem = NSMenuItem(title: "Search All Notes", action: #selector(searchAllNotes(_:)), keyEquivalent: "f")
+        searchItem.keyEquivalentModifierMask = [.command, .shift]
+        searchItem.target = self
+        findItem.submenu?.addItem(.separator())
+        findItem.submenu?.addItem(searchItem)
+        editMenu.addItem(findItem)
 
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
@@ -501,6 +507,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// File > Reload Notes (⌘R). KBD-02. Mirrors the existing sidebar-footer
     /// refresh button (SidebarView.swift:62-64).
+    /// Edit > Find > Search All Notes (⇧⌘F): puts the caret in the sidebar's search field.
+    @objc func searchAllNotes(_ sender: Any?) {
+        panelController.panelState.searchFocusRequest += 1
+    }
+
     @objc func reloadNotes(_ sender: Any?) {
         guard let store = self.store else { return }
         Task { @MainActor in
@@ -698,24 +709,23 @@ extension AppDelegate {
 /// The Edit menu answers Command plus a letter only. AppKit also matches Command-Shift-X, -C, -V and -A to the plain
 /// items (their key equivalent is lowercase), and Edit comes before Format, so Command-Shift-X cut text instead of
 /// reaching Format > Strikethrough. With Shift held the Edit menu declines, except for Redo (Command-Shift-Z) and
-/// Find Previous (Command-Shift-G). AppKit would match Command-Shift-G to Find Next (Command-G), which comes first, so
-/// this menu sends it to Find Previous itself.
+/// the Find items that state Shift in their mask (Command-Shift-G, Command-Shift-F). AppKit would match those to the
+/// Command-only item of the same letter when it comes first (Find Next, Find…), so this menu sends them itself.
 final class PlainCommandMenu: NSMenu {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.shift) {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "z": break
-            case "g": return findPrevious()
-            default: return false
-            }
+            let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            if key == "z" { return super.performKeyEquivalent(with: event) }
+            guard let item = shiftedItem(for: key), let action = item.action else { return false }
+            return NSApp.sendAction(action, to: item.target, from: item)
         }
         return super.performKeyEquivalent(with: event)
     }
 
-    private func findPrevious() -> Bool {
-        let tag = NSTextFinder.Action.previousMatch.rawValue
-        guard let item = items.lazy.compactMap({ $0.submenu?.items.first { $0.tag == tag } }).first,
-              let action = item.action else { return false }
-        return NSApp.sendAction(action, to: item.target, from: item)
+    /// The submenu item whose key is `key` with Shift stated in its mask.
+    private func shiftedItem(for key: String) -> NSMenuItem? {
+        items.lazy.compactMap { $0.submenu?.items.first {
+            $0.keyEquivalent == key && $0.keyEquivalentModifierMask.contains(.shift)
+        } }.first
     }
 }
