@@ -365,6 +365,17 @@ extension FormattingToolbarView {
     /// undoable-text-changes (the sandwich is the canonical Apple pattern for
     /// programmatic edits that participate in the NSTextView undo stack).
     static func performWrap(prefix: String, suffix: String, in textView: NSTextView) {
+        if let editor = textView as? NoteTextView {   // the new editor acts on its note document; a link is ticket 11
+            switch prefix {
+            case "**": editor.perform(.bold)
+            case "*": editor.perform(.italic)
+            case "<u>": editor.perform(.underline)
+            case "~~": editor.perform(.strikethrough)
+            case "`": editor.perform(.code)
+            default: break
+            }
+            return
+        }
         let body = textView.string
         let range = textView.selectedRange()
 

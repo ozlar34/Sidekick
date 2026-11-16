@@ -20,6 +20,7 @@ struct NoteEditorView: NSViewRepresentable {
         tv.attach(openNote.content)
         tv.onShiftTabAtStart = { [weak controller] in controller?.onShiftTabAtBodyStart?() }
         controller.textView = tv
+        tv.bindFormatState(to: controller)   // the toolbar and menu show the active styles and block kind
         return scrollView
     }
 

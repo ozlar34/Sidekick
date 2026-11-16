@@ -129,9 +129,8 @@ struct EditorPaneView: View {
                     .padding(.top, 14)
                     .padding(.bottom, 2)
 
-                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). Hidden with the new editor on:
-                // its commands rewrite markdown in the buffer, which the new editor does not hold.
-                if !NewEditorSwitch.isOn {
+                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). With the new editor on, its commands act on the
+                // note document through the same `FormattingToolbarView.perform*` functions.
                 FormattingToolbarView(
                     wrapSelection: wrapSelection,
                     applyLinePrefix: applyLinePrefix,
@@ -147,7 +146,6 @@ struct EditorPaneView: View {
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                }
             }
             .background(Color(.controlBackgroundColor))
 

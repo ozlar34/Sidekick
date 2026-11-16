@@ -468,6 +468,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
+    /// Test seam: the text view the Format actions and their validation use instead of the one in the panel.
+    internal var formatTargetOverride: (() -> NSTextView?)?
+
+    /// The text view the Format actions edit: the panel's editor (old or new), or the test seam's.
+    private func formatTarget() -> NSTextView? {
+        if let override = formatTargetOverride { return override() }
+        guard let panel = panelController.panel else { return nil }
+        return findTextView(in: panel.contentView)
+    }
+
     // MARK: - Menu actions (Phase 8 D-R-01)
 
     /// File > New Note (⌘N). MENU-01. Creates a note via the same path as
@@ -532,30 +542,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// shared performWrap helper (D-R-03). Prefix/suffix mirror the toolbar
     /// button at FormattingToolbarView.swift:13-21.
     @objc func formatBold(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
     }
 
     /// Format > Italic (⌘I). MENU-02.
     @objc func formatItalic(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: tv)
     }
 
     /// Format > Inline Code (⌘⌥C). MENU-02.
     @objc func formatInlineCode(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "`", suffix: "`", in: tv)
     }
 
     /// Format > Link (⌘K). MENU-02. Mirrors the toolbar button's `[` / `]()`
     /// prefix/suffix at FormattingToolbarView.swift:43-51.
     @objc func formatLink(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: tv)
     }
 
@@ -565,8 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// sandwich (FormattingToolbarView.performLinePrefix) — same responder
     /// discovery as formatBold/Italic/Code/Link.
     @objc func formatBulletedList(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performLinePrefix(in: tv)
     }
 
@@ -574,28 +579,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the caret is already on a line of that level strips the prefix
     /// back to body — handled by `performHeadingLevel`'s toggle rule.
     @objc func formatHeading1(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performHeadingLevel(in: tv, level: 1)
     }
 
     @objc func formatHeading2(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performHeadingLevel(in: tv, level: 2)
     }
 
     @objc func formatHeading3(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performHeadingLevel(in: tv, level: 3)
     }
 
     /// Format > Body (⌘⌥0). Strips any heading prefix from the line(s)
     /// containing the selection. No-op on already-plain lines.
     @objc func formatHeadingBody(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performHeadingLevel(in: tv, level: nil)
     }
 
@@ -603,15 +604,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `<u>...</u>` HTML round-trips through HTML-aware renderers and is
     /// the convention Apple Notes' Markdown export uses too.
     @objc func formatUnderline(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "<u>", suffix: "</u>", in: tv)
     }
 
     /// Format > Strikethrough (⌘⇧X). GitHub-flavored markdown convention.
     @objc func formatStrikethrough(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performWrap(prefix: "~~", suffix: "~~", in: tv)
     }
 
@@ -619,23 +618,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// selected block; toggle-off when every non-empty line already has
     /// a `<digits>. ` prefix.
     @objc func formatNumberedList(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performNumberedList(in: tv)
     }
 
     /// Format > Block Quote (⌘⇧9). Mirrors bulleted-list shape with `> `.
     @objc func formatBlockQuote(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performBlockQuote(in: tv)
     }
 
     /// Format > Checklist (⌘⇧L). Apple Notes parity. Toggles a GFM
     /// task-list (`- [ ] `) prefix on the line(s) containing the selection.
     @objc func formatChecklist(_ sender: Any?) {
-        guard let panel = panelController.panel,
-              let tv = findTextView(in: panel.contentView) else { return }
+        guard let tv = formatTarget() else { return }
         FormattingToolbarView.performChecklist(in: tv)
     }
 
@@ -663,8 +659,12 @@ extension AppDelegate: NSUserInterfaceValidations {
         guard let action = item.action else { return false }
         let panel = panelController.panel
         let panelVisible = panel?.isVisible == true
-        let editorFocused = (NSApp.keyWindow === panel)
-            && (panel?.firstResponder is NSTextView)
+        let editorFocused: Bool
+        if let target = formatTargetOverride?() {
+            editorFocused = target.window?.firstResponder === target
+        } else {
+            editorFocused = (NSApp.keyWindow === panel) && (panel?.firstResponder is NSTextView)
+        }
         let hasSelection = panelController.panelState.selectedNoteID != nil
 
         switch action {

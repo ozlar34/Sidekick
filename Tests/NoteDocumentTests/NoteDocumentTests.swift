@@ -141,6 +141,27 @@ final class NoteDocumentTests: XCTestCase {
         XCTAssertEqual(doc.markdown(), "####   spaced!\n")
     }
 
+    /// Ticket 09: a line made a numbered item right below a numbered item continues the list; otherwise it starts at 1.
+    func testReplacingALineWithANumberedItemContinuesTheListAbove() {
+        var doc = NoteDocument(markdown: "5) five\nplain\n\nalone\n")
+        doc.apply(.replace(at: 1, kind: .numbered, runs: [Run("plain")]))
+        doc.apply(.replace(at: 3, kind: .numbered, runs: [Run("alone")]))
+        XCTAssertEqual(doc.markdown(), "5) five\n6) plain\n\n1. alone\n")
+        var first = NoteDocument(markdown: "a\nb\n")
+        first.apply(.replace(at: 0, kind: .numbered, runs: [Run("a")]))
+        first.apply(.replace(at: 1, kind: .numbered, runs: [Run("b")]))
+        XCTAssertEqual(first.markdown(), "1. a\n2. b\n")
+    }
+
+    /// Ticket 09: `Run.applying` is the document's own mark rule (code excludes the others).
+    func testRunApplyingFollowsTheDocumentsMarkRules() {
+        let r = Run("x", bold: .underscores, underline: true)
+        XCTAssertEqual(r.applying(.code, setting: true, bold: .asterisks, italic: .asterisk), Run("x", code: true))
+        XCTAssertEqual(r.applying(.italic, setting: true, bold: .asterisks, italic: .underscore).italic, .underscore)
+        XCTAssertNil(r.applying(.bold, setting: false, bold: .asterisks, italic: .asterisk).bold)
+        XCTAssertEqual(Run("x", code: true).applying(.bold, setting: true, bold: .asterisks, italic: .asterisk), Run("x", code: true))
+    }
+
     func testSaveLoadEqualsDocument_afterEdits() {
         forEachSeed { seed, gen in
             var doc = NoteDocument(markdown: gen.markdown())

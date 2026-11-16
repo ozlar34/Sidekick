@@ -67,6 +67,19 @@ final class NewEditorHost {
         }
     }
 
+    /// A real key event with Command held (and more modifiers), offered to `menu` as a key equivalent. `keyCode` is the
+    /// physical key (US layout), so shifted digits match their menu item as on a real keyboard. The Format menu is offered
+    /// the key directly: the Edit menu's Cut (also `x`) answers Command-Shift-X first when the whole main menu is asked.
+    @discardableResult
+    func shortcut(_ chars: String, keyCode: UInt16, _ mods: NSEvent.ModifierFlags, in menu: NSMenu) -> Bool {
+        window.makeKeyAndOrderFront(nil)
+        if window.firstResponder !== textView { window.makeFirstResponder(textView) }
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods.union(.command), timestamp: ProcessInfo.processInfo.systemUptime,
+                                     windowNumber: window.windowNumber, context: nil, characters: mods.contains(.shift) ? chars.uppercased() : chars,
+                                     charactersIgnoringModifiers: chars, isARepeat: false, keyCode: keyCode)!
+        return menu.performKeyEquivalent(with: event)
+    }
+
     private func send(chars: String, keyCode: UInt16, mods: NSEvent.ModifierFlags) {
         window.makeKeyAndOrderFront(nil)
         if window.firstResponder !== textView { window.makeFirstResponder(textView) }

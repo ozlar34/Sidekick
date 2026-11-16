@@ -88,7 +88,10 @@ public struct NoteDocument: Equatable, Sendable {
         switch edit {
         case .replace(let i, let kind, let runs):
             precondition(blocks.indices.contains(i), "replace index out of range")
-            commit(i, kind: kind, prefix: NoteDocument.prefix(for: kind, replacing: blocks[i]), runs: NoteDocument.sanitize(runs, kind))
+            var prefix = NoteDocument.prefix(for: kind, replacing: blocks[i])
+            // A line made a numbered item right below a numbered item continues the list, as Enter does.
+            if kind == .numbered, blocks[i].kind.family != kind.family, i > 0 { prefix = NoteDocument.insertPrefix(kind, after: blocks[i - 1]) }
+            commit(i, kind: kind, prefix: prefix, runs: NoteDocument.sanitize(runs, kind))
         case .insert(let i, let kind, let runs):
             precondition((0...blocks.count).contains(i), "insert index out of range")
             insertBlock(at: i, kind: kind, prefix: NoteDocument.insertPrefix(kind, after: i > 0 ? blocks[i - 1] : nil), runs: NoteDocument.sanitize(runs, kind))

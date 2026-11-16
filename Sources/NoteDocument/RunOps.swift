@@ -66,3 +66,13 @@ enum RunOps {
         }
     }
 }
+
+public extension Run {
+    /// This run with `mark` set or cleared, by the document's own rules (code excludes every other mark; a link is not
+    /// handled here). `bold` and `italic` are the delimiters a newly marked run is spelled with.
+    func applying(_ mark: Mark, setting: Bool, bold: BoldDelimiter, italic: ItalicDelimiter) -> Run {
+        var r = self
+        RunOps.apply(mark, setting: setting, to: &r, bold: bold, italic: italic)
+        return r
+    }
+}

@@ -11,6 +11,7 @@ extension FormattingToolbarView {
     /// `performBlockQuote` exactly — same edit-sandwich pattern, same caret
     /// restore semantics.
     static func performChecklist(in textView: NSTextView) {
+        if let editor = textView as? NoteTextView { editor.perform(.checklist); return }   // the new editor acts on its note document
         let body = textView.string
         let range = textView.selectedRange()
         let (fullNewBody, _) = applyChecklist(body: body, range: range)
@@ -102,6 +103,7 @@ extension FormattingToolbarView {
     /// the bullet content. For multi-line or non-empty selection, the whole
     /// transformed block is re-selected so the next ⌘⇧8 can toggle it off.
     static func performLinePrefix(in textView: NSTextView) {
+        if let editor = textView as? NoteTextView { editor.perform(.bullet); return }   // the new editor acts on its note document
         let body = textView.string
         let range = textView.selectedRange()
         let (fullNewBody, _) = applyBulletedList(body: body, range: range)
@@ -149,6 +151,7 @@ extension FormattingToolbarView {
     ///   1. `EditorPaneView.applyHeadingLevel(level:)` — toolbar dropdown.
     ///   2. `AppDelegate.formatHeading{1,2,3,Body}(_:)` — Format menu shortcuts.
     static func performHeadingLevel(in textView: NSTextView, level: Int?) {
+        if let editor = textView as? NoteTextView { editor.perform(.heading(level)); return }   // the new editor acts on its note document
         let body = textView.string
         let range = textView.selectedRange()
         let (fullNewBody, _) = applyHeadingLevel(body: body, range: range, level: level)
@@ -202,6 +205,7 @@ extension FormattingToolbarView {
     /// typing immediately; for multi-line or non-empty selection, the whole
     /// block is re-selected so the next ⌘⇧7 can toggle off cleanly.
     static func performNumberedList(in textView: NSTextView) {
+        if let editor = textView as? NoteTextView { editor.perform(.numbered); return }   // the new editor acts on its note document
         let body = textView.string
         let range = textView.selectedRange()
         let (fullNewBody, _) = applyNumberedList(body: body, range: range)
@@ -249,6 +253,7 @@ extension FormattingToolbarView {
     /// `performLinePrefix` exactly — `"> "` is a fixed 2-char prefix so the
     /// caret arithmetic matches the bulleted-list shape.
     static func performBlockQuote(in textView: NSTextView) {
+        if let editor = textView as? NoteTextView { editor.perform(.quote); return }   // the new editor acts on its note document
         let body = textView.string
         let range = textView.selectedRange()
         let (fullNewBody, _) = applyBlockQuote(body: body, range: range)
@@ -297,6 +302,7 @@ extension FormattingToolbarView {
     /// at the end of the (visually empty) hairline line, which looks like
     /// the caret is sitting on the rule itself.
     static func performInsertThematicBreak(in textView: NSTextView) {
+        if let editor = textView as? NoteTextView { editor.perform(.rule); return }   // the new editor acts on its note document
         let nsBody = textView.string as NSString
         let range = textView.selectedRange()
 

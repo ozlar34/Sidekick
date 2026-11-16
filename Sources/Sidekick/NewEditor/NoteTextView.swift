@@ -10,13 +10,17 @@ import NoteDocument
 final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner {
     /// The note shown now: its storage, undo history and document. `attach` switches it.
     private(set) var content = NoteContent()
-    private var tailKind: BlockKind {
+    var tailKind: BlockKind {
         get { content.tailKind }
         set { content.tailKind = newValue; NoteTextEngine.setTailKind(newValue, in: self) }
     }
 
     /// Called with the document's markdown after every edit made through the view.
     var onMarkdownChange: ((String) -> Void)?
+    /// Called with what the toolbar shows (active styles, block kind) whenever the caret, the selection or the text changes.
+    var onFormatStateChange: ((NoteFormatState) -> Void)?
+    /// True while `attach` switches notes: SwiftUI is updating then, so the state is published right after.
+    var formatStateSuspended = false
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
     /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
@@ -118,6 +122,11 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// Shows another open note's content in this view: its storage, undo history and selection.
     func attach(_ new: NoteContent) {
         guard new !== content || textStorage !== new.storage else { return }
+        formatStateSuspended = true
+        defer {
+            formatStateSuspended = false
+            DispatchQueue.main.async { [weak self] in self?.publishFormatState() }
+        }
         content.savedSelection = selectedRange()
         content.storage.delegate = nil
         content = new
@@ -205,6 +214,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         refreshTailTypingAttributes()
         refreshHover()
         onMarkdownChange?(content.markdown)
+        publishFormatState()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -219,7 +229,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     /// An empty tail paragraph has no character, so AppKit would hand it the previous paragraph's
     /// attributes (a heading's). Typing attributes there come from `tailKind` instead.
-    private func refreshTailTypingAttributes() {
+    func refreshTailTypingAttributes() {
         let sel = selectedRange()
         let ns = string as NSString
         guard sel.length == 0, sel.location == ns.length, sel.location == 0 || ns.character(at: sel.location - 1) == 0x0A else { return }
@@ -233,37 +243,38 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
         refreshTailTypingAttributes()
+        publishFormatState()
     }
 
     // MARK: Structural key rules
 
-    private func paragraph(at location: Int) -> (index: Int, range: NSRange)? {
+    func paragraph(at location: Int) -> (index: Int, range: NSRange)? {
         let ranges = NoteBuffer.paragraphRanges(in: string as NSString)
         guard let i = ranges.firstIndex(where: { $0.location <= location && location <= NSMaxRange($0) }) else { return nil }
         return (i, ranges[i])
     }
 
     /// Kind of a paragraph; the empty last one has no character to carry it.
-    private func kind(of para: NSRange) -> BlockKind {
+    func kind(of para: NSRange) -> BlockKind {
         if para.length == 0 && para.location == (string as NSString).length { return tailKind }
         return NoteBuffer.kind(fromAttribute: textStorage?.attribute(.noteBlockKind, at: para.location, effectiveRange: nil))
     }
 
-    private func hasTerminator(_ para: NSRange) -> Bool { NSMaxRange(para) < (string as NSString).length }
+    func hasTerminator(_ para: NSRange) -> Bool { NSMaxRange(para) < (string as NSString).length }
 
     /// `range` of the buffer as text of block kind `kind` (marks stay; the line breaks carry the kind too).
-    private func slice(_ range: NSRange, as kind: BlockKind) -> NSMutableAttributedString {
+    func slice(_ range: NSRange, as kind: BlockKind) -> NSMutableAttributedString {
         let out = NSMutableAttributedString(attributedString: textStorage?.attributedSubstring(from: range) ?? NSAttributedString())
         out.addAttribute(.noteBlockKind, value: NoteBuffer.attributeValue(kind), range: NSRange(location: 0, length: out.length))
         return out
     }
 
-    private func lineBreak(_ kind: BlockKind) -> NSAttributedString {
+    func lineBreak(_ kind: BlockKind) -> NSAttributedString {
         NSAttributedString(string: "\n", attributes: [.noteBlockKind: NoteBuffer.attributeValue(kind)])
     }
 
     /// One user-style edit: replaces `range` with `text` (one undo step) and puts the caret at `caret`.
-    private func replace(_ range: NSRange, with text: NSAttributedString, caret: Int) {
+    func replace(_ range: NSRange, with text: NSAttributedString, caret: Int) {
         guard shouldChangeText(in: range, replacementString: text.string) else { return }
         textStorage?.replaceCharacters(in: range, with: text)
         didChangeText()
@@ -271,7 +282,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     }
 
     /// Changes the kind of the empty last paragraph. It has no character, so its undo is registered by hand.
-    private func changeTailKind(_ new: BlockKind) {
+    func changeTailKind(_ new: BlockKind) {
         let old = tailKind
         guard old != new else { return }
         undoManager?.registerUndo(withTarget: self) { $0.changeTailKind(old) }
