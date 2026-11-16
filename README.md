@@ -10,17 +10,18 @@ A hotkey-summoned, edge-anchored notes panel for macOS. Tap a global shortcut, a
 
 - Global hotkey to summon and dismiss
 - Edge-anchored translucent panel that stays out of the way
-- Hybrid markdown editor: live formatting (bold, italic, inline code, links, lists) over plain `.md` text
+- Rich-text editor over plain `.md` files: formatting shows as formatting (no markers), bold, italic, underline, strikethrough, inline code, links, lists, checklists, quotes, dividers, code blocks and tables
+- Files stay yours: an untouched block is saved byte for byte, so the markdown you wrote keeps its spelling (`__bold__`, `*` bullets, CRLF line endings)
 - Notes saved as individual `.md` files in a folder you choose
 - Lightweight sidebar for note switching
 - Native macOS, no Electron, no web view
 
 ## Built with
 
-- Swift, SwiftUI + AppKit hybrid (`NSTextView`-backed editor for live formatting, SwiftUI for everything else)
+- Swift, SwiftUI + AppKit (an `NSTextView` shows the note document, SwiftUI for everything else); see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Tested on macOS 14+
 - Built with the assistance of [Claude Code](https://claude.ai/code) by Anthropic
-- Covered by 35+ test files including regression guards for the editor and markdown parsing
+- Covered by tests at four seams: the note document (including seeded generated notes), the editor view (real window, real key events), the open note, and the note store (safe saves, migration)
 
 CI: the `test` job in `.github/workflows/test.yml` runs `swift test` on a macOS runner for every push and pull request.
 
@@ -40,24 +41,23 @@ MIT. See [LICENSE](LICENSE).
 
 ## Debug harness (for automated UI diagnosis)
 
-Launch the built binary with `--debug-port <n>` to start a localhost control
+The harness is compiled into debug builds only (`#if DEBUG`); a release build contains none of it.
+Launch the debug binary with `--debug-port <n>` to start a localhost control
 server that can summon the panel, open notes, synthesize real clicks and
 keystrokes, dump caret and glyph geometry, and screenshot the panel window.
 Pair it with `--debug-notes-folder <path>` so the run never touches your
 real notes:
 
 ```
-swift build -c release
-.build/release/Sidekick --debug-port 4567 --debug-notes-folder /tmp/sidekick-fixtures
+swift build
+.build/debug/Sidekick --debug-port 4567 --debug-notes-folder /tmp/sidekick-fixtures
 curl -X POST localhost:4567/summon
 curl localhost:4567/state
 curl -X POST localhost:4567/click -d '{"x":120,"y":10}'
 curl -X POST localhost:4567/screenshot -d '{"path":"/tmp/panel.png","region":"editor"}'
 ```
 
-The new editor view is the default. `--old-editor` (or the hidden default `newEditorEnabled` = false in the
-`com.oguzoral.Sidekick.shared` suite) brings back the old one. With the new editor, `/state`
-also reports `blocks` (block kinds), `markdown` and `lineCount`, and `/set` takes markdown.
+`/state` reports the editor's `blocks` (block kinds), `markdown` and `lineCount`, and `/set` takes markdown.
 
 Endpoints are listed at the top of `Sources/Sidekick/Debug/DebugHarness.swift`.
 Without the flag the harness is inert.

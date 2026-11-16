@@ -72,8 +72,8 @@ final class NewEditorLinkTests: XCTestCase {
         XCTAssertNotNil(h.textView.linkField, "Format > Link")
         h.pressInField(.escape)
         XCTAssertNil(h.textView.linkField)
-        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: h.textView)
-        XCTAssertNotNil(h.textView.linkField, "the toolbar and popover Link button")
+        h.textView.beginLinkEdit()
+        XCTAssertNotNil(h.textView.linkField, "beginLinkEdit, the entry point of the Format menu action")
         commit("u", h)
         XCTAssertEqual(h.markdown, "hello [world](u)")
     }
@@ -309,8 +309,8 @@ final class NewEditorLinkTests: XCTestCase {
         let h = host("hello world")
         select("hello", in: h)
         let first = cmdK(h)
-        delegate.formatLink(nil)   // the menu is off while the field has the focus; the toolbar button still reaches here
-        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: h.textView)
+        delegate.formatLink(nil)   // the menu is off while the field has the focus; a direct call still reaches here
+        h.textView.beginLinkEdit()
         XCTAssertEqual(h.textView.subviews.filter { $0 is NoteLinkFieldView }.count, 1)
         XCTAssertTrue(h.textView.linkField === first)
         h.pressInField(.escape)
@@ -370,7 +370,7 @@ final class NewEditorLinkTests: XCTestCase {
                 h.textView.setSelectedRange(NSRange(location: NSString(string: h.string).range(of: probe).location, length: length))
                 h.endUndoGroup()
                 XCTAssertNil(cmdK(h), "\(probe) \(length)")
-                FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: h.textView)
+                h.textView.beginLinkEdit()
                 delegate.formatLink(nil)
                 XCTAssertNil(h.textView.linkField)
                 XCTAssertEqual(h.markdown, source)
@@ -388,23 +388,6 @@ final class NewEditorLinkTests: XCTestCase {
         h.textView.setSelectedRange(NSRange(location: 4, length: 9))   // text into the code block
         XCTAssertNil(cmdK(h))
         XCTAssertEqual(h.markdown, source)
-    }
-
-    // MARK: with the switch off the old editor is unchanged
-
-    func testTheOldEditorsCmdKIsUnchanged() {
-        let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        tv.string = "hello world"
-        tv.setSelectedRange(NSRange(location: 0, length: 5))
-        delegate.formatTargetOverride = { tv }
-        delegate.formatLink(nil)
-        XCTAssertEqual(tv.string, "[hello]() world", "the old editor still wraps and leaves the address to be typed")
-        let plain = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        plain.string = "hello world"
-        plain.setSelectedRange(NSRange(location: 0, length: 5))
-        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: plain)
-        XCTAssertEqual(plain.string, "[hello]() world")
-        XCTAssertFalse(plain.subviews.contains { $0 is NoteLinkFieldView }, "no field in the old editor")
     }
 
     /// Seed 270 of the generated test below (found by the 300-seed final run): a bare URL pill whose address is changed.

@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Build a scratch .app bundle around .build/release/Sidekick and launch it via
+# Build a scratch .app bundle around the DEBUG build (.build/debug/Sidekick; the harness is not in release builds) and launch it via
 # LaunchServices with the debug harness flags. Usage: debug-launch.sh <notes-folder> [port]
 set -e
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -7,8 +7,8 @@ S=${TMPDIR:-/tmp}/sidekick-debug; mkdir -p "$S"
 NOTES=$1; PORT=${2:-4567}
 APP=$S/SidekickDebug.app
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$REPO/.build/release/Sidekick" "$APP/Contents/MacOS/Sidekick"
-cp -R "$REPO"/.build/release/*.bundle "$APP/Contents/Resources/" 2>/dev/null || true
+cp "$REPO/.build/debug/Sidekick" "$APP/Contents/MacOS/Sidekick"
+cp -R "$REPO"/.build/debug/*.bundle "$APP/Contents/Resources/" 2>/dev/null || true
 cp "$REPO/Resources/AppIcon.icns" "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

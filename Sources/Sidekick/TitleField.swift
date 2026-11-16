@@ -6,7 +6,7 @@ import SwiftUI
 /// e.g. when Shift-Tab fires from the body editor (F-04 counterpart) or when
 /// a fresh empty note mounts (`seedFocusForCurrentNote`).
 ///
-/// Mirrors `HybridEditorController`'s shape: `@MainActor`, ObservableObject,
+/// Mirrors `EditorController`'s shape: `@MainActor`, ObservableObject,
 /// weak NSView ref written in `makeNSView`. We don't need any @Published state
 /// here yet, but adopting the pattern keeps both controllers symmetrical.
 @MainActor

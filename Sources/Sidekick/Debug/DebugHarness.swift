@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import Foundation
 import Network
@@ -14,7 +15,7 @@ import Network
 ///
 /// Class: verifier (standing component). Attention saved: editor bugs can be
 /// reproduced, screenshotted, and regression-checked without a human at the
-/// keyboard. Cost: this file, compiled in but inert without the flag.
+/// keyboard. Compiled into DEBUG builds only (`#if DEBUG`): a release build has no harness.
 ///
 /// Endpoints (all JSON; POST bodies are JSON objects):
 ///   GET  /state                 → panel/window/editor/store snapshot
@@ -118,18 +119,17 @@ final class DebugHarness {
 
     var panel: SidekickPanel? { app.panelController.panel }
 
-    /// The editor's text view: the old `HybridTextView` or, with the switch on, the new `NoteTextView`.
-    func textView() throws -> NSTextView {
-        guard let panel, let tv = Self.findTextView(in: panel.contentView),
-              tv is HybridTextView || tv is NoteTextView else {
+    /// The editor's text view (`NoteTextView`).
+    func textView() throws -> NoteTextView {
+        guard let panel, let tv = Self.findTextView(in: panel.contentView) else {
             throw fail("editor not mounted (summon the panel and open a note first)")
         }
         return tv
     }
 
-    static func findTextView(in view: NSView?) -> NSTextView? {
+    static func findTextView(in view: NSView?) -> NoteTextView? {
         guard let view else { return nil }
-        if let tv = view as? NSTextView { return tv }
+        if let tv = view as? NoteTextView { return tv }
         for sub in view.subviews { if let tv = findTextView(in: sub) { return tv } }
         return nil
     }
@@ -190,14 +190,11 @@ final class DebugHarness {
                     ed["caretRect"] = rect(NSRect(x: frag.origin.x + loc.x, y: frag.origin.y, width: 1, height: frag.height))
                 }
             }
-            if let nt = tv as? NoteTextView {
-                // New editor: block kinds and the markdown the note document produces.
-                ed["newEditor"] = true
-                ed["blocks"] = nt.blockKinds
-                ed["markdown"] = nt.markdown
-                ed["caretRect"] = rect(NoteTextEngine.caretRect(in: nt, at: sel.location))
-                ed["lineCount"] = NoteTextEngine.lineCount(in: nt)
-            }
+            // Block kinds and the markdown the note document produces.
+            ed["blocks"] = tv.blockKinds
+            ed["markdown"] = tv.markdown
+            ed["caretRect"] = rect(NoteTextEngine.caretRect(in: tv, at: sel.location))
+            ed["lineCount"] = NoteTextEngine.lineCount(in: tv)
             if let storage = tv.textStorage {
                 var attrs: [String: Any] = [:]
                 attrs["length"] = storage.length
@@ -240,12 +237,7 @@ final class DebugHarness {
                 item["hidden"] = lm.propertyForGlyph(at: g).contains(.null)
                 item["notShown"] = lm.notShownAttribute(forGlyphAt: g)
             }
-            var markers: [String] = []
-            for key: NSAttributedString.Key in [.sidekickHiddenMarker, .sidekickThematicBreak, .sidekickChecklistMarker] {
-                if storage.attribute(key, at: i, effectiveRange: nil) != nil { markers.append(key.rawValue) }
-            }
-            if storage.attribute(.link, at: i, effectiveRange: nil) != nil { markers.append("link") }
-            item["markers"] = markers
+            item["markers"] = storage.attribute(.link, at: i, effectiveRange: nil) != nil ? ["link"] : []
             items.append(item)
         }
         return ["length": ns.length, "glyphs": items, "usedRect": rect(lm.usedRect(for: tc))]
@@ -273,3 +265,4 @@ final class DebugHarness {
     }
 
 }
+#endif

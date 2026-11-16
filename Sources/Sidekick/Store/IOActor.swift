@@ -43,7 +43,7 @@ actor IOActor {
     /// (or to the first free "<title> 2", ...). Returns the filename the note has afterwards.
     ///
     /// With a `baseline` the write happens only when the file's current bytes equal it: otherwise
-    /// `NoteStoreError.conflict` is thrown and nothing changes, not even a rename. Without one (old editor)
+    /// `NoteStoreError.conflict` is thrown and nothing changes, not even a rename. Without one
     /// the write is unconditional and recreates a file that is gone.
     func save(_ data: Data, filename: String, wantedBase: String?, baseline: Data?) throws -> String {
         let url = folder.appendingPathComponent(filename)

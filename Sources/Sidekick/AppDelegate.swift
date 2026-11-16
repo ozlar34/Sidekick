@@ -13,8 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     internal var store: NoteStore?
     private var settingsWindowController: SettingsWindowController?
     private var statusItem: NSStatusItem?
+    #if DEBUG
     /// Non-nil only when launched with `--debug-port` (see DebugHarness).
     private var debugHarness: DebugHarness?
+    #endif
 
     /// Test-seam initializer. Skips the hotkey registration and NoteStore
     /// construction that happen in `applicationDidFinishLaunching(_:)` so
@@ -403,9 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `--debug-notes-folder` (DebugHarness) wins for this process only —
         // never persisted, so a harness run can't touch the real notes.
         let configuredPath = Defaults.store.string(forKey: Defaults.notesFolder)
-        let folder: URL = DebugHarness.notesFolderOverride
-            ?? (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
+        var folder: URL = (configuredPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
             ?? StorageLocation.defaultNotesFolder
+        #if DEBUG
+        if let override = DebugHarness.notesFolderOverride { folder = override }
+        #endif
         do {
             let s = try NoteStore(folder: folder)
             self.store = s
@@ -428,21 +432,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Sidekick] NoteStore init failed: \(error.localizedDescription) — hotkey not registered")
         }
 
+        #if DEBUG
         if let port = DebugHarness.port {
             let harness = DebugHarness(app: self)
             harness.start(port: port)
             debugHarness = harness
         }
+        #endif
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Write the debounced autosave before exiting; replying later keeps
-        // the app alive until the save has landed.
+        // Write the open notes' pending saves before exiting; replying later keeps
+        // the app alive until they have landed.
         guard let store else { return .terminateNow }
         // A title still being typed is committed (renamed) first: ending the edit fires the title field's commit.
         NSApp.keyWindow?.makeFirstResponder(nil)
         Task { @MainActor in
-            await store.autosave.flush()
             await store.flushOpenNotes()
             sender.reply(toApplicationShouldTerminate: true)
         }
@@ -455,27 +460,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu action helpers (Phase 8 D-R-03)
 
-    /// Walk the view hierarchy rooted at `view` to find the first NSTextView.
-    /// Lifted verbatim from EditorPaneView (see Sources/Sidekick/EditorPaneView.swift:211-218).
-    /// Duplication is intentional (D-R-03): two call sites, 8 lines, cheaper
-    /// than a cross-cutting helper that would force a new file.
-    private func findTextView(in view: NSView?) -> NSTextView? {
+    /// Walk the view hierarchy rooted at `view` to find the editor's text view.
+    private func findEditor(in view: NSView?) -> NoteTextView? {
         guard let view = view else { return nil }
-        if let tv = view as? NSTextView { return tv }
+        if let tv = view as? NoteTextView { return tv }
         for subview in view.subviews {
-            if let tv = findTextView(in: subview) { return tv }
+            if let tv = findEditor(in: subview) { return tv }
         }
         return nil
     }
 
     /// Test seam: the text view the Format actions and their validation use instead of the one in the panel.
-    internal var formatTargetOverride: (() -> NSTextView?)?
+    internal var formatTargetOverride: (() -> NoteTextView?)?
 
-    /// The text view the Format actions edit: the panel's editor (old or new), or the test seam's.
-    private func formatTarget() -> NSTextView? {
+    /// The text view the Format actions edit: the panel's editor, or the test seam's.
+    private func formatTarget() -> NoteTextView? {
         if let override = formatTargetOverride { return override() }
         guard let panel = panelController.panel else { return nil }
-        return findTextView(in: panel.contentView)
+        return findEditor(in: panel.contentView)
     }
 
     // MARK: - Menu actions (Phase 8 D-R-01)
@@ -538,102 +540,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Format > Bold (⌘B). MENU-02. Edits the focused NSTextView via the
-    /// shared performWrap helper (D-R-03). Prefix/suffix mirror the toolbar
-    /// button at FormattingToolbarView.swift:13-21.
-    @objc func formatBold(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: tv)
-    }
+    // Format actions: each hands one command to the editor view, which changes the note document
+    // (`NoteTextView.perform(_:)`). Heading shortcuts toggle: the same level again gives back a body line.
 
-    /// Format > Italic (⌘I). MENU-02.
-    @objc func formatItalic(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: tv)
-    }
+    /// Format action (⌘B).
+    @objc func formatBold(_ sender: Any?) { formatTarget()?.perform(.bold) }
 
-    /// Format > Inline Code (⌘⌥C). MENU-02.
-    @objc func formatInlineCode(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "`", suffix: "`", in: tv)
-    }
+    /// Format action (⌘I).
+    @objc func formatItalic(_ sender: Any?) { formatTarget()?.perform(.italic) }
 
-    /// Format > Link (⌘K). MENU-02. Mirrors the toolbar button's `[` / `]()`
-    /// prefix/suffix at FormattingToolbarView.swift:43-51.
-    @objc func formatLink(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: tv)
-    }
+    /// Format action (⌘⌥C).
+    @objc func formatInlineCode(_ sender: Any?) { formatTarget()?.perform(.code) }
 
-    /// Format > Bulleted List (⌘⇧8). Apple Notes / Bear convention:
-    /// toggles "- " prefix on every line in the selection (or the current
-    /// line if selection is empty). Uses the shared line-prefix edit
-    /// sandwich (FormattingToolbarView.performLinePrefix) — same responder
-    /// discovery as formatBold/Italic/Code/Link.
-    @objc func formatBulletedList(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performLinePrefix(in: tv)
-    }
+    /// Format action (⌘U).
+    @objc func formatUnderline(_ sender: Any?) { formatTarget()?.perform(.underline) }
 
-    /// Format > Heading 1/2/3 (⌘⌥1/2/3). Pressing the same shortcut while
-    /// the caret is already on a line of that level strips the prefix
-    /// back to body — handled by `performHeadingLevel`'s toggle rule.
-    @objc func formatHeading1(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performHeadingLevel(in: tv, level: 1)
-    }
+    /// Format action (⌘⇧X).
+    @objc func formatStrikethrough(_ sender: Any?) { formatTarget()?.perform(.strikethrough) }
 
-    @objc func formatHeading2(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performHeadingLevel(in: tv, level: 2)
-    }
+    /// Format action (⌘⇧8).
+    @objc func formatBulletedList(_ sender: Any?) { formatTarget()?.perform(.bullet) }
 
-    @objc func formatHeading3(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performHeadingLevel(in: tv, level: 3)
-    }
+    /// Format action (⌘⌥1).
+    @objc func formatHeading1(_ sender: Any?) { formatTarget()?.perform(.heading(1)) }
 
-    /// Format > Body (⌘⌥0). Strips any heading prefix from the line(s)
-    /// containing the selection. No-op on already-plain lines.
-    @objc func formatHeadingBody(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performHeadingLevel(in: tv, level: nil)
-    }
+    /// Format action (⌘⌥2).
+    @objc func formatHeading2(_ sender: Any?) { formatTarget()?.perform(.heading(2)) }
 
-    /// Format > Underline (⌘U). Markdown has no native underline syntax;
-    /// `<u>...</u>` HTML round-trips through HTML-aware renderers and is
-    /// the convention Apple Notes' Markdown export uses too.
-    @objc func formatUnderline(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "<u>", suffix: "</u>", in: tv)
-    }
+    /// Format action (⌘⌥3).
+    @objc func formatHeading3(_ sender: Any?) { formatTarget()?.perform(.heading(3)) }
 
-    /// Format > Strikethrough (⌘⇧X). GitHub-flavored markdown convention.
-    @objc func formatStrikethrough(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performWrap(prefix: "~~", suffix: "~~", in: tv)
-    }
+    /// Format action (⌘⌥0).
+    @objc func formatHeadingBody(_ sender: Any?) { formatTarget()?.perform(.heading(nil)) }
 
-    /// Format > Numbered List (⌘⇧7). Sequential numbering across the
-    /// selected block; toggle-off when every non-empty line already has
-    /// a `<digits>. ` prefix.
-    @objc func formatNumberedList(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performNumberedList(in: tv)
-    }
+    /// Format action (⌘⇧7).
+    @objc func formatNumberedList(_ sender: Any?) { formatTarget()?.perform(.numbered) }
 
-    /// Format > Block Quote (⌘⇧9). Mirrors bulleted-list shape with `> `.
-    @objc func formatBlockQuote(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performBlockQuote(in: tv)
-    }
+    /// Format action (⌘⇧9).
+    @objc func formatBlockQuote(_ sender: Any?) { formatTarget()?.perform(.quote) }
 
-    /// Format > Checklist (⌘⇧L). Apple Notes parity. Toggles a GFM
-    /// task-list (`- [ ] `) prefix on the line(s) containing the selection.
-    @objc func formatChecklist(_ sender: Any?) {
-        guard let tv = formatTarget() else { return }
-        FormattingToolbarView.performChecklist(in: tv)
-    }
+    /// Format action (⌘⇧L).
+    @objc func formatChecklist(_ sender: Any?) { formatTarget()?.perform(.checklist) }
+
+    /// Format > Link (⌘K): asks for the address in a field over the selection.
+    @objc func formatLink(_ sender: Any?) { formatTarget()?.beginLinkEdit() }
 
     /// App > About Sidekick (D-M-02). Uses the stock AppKit about panel,
     /// which reads CFBundleShortVersionString + CFBundleVersion from

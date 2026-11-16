@@ -2,7 +2,7 @@ import XCTest
 import AppKit
 @testable import Sidekick
 
-/// Ticket 17 final gate: Command-Shift-X must reach Format > Strikethrough, not Edit > Cut (also `x`; Edit comes first in
+/// Command-Shift-X must reach Format > Strikethrough, not Edit > Cut (also `x`; Edit comes first in
 /// the menu). A real key event goes through the app's real main menu (`installMainMenu`), with no direct offer to the
 /// Format submenu. A test run has no key window, so the menu's items are pointed at a recorder: AppKit still does the
 /// matching of the key event to an item, the recorder only says which item it picked.
@@ -43,14 +43,9 @@ final class MenuShiftXRoutingTests: XCTestCase {
         return recorder.hits.last
     }
 
-    /// Same for both editors: the menu does not depend on which editor is shown.
     func testCommandShiftXIsStrikethroughAndCommandXIsCut() {
-        for on in [true, false] {
-            NewEditorSwitch.testOverride = on
-            XCTAssertEqual(picked("x", code: 7, shift: true), "Strikethrough", "switch \(on)")
-            XCTAssertEqual(picked("x", code: 7, shift: false), "Cut", "switch \(on)")
-        }
-        NewEditorSwitch.testOverride = nil
+        XCTAssertEqual(picked("x", code: 7, shift: true), "Strikethrough")
+        XCTAssertEqual(picked("x", code: 7, shift: false), "Cut")
     }
 
     /// The other Edit items and their Shift variants keep their own meaning.

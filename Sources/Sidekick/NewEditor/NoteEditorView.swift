@@ -5,7 +5,7 @@ import SwiftUI
 /// are attached to the single text view, and edits flow to the open note, never through view state.
 struct NoteEditorView: NSViewRepresentable {
     @ObservedObject var openNote: OpenNote
-    @ObservedObject var controller: HybridEditorController
+    @ObservedObject var controller: EditorController
 
     func makeNSView(context: Context) -> NSScrollView {
         let tv = NoteTextView.make()

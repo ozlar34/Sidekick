@@ -28,7 +28,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
     /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
-    /// (every scheme passes, as in the old editor).
+    /// (every scheme passes).
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// The pasteboard that copy, cut and paste use. Tests give the view a private one, never the general pasteboard.
     var clipboard: NSPasteboard = .general
@@ -110,7 +110,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         allowsUndo = true
         isEditable = true
         isSelectable = true
-        // Same as the old editor (F-07): no automatic text mutation.
+        // No automatic text mutation.
         isAutomaticQuoteSubstitutionEnabled = false
         isAutomaticDashSubstitutionEnabled = false
         isAutomaticTextReplacementEnabled = false
@@ -517,7 +517,15 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// Text typed on a divider's line replaces the rule: the line becomes a plain paragraph holding the text (undo brings the rule back).
     /// Text typed at the edge of a pill or a link is plain text: it never joins the address or the link.
     /// `/hr` or `/divider` alone on a plain line becomes a divider with a new line below.
-    override func insertText(_ string: Any, replacementRange: NSRange) {
+    ///
+    /// The emoji picker can hand over a replacement range captured before the selection moved (FB13789916); honoured, it would
+    /// replace the emoji just inserted by the next typed character. Outside a composition, a range that is not the selection
+    /// is taken as "the selection".
+    override func insertText(_ string: Any, replacementRange requested: NSRange) {
+        var replacementRange = requested
+        if !hasMarkedText(), requested.location != NSNotFound, !NSEqualRanges(requested, selectedRange()) {
+            replacementRange = NSRange(location: NSNotFound, length: 0)
+        }
         // A table cell holds no tab and no row break: typed or pasted ones become blanks.
         let at = replacementRange.location == NSNotFound ? selectedRange().location : replacementRange.location
         if let (_, para) = paragraph(at: at), kind(of: para) == .table {

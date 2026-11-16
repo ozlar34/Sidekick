@@ -96,26 +96,26 @@ final class NewEditorFormatTests: XCTestCase {
         }
     }
 
-    /// The popover and the checklist button call these functions (EditorPaneView hands them the editor's text view).
-    func testToolbarFunctionsDriveTheNewEditor() {
-        func run(_ source: String, _ body: (NoteTextView) -> Void) -> String {
+    /// The popover and the checklist button hand these commands to the editor's text view (`EditorPaneView.perform`).
+    func testToolbarCommandsDriveTheEditor() {
+        func run(_ source: String, _ command: NoteFormatCommand) -> String {
             let h = host(source)
             select("hello", in: h)
-            body(h.textView)
+            h.textView.perform(command)
             return h.markdown
         }
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: $0) }, "**hello** world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performWrap(prefix: "*", suffix: "*", in: $0) }, "*hello* world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performWrap(prefix: "<u>", suffix: "</u>", in: $0) }, "<u>hello</u> world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performWrap(prefix: "~~", suffix: "~~", in: $0) }, "~~hello~~ world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performLinePrefix(in: $0) }, "- hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performNumberedList(in: $0) }, "1. hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performBlockQuote(in: $0) }, "> hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performChecklist(in: $0) }, "- [ ] hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performHeadingLevel(in: $0, level: 1) }, "# hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performHeadingLevel(in: $0, level: 2) }, "## hello world")
-        XCTAssertEqual(run("# hello world") { FormattingToolbarView.performHeadingLevel(in: $0, level: nil) }, "hello world")
-        XCTAssertEqual(run("hello world") { FormattingToolbarView.performInsertThematicBreak(in: $0) }, "hello world\n---")
+        XCTAssertEqual(run("hello world", .bold), "**hello** world")
+        XCTAssertEqual(run("hello world", .italic), "*hello* world")
+        XCTAssertEqual(run("hello world", .underline), "<u>hello</u> world")
+        XCTAssertEqual(run("hello world", .strikethrough), "~~hello~~ world")
+        XCTAssertEqual(run("hello world", .bullet), "- hello world")
+        XCTAssertEqual(run("hello world", .numbered), "1. hello world")
+        XCTAssertEqual(run("hello world", .quote), "> hello world")
+        XCTAssertEqual(run("hello world", .checklist), "- [ ] hello world")
+        XCTAssertEqual(run("hello world", .heading(1)), "# hello world")
+        XCTAssertEqual(run("hello world", .heading(2)), "## hello world")
+        XCTAssertEqual(run("# hello world", .heading(nil)), "hello world")
+        XCTAssertEqual(run("hello world", .rule), "hello world\n---")
     }
 
     func testLinkAsksForAnAddressAndWritesNothingUntilItIsCommitted() {
@@ -125,7 +125,7 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertNotNil(h.textView.linkField)
         XCTAssertEqual(h.markdown, "hello world")
         h.pressInField(.escape)
-        FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: h.textView)
+        h.textView.beginLinkEdit()
         h.pressInField(.escape)
         XCTAssertEqual(h.markdown, "hello world")
     }
@@ -159,7 +159,7 @@ final class NewEditorFormatTests: XCTestCase {
         select("hello", in: h)
         press(Self.bold, in: h)
         press(Self.italic, in: h)
-        XCTAssertEqual(h.markdown, "*hello* world", "italic over bold swaps, as the old editor does")
+        XCTAssertEqual(h.markdown, "*hello* world", "italic over bold swaps")
         press(Self.code, in: h)
         XCTAssertEqual(h.markdown, "`hello` world", "code excludes every other mark")
         press(Self.bold, in: h)
@@ -365,7 +365,7 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(k.markdown, "1. a\n2. b", "another list kind is replaced, not stacked")
     }
 
-    /// Decided by Oguz: a selection with some lines already numbered is renumbered from 1, as in the old editor.
+    /// Decided by Oguz: a selection with some lines already numbered is renumbered from 1.
     func testNumberedListOnAMixedSelectionRenumbersFromOne() {
         for (source, expected) in [("3. a\nb", "1. a\n2. b"), ("x\n7) a\n9) b\ny\nz", "1. x\n2) a\n3) b\n4) y\n5) z"), ("a\n5. b\nc", "1. a\n2. b\n3. c")] {
             let h = host(source)
@@ -430,7 +430,7 @@ final class NewEditorFormatTests: XCTestCase {
     func testRuleIsInsertedBelowTheCaretLineWithALineBelowIt() {
         var h = host("alpha")
         h.select(5)
-        FormattingToolbarView.performInsertThematicBreak(in: h.textView)
+        h.textView.perform(.rule)
         XCTAssertEqual(h.markdown, "alpha\n---", "the file ends with the rule until text is typed below it, as for /hr")
         XCTAssertEqual(h.textView.blockKinds, ["p", "divider"])
         XCTAssertEqual(h.location, h.length, "the caret is on the new line below the rule")
@@ -438,15 +438,15 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(h.markdown, "alpha\n---\nx")
         h = host("a\nb\n")
         h.select(0)
-        FormattingToolbarView.performInsertThematicBreak(in: h.textView)
+        h.textView.perform(.rule)
         XCTAssertEqual(h.markdown, "a\n---\n\nb\n")
         XCTAssertEqual(h.location, 3)
         h = host("")
-        FormattingToolbarView.performInsertThematicBreak(in: h.textView)
+        h.textView.perform(.rule)
         XCTAssertEqual(h.markdown, "---\n")
         h = host("# head")
         h.select(2)
-        FormattingToolbarView.performInsertThematicBreak(in: h.textView)
+        h.textView.perform(.rule)
         XCTAssertEqual(h.markdown, "# head\n---")
         h.type("z")
         XCTAssertEqual(h.markdown, "# head\n---\nz", "the line below the rule is plain, not a heading")
@@ -489,7 +489,7 @@ final class NewEditorFormatTests: XCTestCase {
         let rule = host("a\nb")
         rule.select(0)
         rule.endUndoGroup()
-        FormattingToolbarView.performInsertThematicBreak(in: rule.textView)
+        rule.textView.perform(.rule)
         rule.undo()
         XCTAssertEqual(rule.markdown, "a\nb")
         XCTAssertEqual(rule.textView.undoManager?.canUndo, false)
@@ -542,15 +542,15 @@ final class NewEditorFormatTests: XCTestCase {
 
     func testTheControllerGetsTheStateTheToolbarShows() {
         let h = host("# head\nplain **bold**\n")
-        let controller = HybridEditorController()
+        let controller = EditorController()
         h.textView.bindFormatState(to: controller)
         select("bold", in: h)
         h.textView.setSelectedRange(NSRange(location: h.textView.selectedRange().location + 1, length: 0))
-        XCTAssertEqual(controller.armedInlineKinds, [.bold])
+        XCTAssertEqual(controller.activeInlineKinds, [.bold])
         XCTAssertNil(controller.activeHeadingLevel)
         h.select(2)
         XCTAssertEqual(controller.activeHeadingLevel, 1)
-        XCTAssertEqual(controller.armedInlineKinds, [])
+        XCTAssertEqual(controller.activeInlineKinds, [])
         h.select(h.length)
         press(Self.bullet, in: h)
         XCTAssertEqual(controller.activeLinePrefix, .bullet)
@@ -578,7 +578,7 @@ final class NewEditorFormatTests: XCTestCase {
             press(shortcut, in: h)
             XCTAssertEqual(h.markdown, source, shortcut.name, file: file, line: line)
         }
-        FormattingToolbarView.performInsertThematicBreak(in: h.textView)
+        h.textView.perform(.rule)
         XCTAssertEqual(h.markdown, source, "rule", file: file, line: line)
         XCTAssertEqual(h.textView.undoManager?.canUndo, false, "nothing registered", file: file, line: line)
         XCTAssertEqual(h.textView.formatState.inline, [], file: file, line: line)
@@ -611,32 +611,6 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(h.markdown, "- one\n```\n**keep** me\n```\n- two\n")
         press(Self.bold, in: h)
         XCTAssertEqual(h.markdown, "- **one**\n```\n**keep** me\n```\n- **two**\n")
-    }
-
-    // MARK: with the switch off the old editor is unchanged
-
-    func testTheOldEditorsCommandsAreUnchanged() {
-        func old(_ body: String, _ run: (NSTextView) -> Void) -> NSTextView {
-            let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-            tv.string = body
-            tv.setSelectedRange(NSRange(location: 0, length: 5))
-            run(tv)
-            return tv
-        }
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performWrap(prefix: "**", suffix: "**", in: $0) }.string, "**hello** world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performLinePrefix(in: $0) }.string, "- hello world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performNumberedList(in: $0) }.string, "1. hello world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performBlockQuote(in: $0) }.string, "> hello world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performChecklist(in: $0) }.string, "- [ ] hello world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performHeadingLevel(in: $0, level: 2) }.string, "## hello world")
-        XCTAssertEqual(old("hello world") { FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: $0) }.string, "[hello]() world")
-        // The menu action reaches the old editor's text view through the same functions.
-        let tv = old("hello world") { _ in }
-        delegate.formatTargetOverride = { tv }
-        delegate.formatItalic(nil)
-        XCTAssertEqual(tv.string, "*hello* world")
-        delegate.formatHeading1(nil)
-        XCTAssertEqual(tv.string, "# *hello* world")
     }
 
     // MARK: generated

@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import Foundation
 
@@ -11,15 +12,7 @@ extension DebugHarness {
     func setText(_ json: [String: Any]) throws -> [String: Any] {
         let tv = try textView()
         guard let text = json["text"] as? String else { throw fail("text required") }
-        if let nt = tv as? NoteTextView {
-            nt.replaceAllWithMarkdown(text)
-            return ["length": (nt.string as NSString).length]
-        }
-        let full = NSRange(location: 0, length: (tv.string as NSString).length)
-        guard tv.shouldChangeText(in: full, replacementString: text) else { throw fail("edit refused") }
-        tv.textStorage?.replaceCharacters(in: full, with: text)
-        tv.didChangeText()
-        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.replaceAllWithMarkdown(text)
         return ["length": (tv.string as NSString).length]
     }
 
@@ -32,7 +25,7 @@ extension DebugHarness {
         return ["selection": ["location": sel.location, "length": sel.length]]
     }
 
-    /// Real left-click through the full `HybridTextView.mouseDown` path.
+    /// Real left-click through the full `NoteTextView.mouseDown` path.
     /// Coordinates default to TEXT-CONTAINER space (what /glyphs reports);
     /// pass `space: "window"` for window coordinates. The matching mouseUp is
     /// queued FIRST so NSTextView's drag-tracking loop returns immediately
@@ -178,3 +171,4 @@ extension DebugHarness {
     }
 
 }
+#endif

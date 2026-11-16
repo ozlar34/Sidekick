@@ -9,32 +9,6 @@ final class NewEditorTests: XCTestCase {
 
     private var seeds: Int { Int(ProcessInfo.processInfo.environment["SIDEKICK_FUZZ_SEEDS"] ?? "") ?? 40 }
 
-    // MARK: switch
-
-    /// Ticket 17 flips the default: the new editor is what the app shows unless the switch is turned
-    /// off. Before 17 this test pinned "off by default" (the new editor was unverified, spec story 48).
-    func testSwitchIsOnByDefault() {
-        let scratch = UserDefaults(suiteName: "SidekickTests.switch.\(UUID().uuidString)")!
-        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [], defaults: scratch), "nothing set: the new editor")
-        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.launchArgument], defaults: scratch))
-        XCTAssertFalse(ProcessInfo.processInfo.arguments.contains(NewEditorSwitch.offLaunchArgument))
-        XCTAssertTrue(NewEditorSwitch.isOn)
-    }
-
-    /// Spec story 49: the old editor stays reachable until it is removed (ticket 18). Turning the
-    /// switch off, by the launch argument or by the hidden default, restores it.
-    func testTurningTheSwitchOffRestoresTheOldEditor() {
-        let scratch = UserDefaults(suiteName: "SidekickTests.switch.\(UUID().uuidString)")!
-        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.offLaunchArgument], defaults: scratch))
-        scratch.set(false, forKey: NewEditorSwitch.defaultsKey)
-        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [], defaults: scratch), "hidden default off")
-        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.launchArgument], defaults: scratch),
-                      "the launch argument for on wins over a stored off")
-        scratch.set(true, forKey: NewEditorSwitch.defaultsKey)
-        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [], defaults: scratch))
-        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.offLaunchArgument], defaults: scratch), "off argument beats a stored on")
-    }
-
     // MARK: open, show, type, save
 
     func testOpenShowsNoMarkersAndKindsAsAttributes() {
@@ -262,5 +236,69 @@ final class NewEditorTests: XCTestCase {
             h.endUndoGroup()
             XCTAssertEqual(h.markdown, states[i], "redo to state \(i)")
         }
+    }
+
+    // MARK: ported from the old editor's tests (ticket 18)
+
+    /// Shift-Tab with the caret at the very start hands the focus back to the title field; anywhere else it is a plain key.
+    func testShiftTabAtTheStartOfTheTextCallsBackAndOtherwiseDoesNot() {
+        let h = NewEditorHost(markdown: "hello")
+        var calls = 0
+        h.textView.onShiftTabAtStart = { calls += 1 }
+        h.select(0)
+        h.press(.backtab, shift: true)
+        XCTAssertEqual(calls, 1, "at offset 0 the callback fires")
+        h.select(3)
+        h.press(.backtab, shift: true)
+        XCTAssertEqual(calls, 1, "mid-text it does not")
+        h.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        h.press(.backtab, shift: true)
+        XCTAssertEqual(calls, 1, "a selection that starts at 0 is not the start of the text")
+        h.textView.onShiftTabAtStart = nil
+        h.select(0)
+        h.press(.backtab, shift: true)
+        XCTAssertEqual(h.markdown, "hello", "without a callback it changes nothing")
+    }
+
+    /// The emoji picker (FB13789916) can hand over a replacement range captured before the selection moved; it would replace
+    /// the emoji just inserted by the next typed character. Outside a composition, a range that is not the selection is ignored.
+    func testAStaleReplacementRangeFromTheEmojiPickerInsertsAtTheSelection() {
+        let h = NewEditorHost(markdown: "party ")
+        h.select(6)
+        h.textView.insertText("\u{1F389}", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(h.string, "party \u{1F389}", "inserted at the caret, not at the stale offset 0")
+        XCTAssertEqual(h.location, 8)
+        h.textView.insertText("t", replacementRange: NSRange(location: 6, length: 0))
+        XCTAssertEqual(h.string, "party \u{1F389}t", "the emoji is not overwritten by the next keystroke")
+        XCTAssertEqual(h.markdown, "party \u{1F389}t")
+    }
+
+    func testAReplacementRangeThatIsTheSelectionOrNotFoundIsHonoured() {
+        let h = NewEditorHost(markdown: "hello")
+        h.textView.setSelectedRange(NSRange(location: 0, length: 5))
+        h.textView.insertText("world", replacementRange: NSRange(location: 0, length: 5))
+        XCTAssertEqual(h.string, "world")
+        h.select(5)
+        h.textView.insertText("!", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(h.string, "world!")
+    }
+
+    /// Line endings of a CRLF note survive structural keys: Enter on an empty item ends the list, Backspace after a divider
+    /// removes it; no bare LF appears and the block kinds are the expected ones.
+    func testStructuralKeysInACRLFNoteKeepEveryLineEndingCRLF() {
+        func noBareLF(_ s: String) -> Bool { s.replacingOccurrences(of: "\r\n", with: "").contains("\n") == false }
+        let h = NewEditorHost(markdown: "- one\r\n- two\r\n")
+        h.select(NSString(string: h.string).range(of: "two").upperBound)
+        h.press(.enter)
+        XCTAssertEqual(h.textView.blockKinds, ["bullet", "bullet", "bullet"])
+        h.press(.enter)
+        XCTAssertEqual(h.textView.blockKinds, ["bullet", "bullet", "p"], "Enter on the empty item ends the list")
+        XCTAssertTrue(noBareLF(h.markdown), h.markdown.debugDescription)
+        let d = NewEditorHost(markdown: "above\r\n---\r\nbelow\r\n")
+        d.select(NSString(string: d.string).range(of: "below").location)
+        d.press(.backspace)
+        XCTAssertFalse(d.textView.blockKinds.contains("divider"), "Backspace at the start of the line below removes the divider")
+        XCTAssertTrue(noBareLF(d.markdown), d.markdown.debugDescription)
+        XCTAssertTrue(d.markdown.hasPrefix("above\r\n"), d.markdown.debugDescription)
     }
 }

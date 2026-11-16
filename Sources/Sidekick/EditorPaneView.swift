@@ -8,22 +8,12 @@ struct EditorPaneView: View {
     @Binding var selectedID: UUID?
 
     @State private var localTitle: String = ""
-    @State private var localBody: String = ""
-    /// The latest edit whose save has not landed yet (scheduled or in flight).
-    private struct PendingEdit: Equatable {
-        let id: UUID
-        let title: String
-        let body: String
-    }
-    @State private var pendingEdit: PendingEdit?
     @Environment(\.setDocumentEdited) private var setDocumentEdited
-    /// New editor only: the open note whose callbacks this pane currently listens to.
+    /// The open note whose callbacks this pane currently listens to.
     @State private var boundOpenNote: OpenNote?
 
-    // Phase 10 — controller bridge: publishes NSTextView ref from HybridEditorView
-    // so toolbar callbacks can call FormattingToolbarView.performWrap(in:) directly
-    // (D-TB-02, D-TB-03, D-TB-04).
-    @StateObject private var editorController = HybridEditorController()
+    /// Publishes the editor's text view (toolbar commands, focus) and what the toolbar shows for the caret.
+    @StateObject private var editorController = EditorController()
 
     // F-10: title is an NSViewRepresentable wrapping NSTextField so we can
     // intercept Tab via NSTextFieldDelegate.control(_:textView:doCommandBy:).
@@ -32,25 +22,10 @@ struct EditorPaneView: View {
     // focus traversal before the SwiftUI modifier sees the key.
     @StateObject private var titleController = TitleFieldController()
 
-    // Phase 5 plan 03 — external-edit banner + disk-write toast (STORE-07, REL-01)
-    // Banner state is derived from store.externallyChangedIDs (WR-06): a single
-    // long-lived @Published Set on NoteStore means we don't miss events across
-    // note switches or while the editor is unmounted (empty state).
-    @State private var diskWriteError: Bool = false
-
-    // Tracks whether the open note has unsaved local edits. Mirrors the
-    // setDocumentEdited signal already wired through scheduleAutoSave — used to
-    // decide external-change handling: silently auto-reload when there's nothing
-    // to lose, show the conflict banner only when reloading would clobber edits.
+    // Whether the open note has unsaved edits (reported by `OpenNote.onDirtyChange`). Decides external-change
+    // handling: a note with nothing to lose reloads silently, the conflict banner shows only when a reload
+    // would discard edits.
     @State private var hasPendingEdits: Bool = false
-
-    /// True only for a genuine conflict: the file changed on disk AND the user
-    /// has unsaved local edits that an auto-reload would discard. The no-pending-
-    /// edits case is handled silently by `autoReloadIfSafe()`, so the banner
-    /// never appears for it (no transient flash either).
-    private var showExternalChangeBanner: Bool {
-        store.externallyChangedIDs.contains(note.id) && hasPendingEdits
-    }
 
     /// Footer text below the editor body. "Edited 2:14 PM" — Created date
     /// is intentionally hidden because legacy notes pre-date the field and
@@ -60,38 +35,21 @@ struct EditorPaneView: View {
         return "Edited \(NoteRowFormatting.formattedModifiedTime(edited))"
     }
 
-    /// The old hybrid editor, or the new editor view when `NewEditorSwitch` is on.
+    /// The open note owns the text: nothing about it passes through view state.
     @ViewBuilder private var editorBody: some View {
-        if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
-            // The open note owns the text: nothing about it passes through view state.
+        if let open = store.openNote(note.id) {
             NoteEditorView(openNote: open, controller: editorController)
-        } else {
-            HybridEditorView(text: $localBody, controller: editorController)
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if let notice = store.migrationNotice { MigrationNoticeStrip(text: notice) }
-            // External-edit conflict banner (STORE-07) — top of editor. Only
-            // shown when the on-disk file changed AND there are unsaved local
-            // edits (reloading would discard them). The safe case auto-reloads
-            // silently via autoReloadIfSafe(). A closing Divider separates the
-            // strip from the title zone so it doesn't crowd the rounded panel top.
-            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+            // External-edit conflict banner, top of editor: shown when the file changed on disk and the open
+            // note has unsaved edits (reloading would discard them). The safe case reloads silently via
+            // autoReloadIfSafe(). A closing Divider separates the strip from the title zone.
+            if let open = store.openNote(note.id) {
                 ConflictBannerView(openNote: open)
-            } else if showExternalChangeBanner {
-                VStack(spacing: 0) {
-                    ExternalChangeBannerContent(
-                        reload: { Task { await reloadFromDisk() } },
-                        keepMine: {
-                            // The old editor has no disk baseline: acknowledging the change and saving
-                            // again writes this note's text over the file.
-                            store.acknowledgeExternalChange(id: note.id)
-                            scheduleAutoSave(title: localTitle, body: localBody)
-                        })
-                    Divider()
-                }
             }
 
             // Header chrome: title + formatting toolbar grouped on a slightly
@@ -101,8 +59,7 @@ struct EditorPaneView: View {
             // the orphaned "Aa" button without visually shouting.
             VStack(spacing: 0) {
                 // Title field — discrete, replaces the v1.2 first-line auto-H1.
-                // Padding aligns horizontally with the editor's textContainerInset
-                // (20pt h, HybridEditorView.swift) so the title and body text
+                // Padding aligns horizontally with the editor's text inset so the title and body text
                 // share a left edge.
                 TitleField(
                     text: $localTitle,
@@ -119,7 +76,7 @@ struct EditorPaneView: View {
                         // re-write the same body to disk and bump mtime.
                         guard newValue != note.title else { return }
                         // The title is the filename: typing renames nothing. The rename happens in `commitTitle`.
-                        if NewEditorSwitch.isOn { store.openNote(note.id)?.setTitle(newValue) }
+                        store.openNote(note.id)?.setTitle(newValue)
                     }
                     // The real name after a commit (a taken name gets a number suffix) or an outside rename.
                     .onChange(of: note.title) { _, newTitle in
@@ -129,38 +86,24 @@ struct EditorPaneView: View {
                     .padding(.top, 14)
                     .padding(.bottom, 2)
 
-                // Formatting toolbar (P7-TOOL-01, P7-TOOL-02). With the new editor on, its commands act on the
-                // note document through the same `FormattingToolbarView.perform*` functions.
+                // Formatting toolbar: its commands act on the note document through the editor view.
                 FormattingToolbarView(
-                    wrapSelection: wrapSelection,
-                    applyLinePrefix: applyLinePrefix,
-                    applyHeading: applyHeadingLevel,
-                    applyNumberedList: applyNumberedList,
-                    applyBlockQuote: applyBlockQuote,
-                    applyChecklist: applyChecklist,
-                    insertThematicBreak: insertThematicBreak,
-                    activeInlineKind: editorController.activeInlineKind,
+                    perform: perform,
                     activeHeadingLevel: editorController.activeHeadingLevel,
                     activeLinePrefix: editorController.activeLinePrefix,
-                    armedInlineKinds: editorController.armedInlineKinds
+                    activeInlineKinds: editorController.activeInlineKinds
                 )
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
             }
             .background(Color(.controlBackgroundColor))
 
-            if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
+            if let open = store.openNote(note.id) {
                 OpenNoteStatusView(openNote: open)
             }
 
             // Soft inset shadow at body top — replaces translucent Divider() that bled through panel vibrancy.
             editorBody
-                .onChange(of: localBody) { _, newValue in
-                    // Skip the onAppear / note-switch reseed — it would
-                    // re-write the same body to disk and bump mtime.
-                    guard newValue != note.body else { return }
-                    scheduleAutoSave(title: localTitle, body: newValue)
-                }
                 .background(Color(.textBackgroundColor))
                 .overlay(alignment: .top) {
                     LinearGradient(
@@ -172,9 +115,8 @@ struct EditorPaneView: View {
                     .allowsHitTesting(false)
                 }
 
-            // Created / Edited footer — Apple Notes style. Sits inside the
-            // editor pane VStack so the scroll view's clip bounds shrink by
-            // ~24pt; HybridEditorView.clipFrameChanged adapts automatically.
+            // Created / Edited footer — Apple Notes style. Sits inside the editor pane VStack so the
+            // scroll view's clip bounds shrink by its height.
             HStack {
                 Spacer()
                 Text(metadataLine)
@@ -185,10 +127,8 @@ struct EditorPaneView: View {
             .padding(.vertical, 6)
             .background(Color(.textBackgroundColor))
 
-            // Disk-write failure toast (REL-01) — bottom of editor. A top
-            // Divider separates it from the footer, mirroring the external-edit
-            // banner treatment at the top of the pane.
-            if diskWriteError || (NewEditorSwitch.isOn && !store.failedSaveIDs.isEmpty) {
+            // Save-failure toast, bottom of editor. Every note whose save failed counts, not only the one shown.
+            if !store.failedSaveIDs.isEmpty {
                 VStack(spacing: 0) {
                     Divider()
                     HStack(spacing: 8) {
@@ -197,15 +137,7 @@ struct EditorPaneView: View {
                             .foregroundStyle(.orange)
                         Text("Could not save — check disk permissions.").font(.system(size: 13))
                         Spacer()
-                        Button("Retry") {
-                            diskWriteError = false
-                            if NewEditorSwitch.isOn {
-                                // Every note whose save failed, not only the one shown.
-                                Task { await store.retryFailedSaves() }
-                            } else {
-                                scheduleAutoSave(title: localTitle, body: localBody)
-                            }
-                        }
+                        Button("Retry") { Task { await store.retryFailedSaves() } }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
@@ -215,105 +147,24 @@ struct EditorPaneView: View {
             }
         }
         .onAppear {
-            // Same echo-guard rule as the note-switch path below: the child
-            // HybridEditorView may already have mounted (makeNSView) against
-            // the still-empty localBody, so the seed we write here reaches
-            // updateNSView as a binding change. Without a token bump it is
-            // classified as a reflexive echo and DROPPED — the launch-time
-            // "note body invisible until you switch notes" bug.
             localTitle = note.title
-            if NewEditorSwitch.isOn {
-                bindOpenNote()
-            } else {
-                editorController.externalPushToken += 1
-                localBody = note.body
-            }
+            bindOpenNote()
             seedFocusForCurrentNote()
-            // Wire Shift-Tab @ body offset 0 → return focus to title.
-            // Counterpart to title→body Tab handled by TitleField's delegate.
+            // Shift-Tab at the start of the body returns focus to the title (Tab in the title does the reverse).
             editorController.onShiftTabAtBodyStart = { titleController.focus() }
             autoReloadIfSafe()
         }
         .onChange(of: note.id) { _, _ in
-            if NewEditorSwitch.isOn {
-                // The open notes keep their own text and undo history; switching writes pending saves now.
-                let storeRef = store
-                Task { await storeRef.flushOpenNotes() }
-                localTitle = note.title
-                diskWriteError = false
-                bindOpenNote()
-                seedFocusForCurrentNote()
-                autoReloadIfSafe()
-                return
-            }
-            // Save the old note's pending edit now instead of letting the
-            // next note's keystrokes replace it in the shared debouncer.
-            // An edit for the note we are returning to is kept pending and
-            // re-seeded below, since the store's copy may not have caught up.
-            let returning = pendingEdit?.id == note.id ? pendingEdit : nil
-            if returning == nil {
-                let autosave = store.autosave
-                Task { await autosave.flush() }
-            }
-            // EDIT-02 echo guard: bump the push token BEFORE reseeding
-            // localBody so HybridEditorView.updateNSView sees the advanced
-            // token and classifies the new body as a genuine external push.
-            editorController.externalPushToken += 1
-            localTitle = returning?.title ?? note.title
-            localBody = returning?.body ?? note.body
-            diskWriteError = false
-            // Freshly-mounted note has no unsaved local edits yet, unless its
-            // last edit is still being saved.
-            hasPendingEdits = returning != nil
+            // The open notes keep their own text and undo history; switching writes pending saves now.
+            let storeRef = store
+            Task { await storeRef.flushOpenNotes() }
+            localTitle = note.title
+            bindOpenNote()
             seedFocusForCurrentNote()
             autoReloadIfSafe()
         }
         .onChange(of: store.externallyChangedIDs) { _, _ in
             autoReloadIfSafe()
-        }
-    }
-
-    // MARK: - Auto-save (STORE-05, EDIT-04, EDIT-05)
-
-    private func scheduleAutoSave(title: String, body: String) {
-        // Immediate unsaved indicator (EDIT-05)
-        setDocumentEdited(true)
-        hasPendingEdits = true
-
-        let id = note.id
-        let edit = PendingEdit(id: id, title: title, body: body)
-        pendingEdit = edit
-        let editedSetter = setDocumentEdited
-        let storeRef = store
-        Task {
-            await storeRef.autosave.schedule {
-                do {
-                    try await storeRef.update(id, body: body)
-                    await MainActor.run {
-                        // A newer edit (this note or another) owns the flags.
-                        guard pendingEdit == edit else { return }
-                        pendingEdit = nil
-                        editedSetter(false)
-                        hasPendingEdits = false
-                    }
-                } catch {
-                    NSLog("[Sidekick] autosave failed: \(error.localizedDescription)")
-                    await MainActor.run {
-                        diskWriteError = true
-                        editedSetter(false)
-                    }
-                    // IN-03: Fire-and-forget auto-dismiss outside the
-                    // debouncer's cancellable chain. If the user types again
-                    // or hits Retry within 5s, the debouncer cancels the
-                    // active schedule — we do NOT want that cancellation to
-                    // throw out of Task.sleep and clear the flag prematurely.
-                    // A detached @MainActor task is immune to debouncer reset.
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        diskWriteError = false
-                    }
-                }
-            }
         }
     }
 
@@ -323,21 +174,9 @@ struct EditorPaneView: View {
     /// name that is taken gets a number suffix and `note.title` then carries the real name.
     private func commitTitle() {
         guard localTitle != note.title else { return }
-        if NewEditorSwitch.isOn {
-            guard let open = store.openNote(note.id) else { return }
-            open.setTitle(localTitle)
-            Task { await open.commitTitle() }
-            return
-        }
-        let id = note.id, title = localTitle, body = localBody
-        let storeRef = store
-        Task {
-            do { try await storeRef.update(id, title: title, body: body) }
-            catch {
-                NSLog("[Sidekick] rename failed: \(error.localizedDescription)")
-                await MainActor.run { diskWriteError = true }
-            }
-        }
+        guard let open = store.openNote(note.id) else { return }
+        open.setTitle(localTitle)
+        Task { await open.commitTitle() }
     }
 
     // MARK: - Focus management
@@ -375,7 +214,7 @@ struct EditorPaneView: View {
         Task { await reloadFromDisk() }
     }
 
-    /// New editor: listen to the current open note's dirty reports. Save failures are not bound per
+    /// Listen to the current open note's dirty reports. Save failures are not bound per
     /// note: the store keeps them (`failedSaveIDs`), so a failure of a note that is no longer shown
     /// still reaches the retry message.
     private func bindOpenNote() {
@@ -393,84 +232,18 @@ struct EditorPaneView: View {
 
     private func reloadFromDisk() async {
         await store.reloadNote(id: note.id)
-        if NewEditorSwitch.isOn, let open = store.openNote(note.id) {
-            open.reload()
-            store.acknowledgeExternalChange(id: note.id)
-            hasPendingEdits = false
-            return
-        }
-        if let updated = store.notes.first(where: { $0.id == note.id }) {
-            // EDIT-02 echo guard: bump the push token before reseeding the
-            // editor body from on-disk content so updateNSView classifies it
-            // as a genuine external push.
-            editorController.externalPushToken += 1
-            localBody = updated.body
-        }
+        guard let open = store.openNote(note.id) else { return }
+        open.reload()
         store.acknowledgeExternalChange(id: note.id)
-        // On-disk content is now the local content — nothing left unsaved.
         hasPendingEdits = false
     }
 
-    // MARK: - Phase 7 formatting toolbar (P7-TOOL-01, P7-TOOL-02)
+    // MARK: - Formatting toolbar
 
-    /// Bridge from FormattingToolbarView button taps to the editor's NSTextView.
-    ///
-    /// Routes through `editorController.textView` → `FormattingToolbarView.performWrap`
-    /// (D-TB-01). All three surfaces (toolbar button, Format menu, ⌘B shortcut)
-    /// converge on the same `performWrap` call — no $localBody mutation or
-    /// DispatchQueue.main.async cursor-restore dance needed (Phase 10 unification).
-    private func wrapSelection(prefix: String, suffix: String) {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performWrap(prefix: prefix, suffix: suffix, in: tv)
+    /// Hand a toolbar command to the editor view (it acts on the note document).
+    private func perform(_ command: NoteFormatCommand) {
+        editorController.textView?.perform(command)
     }
-
-    /// Toolbar-button bridge for the bulleted-list toggle (⌘⇧8 equivalent).
-    ///
-    /// Routes through `editorController.textView` → `FormattingToolbarView.performLinePrefix`
-    /// (D-TB-01). Mirrors the wrapSelection simplification — no $localBody mutation
-    /// or DispatchQueue dance needed (Phase 10 unification).
-    private func applyLinePrefix() {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performLinePrefix(in: tv)
-    }
-
-    /// Toolbar-dropdown bridge for the heading-level picker. `level` is
-    /// `nil` for Body or `1…3` for the heading levels offered by the
-    /// dropdown. Toggle-off (re-pick same level → strip) is handled
-    /// inside `applyHeadingLevel` / `performHeadingLevel`.
-    private func applyHeadingLevel(level: Int?) {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performHeadingLevel(in: tv, level: level)
-    }
-
-    /// Toolbar-popover bridge for the numbered-list toggle (⌘⇧7 equivalent).
-    /// Mirrors `applyLinePrefix` exactly — same routing pattern.
-    private func applyNumberedList() {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performNumberedList(in: tv)
-    }
-
-    /// Toolbar-popover bridge for the block-quote toggle (⌘⇧9 equivalent).
-    private func applyBlockQuote() {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performBlockQuote(in: tv)
-    }
-
-    /// Toolbar/menu bridge for the GFM task-list toggle (⌘⇧L). Mirrors
-    /// `applyBlockQuote` — same routing pattern.
-    private func applyChecklist() {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performChecklist(in: tv)
-    }
-
-    /// Toolbar bridge for inserting a markdown thematic break (`---`).
-    /// One-shot insert — no toggle-off path. Mirrors the other perform*
-    /// bridges in shape.
-    private func insertThematicBreak() {
-        guard let tv = editorController.textView else { return }
-        FormattingToolbarView.performInsertThematicBreak(in: tv)
-    }
-
 }
 
 /// "File changed on disk" strip with both choices.
@@ -499,7 +272,7 @@ private struct ExternalChangeBannerContent: View {
     }
 }
 
-/// New editor: the banner follows the open note's conflict state (changed on disk, unsaved edits).
+/// The banner follows the open note's conflict state (changed on disk, unsaved edits).
 private struct ConflictBannerView: View {
     @ObservedObject var openNote: OpenNote
 

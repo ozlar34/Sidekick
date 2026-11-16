@@ -101,7 +101,7 @@ final class NewEditorClipboardTests: XCTestCase {
         h.textView.selectAll(nil)
         h.textView.copy(nil)
         let aliasesOfPlainText: Set<String> = ["public.utf8-plain-text", "NSStringPboardType"]
-        XCTAssertEqual(Set((pb.types ?? []).map(\.rawValue)), aliasesOfPlainText, "other apps receive plain markdown text only, as from the old editor")
+        XCTAssertEqual(Set((pb.types ?? []).map(\.rawValue)), aliasesOfPlainText, "other apps receive plain markdown text only")
         XCTAssertEqual(pb.string(forType: .string), "**bold** and *it*\n")
     }
 

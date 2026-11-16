@@ -1,74 +1,27 @@
-/// `FormattingToolbarView` — the markdown formatting toolbar and its popover.
-///
-/// This file holds the view struct, its `body`, and the private subviews
-/// (button, popover trigger, popover, paragraph-style row). The static
-/// formatting logic is split across extensions:
-///   * `FormattingToolbarView+InlineFormatting.swift` — `applyMarkdownWrap`,
-///     inline-kind detection, armed-wrap helpers, `performWrap`.
-///   * `FormattingToolbarView+BlockTransforms.swift` — `LinePrefix` detection
-///     and the pure block-format string transforms.
-///   * `FormattingToolbarView+BlockCommands.swift` — the `perform*` NSTextView
-///     block commands, checklist click toggle, thematic-break insert.
-///   * `FormattingToolbarView+AtomicMarkerDelete.swift` — atomic marker delete
-///     and its Backspace / forward-delete handlers.
-///   * `FormattingToolbarView+KeyHandlers.swift` — Return / Backspace /
-///     forward-delete list and HR handlers, plus `lineContentEnd`.
+/// `FormattingToolbarView` — the formatting toolbar and its popover. It only shows the active styles and calls
+/// the closures it is given (`EditorPaneView` wires them to `NoteTextView.perform(_:)`); the edits themselves are the
+/// editor view's format commands (`NoteTextView+Format.swift`).
 
 import AppKit
 import SwiftUI
 
-/// Markdown formatting toolbar shown below the TextEditor in edit mode.
-/// Buttons call the `wrapSelection` closure (provided by EditorPaneView)
-/// which bridges to NSTextView. All string manipulation logic is
-/// extracted into `applyMarkdownWrap` (pure, unit-testable — no AppKit).
+/// Formatting toolbar shown under the title. Buttons call `perform` (provided by EditorPaneView), which hands the
+/// command to the editor view; the active styles come from the editor view's format state.
 struct FormattingToolbarView: View {
-    let wrapSelection: (String, String) -> Void
-    let applyLinePrefix: () -> Void
-    /// Apply a heading level (or strip back to body) on the line(s)
-    /// containing the selection. `nil` = Body. Defaults to a no-op so
-    /// existing call sites (tests, previews) compile without change.
-    /// Named distinctly from the static `applyHeadingLevel(body:range:level:)`
-    /// (mirrors `applyLinePrefix` vs `applyBulletedList`).
-    var applyHeading: (Int?) -> Void = { _ in }
-    /// Toggle a numbered-list (`1. `, `2. `, …) on the line(s) containing
-    /// the selection. Mirrors `applyLinePrefix`'s shape — toggle off when
-    /// every non-empty line already has a `<digits>. ` prefix.
-    var applyNumberedList: () -> Void = {}
-    /// Toggle a block-quote (`> `) prefix on the line(s) containing the
-    /// selection. Mirrors `applyLinePrefix` exactly with `"> "` instead of `"- "`.
-    var applyBlockQuote: () -> Void = {}
-    /// Toggle a GFM task-list (`- [ ] ` / `- [x] `) prefix on the line(s)
-    /// containing the selection. Mirrors `applyLinePrefix`'s shape — toggle
-    /// off when every non-empty line already has the prefix.
-    var applyChecklist: () -> Void = {}
-    /// Insert a markdown thematic break (`---`) on its own line below the
-    /// caret line. One-shot insert (no toggle-off path) — round-trip-safe
-    /// because the source bytes survive untouched in the buffer.
-    var insertThematicBreak: () -> Void = {}
-    /// Set when the caret is inside a bold / italic / code span. Drives the
-    /// active-state highlight on the corresponding button. Defaults to nil so
-    /// existing call sites (tests, previews, menu-only invocations) compile
-    /// without change. Populated by EditorPaneView from
-    /// HybridEditorController.activeInlineKind.
-    var activeInlineKind: InlineKind? = nil
-    /// Heading level (1–3) of the line containing the caret, or nil if the
-    /// caret is on a non-heading line. Drives the popover's active-row
-    /// checkmark on Heading / Subheading / Body. Populated by EditorPaneView
-    /// from HybridEditorController.activeHeadingLevel.
-    var activeHeadingLevel: Int? = nil
-    /// Line-prefix block format (bullet / numbered / checklist / blockquote)
-    /// of the line containing the caret, or nil for plain lines. Drives the
-    /// popover's active-state highlight on the four list-shape rows + the
-    /// standalone Checklist button. Populated by EditorPaneView from
-    /// HybridEditorController.activeLinePrefix.
-    var activeLinePrefix: LinePrefix? = nil
+    /// Inline styles the toolbar shows as active (bold, italic, code, strikethrough, underline).
+    internal enum InlineKind { case bold, italic, code, strikethrough, underline }
 
-    /// Inline kinds currently armed on an empty selection (quick-260523-29t).
-    /// OR-ed into each inline button's `isActive` highlight so the toolbar
-    /// shows "armed for next-typed character" the same way it shows
-    /// "caret inside an existing pair". Defaults empty so existing call
-    /// sites (tests, previews) compile without change.
-    var armedInlineKinds: Set<InlineKind> = []
+    /// Block kind of the caret's line that the popover shows as active. A line is exactly one of these or none;
+    /// headings have their own value (`activeHeadingLevel`).
+    internal enum LinePrefix { case bullet, numbered, checklist, blockquote }
+
+    let perform: (NoteFormatCommand) -> Void
+    /// Heading level (1-3) of the caret's line, or nil for a line that is not a heading.
+    var activeHeadingLevel: Int? = nil
+    /// Block kind of the caret's line, or nil for plain lines.
+    var activeLinePrefix: LinePrefix? = nil
+    /// Inline styles active at the caret or on the whole selection (armed styles included).
+    var activeInlineKinds: Set<InlineKind> = []
 
     /// Apple Notes-style: a single "Aa" trigger collapses every formatting
     /// control behind one popover. Inline buttons (B/I/U/S) and paragraph
@@ -83,17 +36,10 @@ struct FormattingToolbarView: View {
             FormatPopoverTrigger(isOpen: $popoverShown)
                 .popover(isPresented: $popoverShown, arrowEdge: .bottom) {
                     FormattingPopoverView(
-                        wrapSelection: wrapSelection,
-                        applyLinePrefix: applyLinePrefix,
-                        applyHeading: applyHeading,
-                        applyNumberedList: applyNumberedList,
-                        applyBlockQuote: applyBlockQuote,
-                        applyChecklist: applyChecklist,
-                        insertThematicBreak: insertThematicBreak,
-                        activeInlineKind: activeInlineKind,
+                        perform: perform,
                         activeHeadingLevel: activeHeadingLevel,
                         activeLinePrefix: activeLinePrefix,
-                        armedInlineKinds: armedInlineKinds,
+                        activeInlineKinds: activeInlineKinds,
                         dismiss: { popoverShown = false }
                     )
                 }
@@ -106,7 +52,7 @@ struct FormattingToolbarView: View {
                 tooltip: "Checklist (⌘⇧L)",
                 accessibilityLabel: "Checklist",
                 isActive: activeLinePrefix == .checklist
-            ) { applyChecklist() }
+            ) { perform(.checklist) }
 
             Spacer()
         }
@@ -188,10 +134,7 @@ private struct FormatPopoverTrigger: View {
 }
 
 /// Apple Notes-style formatting panel. Two regions:
-///   • Inline row: B / I / U / S — tapping applies wrap and KEEPS the
-///     popover open so the user can stack inline formats. Strikethrough
-///     and underline use `~~text~~` and `<u>text</u>` respectively (the
-///     latter via HTML, since standard CommonMark has no underline syntax).
+///   • Inline row: B / I / U / S — tapping toggles the style and closes the popover.
 ///   • Paragraph styles: Heading / Subheading / Body / Bulleted List /
 ///     Numbered List / Block Quote. Tap applies and CLOSES the popover —
 ///     these are mutually exclusive picks, not stackable toggles. Heading
@@ -206,20 +149,10 @@ private struct FormatPopoverTrigger: View {
 /// shortcut still fires `formatHeading3` via AppDelegate; this hides H3
 /// from the visual surface only.
 private struct FormattingPopoverView: View {
-    let wrapSelection: (String, String) -> Void
-    let applyLinePrefix: () -> Void
-    let applyHeading: (Int?) -> Void
-    let applyNumberedList: () -> Void
-    let applyBlockQuote: () -> Void
-    let applyChecklist: () -> Void
-    let insertThematicBreak: () -> Void
-    let activeInlineKind: FormattingToolbarView.InlineKind?
+    let perform: (NoteFormatCommand) -> Void
     let activeHeadingLevel: Int?
     let activeLinePrefix: FormattingToolbarView.LinePrefix?
-    /// quick-260523-29t: armed inline kinds. OR-ed into each inline button's
-    /// isActive so the toolbar reflects "armed for next-typed character" the
-    /// same way it reflects "caret inside an existing pair".
-    let armedInlineKinds: Set<FormattingToolbarView.InlineKind>
+    let activeInlineKinds: Set<FormattingToolbarView.InlineKind>
     let dismiss: () -> Void
 
     var body: some View {
@@ -233,29 +166,29 @@ private struct FormattingPopoverView: View {
                     systemName: "bold",
                     tooltip: "Bold (⌘B)",
                     accessibilityLabel: "Bold",
-                    isActive: activeInlineKind == .bold || armedInlineKinds.contains(.bold)
-                ) { wrapSelection("**", "**"); dismiss() }
+                    isActive: activeInlineKinds.contains(.bold)
+                ) { perform(.bold); dismiss() }
 
                 FormatButton(
                     systemName: "italic",
                     tooltip: "Italic (⌘I)",
                     accessibilityLabel: "Italic",
-                    isActive: activeInlineKind == .italic || armedInlineKinds.contains(.italic)
-                ) { wrapSelection("*", "*"); dismiss() }
+                    isActive: activeInlineKinds.contains(.italic)
+                ) { perform(.italic); dismiss() }
 
                 FormatButton(
                     systemName: "underline",
                     tooltip: "Underline (⌘U)",
                     accessibilityLabel: "Underline",
-                    isActive: activeInlineKind == .underline || armedInlineKinds.contains(.underline)
-                ) { wrapSelection("<u>", "</u>"); dismiss() }
+                    isActive: activeInlineKinds.contains(.underline)
+                ) { perform(.underline); dismiss() }
 
                 FormatButton(
                     systemName: "strikethrough",
                     tooltip: "Strikethrough (⌘⇧X)",
                     accessibilityLabel: "Strikethrough",
-                    isActive: activeInlineKind == .strikethrough || armedInlineKinds.contains(.strikethrough)
-                ) { wrapSelection("~~", "~~"); dismiss() }
+                    isActive: activeInlineKinds.contains(.strikethrough)
+                ) { perform(.strikethrough); dismiss() }
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)
@@ -269,19 +202,19 @@ private struct FormattingPopoverView: View {
                     label: "Heading",
                     labelFont: .system(size: 17, weight: .semibold),
                     isActive: activeHeadingLevel == 1
-                ) { applyHeading(1); dismiss() }
+                ) { perform(.heading(1)); dismiss() }
 
                 ParagraphStyleRow(
                     label: "Subheading",
                     labelFont: .system(size: 15, weight: .semibold),
                     isActive: activeHeadingLevel == 2
-                ) { applyHeading(2); dismiss() }
+                ) { perform(.heading(2)); dismiss() }
 
                 ParagraphStyleRow(
                     label: "Body",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeHeadingLevel == nil
-                ) { applyHeading(nil); dismiss() }
+                ) { perform(.heading(nil)); dismiss() }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 6)
@@ -295,25 +228,25 @@ private struct FormattingPopoverView: View {
                     label: "•  Bulleted List",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .bullet
-                ) { applyLinePrefix(); dismiss() }
+                ) { perform(.bullet); dismiss() }
 
                 ParagraphStyleRow(
                     label: "1.  Numbered List",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .numbered
-                ) { applyNumberedList(); dismiss() }
+                ) { perform(.numbered); dismiss() }
 
                 ParagraphStyleRow(
                     label: "❘  Block Quote",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .blockquote
-                ) { applyBlockQuote(); dismiss() }
+                ) { perform(.quote); dismiss() }
 
                 ParagraphStyleRow(
                     label: "□  Checklist",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: activeLinePrefix == .checklist
-                ) { applyChecklist(); dismiss() }
+                ) { perform(.checklist); dismiss() }
 
                 // One-shot insert — no toggle-off path (a thematic break has
                 // no "active" state to highlight; clicking always emits one).
@@ -321,7 +254,7 @@ private struct FormattingPopoverView: View {
                     label: "—  Horizontal Rule",
                     labelFont: .system(size: 13, weight: .regular),
                     isActive: false
-                ) { insertThematicBreak(); dismiss() }
+                ) { perform(.rule); dismiss() }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 6)

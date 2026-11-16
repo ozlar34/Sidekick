@@ -21,10 +21,6 @@ final class NoteStore: ObservableObject {
     @Published private(set) var externallyChangedIDs: Set<UUID> = []
     let externalChanges: AsyncStream<ChangeEvent>
 
-    /// Shared autosave debouncer. One instance for every note so the app can
-    /// flush the pending save on note switch and on quit.
-    let autosave = Debouncer(interval: 0.5)
-
     /// Open notes of this session, by note id. A note's undo history lives as long as its entry.
     private var openNotes: [UUID: OpenNote] = [:]
 
@@ -193,13 +189,13 @@ final class NoteStore: ObservableObject {
         return note
     }
 
-    /// Unconditional save used by the old editor, which has no disk baseline.
+    /// Unconditional save of title and body: no disk baseline is checked, a note whose file is gone is written
+    /// again. The app saves through `save(_:title:body:baseline:)`; this one serves tests and tools.
     func update(_ id: UUID, title: String, body: String) async throws {
         try await serialized { _ = try await self.updateImpl(id, title: title, body: body, baseline: nil) }
     }
 
-    /// Unconditional body save that keeps the note's name (old editor autosave: the title field renames
-    /// only when it is committed).
+    /// Unconditional body save that keeps the note's name.
     func update(_ id: UUID, body: String) async throws {
         try await serialized { _ = try await self.updateImpl(id, title: nil, body: body, baseline: nil) }
     }
@@ -420,7 +416,7 @@ final class NoteStore: ObservableObject {
 
     /// The watcher reported these files. Reconciles the folder, then tells each affected note: an open
     /// note reloads silently when it has no unsaved edits and raises its conflict banner otherwise;
-    /// a note without an open note is flagged in `externallyChangedIDs` (old editor).
+    /// a note without an open note is flagged in `externallyChangedIDs`.
     func handleExternalChange(files: Set<String>) async {
         let changedIDs: Set<UUID> = (try? await serialized { await self.reconcileAfterExternalChange(files: files) }) ?? []
         // Outside the queue: an open note waits for its own running save, and that save is queued.

@@ -72,7 +72,7 @@ extension NoteTextView {
         }
     }
 
-    /// `r` with `mark` set or cleared. Bold, italic and code exclude each other, as in the old editor (setting one swaps
+    /// `r` with `mark` set or cleared. Bold, italic and code exclude each other (setting one swaps
     /// the other out); code also drops every other mark. Underline and strikethrough stack with the rest.
     private func toggled(_ r: Run, _ mark: Mark, on: Bool, bold: BoldDelimiter, italic: ItalicDelimiter) -> Run {
         var r = r
@@ -179,7 +179,7 @@ extension NoteTextView {
 
         var new = kinds
         if command == .heading(nil) {
-            // Body only strips a heading, as in the old editor.
+            // Body only strips a heading.
             for i in changeable { if case .heading = kinds[i] { new[i] = .paragraph } }
         } else {
             // An empty plain line does not count for the toggle check (it has no prefix to have), but takes the kind.
@@ -204,7 +204,7 @@ extension NoteTextView {
         if out.length > 0 { replace(NSRange(location: first.location, length: end2 - first.location), with: out, caret: sel.location) }
         // The empty last line has no character to carry a kind.
         if lastPara.length == 0 && !hasTerminator(lastPara), let j = touched.indices.last, new[j] != kinds[j] { changeTailKind(new[j]) }
-        // A numbered list over lines that were numbered already is numbered from 1 again (decided by Oguz, as the old editor).
+        // A numbered list over lines that were numbered already is numbered from 1 again (decided by Oguz).
         if command == .numbered, changeable.contains(where: { new[$0] == .numbered }) {
             content.renumber(blocks: changeable.filter { new[$0] == .numbered }.map { touched[$0] })
             onMarkdownChange?(content.markdown)
@@ -299,11 +299,10 @@ extension NoteTextView {
     }
 
     /// Hands what the toolbar shows to `controller`, now and after every change of caret, selection or text.
-    func bindFormatState(to controller: HybridEditorController) {
+    func bindFormatState(to controller: EditorController) {
         onFormatStateChange = { [weak controller] state in
             guard let c = controller else { return }
-            if c.armedInlineKinds != state.inline { c.armedInlineKinds = state.inline }
-            if c.activeInlineKind != nil { c.activeInlineKind = nil }
+            if c.activeInlineKinds != state.inline { c.activeInlineKinds = state.inline }
             if c.activeHeadingLevel != state.heading { c.activeHeadingLevel = state.heading }
             if c.activeLinePrefix != state.block { c.activeLinePrefix = state.block }
         }

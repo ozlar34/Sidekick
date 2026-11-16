@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import Foundation
 
@@ -89,3 +90,4 @@ extension DebugHarness {
         return ["dominant": [dr, dg, db], "inkFraction": Double(ink) / Double(max(total, 1)), "sampled": total]
     }
 }
+#endif

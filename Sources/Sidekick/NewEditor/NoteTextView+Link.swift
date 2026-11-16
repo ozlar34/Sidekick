@@ -196,7 +196,7 @@ extension NoteTextView {
                 if let rest = style.removing(pill: true, link: false) { attrs[.noteStyle] = rest } else { attrs.removeValue(forKey: .noteStyle) }
                 out = NSAttributedString(string: target.address, attributes: attrs)
             } else {
-                // The pill keeps its form: the run is copied from the old style.
+                // The pill keeps its form: the run is copied from the previous style.
                 out = pillObject(address, style: style, attrs: attrs)
             }
         case .create, .link:

@@ -3,29 +3,15 @@ import AppKit
 import SwiftUI
 @testable import Sidekick
 
-// Why this file lives in Regressions/:
-// User-reported bug: on launch, the first note the panel opens on renders an
-// EMPTY body (title shows, text area blank). Switching to another note and
-// back makes the body appear. Reproduced with the DebugHarness on 2026-09-02:
-// the selected note held 153 chars, the mounted NSTextView held 0.
-//
-// Mechanism: `EditorPaneView` seeds `localBody` from `note.body` in
-// `.onAppear`, but the child `HybridEditorView.makeNSView` can run FIRST with
-// the still-empty `localBody`. The follow-up `updateNSView` then sees text
-// "" → note.body with an UNCHANGED `externalPushToken`, classifies it as a
-// reflexive echo of typing, and drops it (EDIT-02 guard). The `.onChange(of:
-// note.id)` path bumps the token, which is why a note switch heals it.
-//
-// This test mounts the real `EditorPaneView` in an `NSHostingView` inside a
-// window — the production composition — and asserts the hosted NSTextView
-// holds the note body after the first layout pass.
+// User-reported bug (2026-09-02): on launch, the first note the panel opens on rendered an EMPTY body (title shown,
+// text area blank); switching to another note and back made the body appear. The old editor was seeded from view
+// state that the first update pass could drop. The editor view now attaches the open note's own content, so this
+// test pins the production composition: the real `EditorPaneView` in an `NSHostingView` in a window shows the
+// selected note's text after the first layout pass.
 @MainActor
 final class EditorMountSeedsBodyTests: XCTestCase {
 
-    func test_freshMount_seedsEditorWithNoteBody() throws {
-        // This pins the OLD editor's mount path (raw markdown in the buffer); the new editor is the default since ticket 17.
-        NewEditorSwitch.testOverride = false
-        defer { NewEditorSwitch.testOverride = nil }
+    func test_freshMount_showsTheNoteText() throws {
         let body = "# Heading one\nSome body text that must be visible on first mount."
         let note = Note(id: UUID(), filename: "a.md", title: "Heading one", body: body,
                         pinned: false, order: 0, modified: Date(), createdAt: Date())
@@ -45,25 +31,26 @@ final class EditorMountSeedsBodyTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
 
-        // Let SwiftUI mount, run onAppear, and flush the follow-up update pass.
+        // The editor shows the text without markers: the heading is a block kind, not a `# `.
+        let shown = "Heading one\nSome body text that must be visible on first mount."
         let deadline = Date().addingTimeInterval(2.0)
-        var tv: NSTextView?
+        var tv: NoteTextView?
         while Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
             hosting.layoutSubtreeIfNeeded()
-            tv = Self.findTextView(in: hosting)
-            if let tv, tv.string == body { break }
+            tv = Self.findEditor(in: hosting)
+            if let tv, tv.string == shown { break }
         }
 
-        let textView = try XCTUnwrap(tv, "EditorPaneView should mount an NSTextView")
-        XCTAssertEqual(textView.string, body,
-                       "freshly mounted editor must show the selected note's body, not an empty buffer")
+        let textView = try XCTUnwrap(tv, "EditorPaneView should mount the editor view")
+        XCTAssertEqual(textView.string, shown, "freshly mounted editor must show the selected note's text, not an empty buffer")
+        XCTAssertEqual(textView.blockKinds, ["h1", "p"])
     }
 
-    private static func findTextView(in view: NSView?) -> NSTextView? {
+    private static func findEditor(in view: NSView?) -> NoteTextView? {
         guard let view else { return nil }
-        if let tv = view as? NSTextView { return tv }
-        for sub in view.subviews { if let tv = findTextView(in: sub) { return tv } }
+        if let tv = view as? NoteTextView { return tv }
+        for sub in view.subviews { if let tv = findEditor(in: sub) { return tv } }
         return nil
     }
 }

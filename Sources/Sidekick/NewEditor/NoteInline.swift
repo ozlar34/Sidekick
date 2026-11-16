@@ -17,7 +17,7 @@ final class NotePillAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    /// What the chip shows: the address without scheme, leading `www.` and trailing slashes (as in the old editor).
+    /// What the chip shows: the address without scheme, leading `www.` and trailing slashes.
     static func displayText(forAddress address: String) -> String {
         var s = address
         if s.hasPrefix("https://") { s.removeFirst("https://".count) }
@@ -29,13 +29,13 @@ final class NotePillAttachment: NSTextAttachment {
 }
 
 /// Draws a pill: rounded box in the control background colour with a hairline border and the display text in
-/// secondary label colour. Same look as the old editor's link chip.
+/// secondary label colour. Link chip look.
 final class NotePillCell: NSTextAttachmentCell {
     private static let font = NSFont.systemFont(ofSize: 13, weight: .regular)
     private static let horizontalPadding: CGFloat = 6
     private static let corner: CGFloat = 4
     private static let height: CGFloat = 20
-    /// The old chip reached 5.6 pt below the baseline and 14.4 pt above it.
+    /// The chip reaches 5.6 pt below the baseline and 14.4 pt above it.
     private static let belowBaseline: CGFloat = 5.6
 
     private let text: String

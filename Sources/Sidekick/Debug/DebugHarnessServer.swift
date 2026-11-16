@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import Network
 
@@ -77,3 +78,4 @@ extension DebugHarness {
     }
 
 }
+#endif

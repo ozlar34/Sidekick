@@ -227,7 +227,7 @@ enum NoteBuffer {
             return NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         case .paragraph, .bullet, .numbered, .checklist, .divider, .table:
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
-        case .quote:   // italic, as in the old editor
+        case .quote:   // italic
             return NSFontManager.shared.convert(NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular), toHaveTrait: .italicFontMask)
         case .heading(let level):
             let size: CGFloat = level == 1 ? 28 : level == 2 ? 22 : 18
@@ -245,9 +245,9 @@ enum NoteBuffer {
     /// marker (bullet, number, checkbox) has room on the left. Quotes are indented as a block.
     static func indent(for kind: BlockKind) -> CGFloat {
         switch kind {
-        case .bullet: return 11   // text starts where the old editor put it (bullet glyph + space)
+        case .bullet: return 11   // text starts after the bullet glyph and a space
         case .numbered: return 17   // one-digit number; `numberIndent` widens it for longer ones
-        case .checklist: return 18   // 14 pt box column + 4 pt gap, as in the old editor
+        case .checklist: return 18   // 14 pt box column + 4 pt gap
         case .quote: return 18
         case .paragraph, .heading, .divider, .fence, .table: return 0
         }

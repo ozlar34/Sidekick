@@ -1,7 +1,7 @@
 import AppKit
 import NoteDocument
 
-/// Copy, cut, paste and drag and drop. The clipboard holds plain markdown text only, as the old editor's did: copy
+/// Copy, cut, paste and drag and drop. The clipboard holds plain markdown text only: copy
 /// writes the markdown of the selection, paste reads markdown (through the note document's reader) and turns it into
 /// formatted content at the caret. Rich text from other apps is reduced to its plain text first.
 extension NoteTextView {

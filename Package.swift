@@ -18,7 +18,7 @@ let package = Package(
             ],
             path: "Sources/Sidekick"
         ),
-        // Pure note-document module: Foundation only. The new editor view consumes it.
+        // Pure note-document module: Foundation only. The editor view consumes it.
         .target(
             name: "NoteDocument",
             path: "Sources/NoteDocument"

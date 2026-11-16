@@ -45,17 +45,17 @@ final class NewEditorHost {
     func select(_ location: Int) { textView.setSelectedRange(NSRange(location: location, length: 0)) }
 
     enum Key {
-        case left, right, up, down, enter, backspace, forwardDelete, tab
+        case left, right, up, down, enter, backspace, forwardDelete, tab, backtab
         var code: UInt16 {
             switch self {
             case .left: return 123; case .right: return 124; case .down: return 125; case .up: return 126
-            case .enter: return 36; case .backspace: return 51; case .forwardDelete: return 117; case .tab: return 48
+            case .enter: return 36; case .backspace: return 51; case .forwardDelete: return 117; case .tab, .backtab: return 48
             }
         }
         var chars: String {
             switch self {
             case .left: return "\u{F702}"; case .right: return "\u{F703}"; case .down: return "\u{F701}"; case .up: return "\u{F700}"
-            case .enter: return "\r"; case .backspace: return "\u{7F}"; case .forwardDelete: return "\u{F728}"; case .tab: return "\t"
+            case .enter: return "\r"; case .backspace: return "\u{7F}"; case .forwardDelete: return "\u{F728}"; case .tab: return "\t"; case .backtab: return "\u{19}"
             }
         }
     }
@@ -96,7 +96,7 @@ final class NewEditorHost {
     }
 
     /// A real left click at `point` (view coordinates): a mouse-down event delivered to the view, the mouse-up queued
-    /// first because NSTextView tracks a click until it sees it (same trick as `HostedEditorRunner.click`).
+    /// first because NSTextView tracks a click until it sees it.
     /// A synthetic mouse event sent through `NSWindow.sendEvent` does not reach the view in a test run.
     func click(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) {
         window.makeKeyAndOrderFront(nil)
