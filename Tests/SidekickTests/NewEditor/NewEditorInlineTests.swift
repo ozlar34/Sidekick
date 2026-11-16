@@ -492,10 +492,16 @@ final class NewEditorInlineTests: XCTestCase {
     func testBackspaceAndDeleteRemoveExactlyOneUnitOnGeneratedNotes() {
         // Every location and both keys cost about 30 times a sampled run, so this test takes at most 15 seeds (25 took almost 6 minutes, 100 over 12).
         for seed in seedList.prefix(15) {
-            let h = NewEditorHost(markdown: note(seed))
-            for loc in 0...h.length {
+            let source = note(seed)
+            // One window per seed, reloaded (the editor's own reload: text, undo history and selection reset) for every location and key.
+            // A window per location and key took 120 s and 17 GB: each one keeps its backing store until the run ends.
+            // (undo waits 1 ms, not 20: the run loop only has to turn once to close the undo group; the two waits were 95% of the run.)
+            let h = NewEditorHost(markdown: source)
+            let sourceMarkdown = h.markdown
+            let sourceLength = h.length
+            for loc in 0...sourceLength {
                 for key in [NewEditorHost.Key.backspace, .forwardDelete] {
-                    let h = NewEditorHost(markdown: h.markdown)
+                    h.textView.load(markdown: sourceMarkdown)
                     let original = h.string, ns = original as NSString
                     let originalMarkdown = h.markdown
                     func kind(_ at: Int, _ host: NewEditorHost) -> BlockKind {
@@ -519,7 +525,7 @@ final class NewEditorInlineTests: XCTestCase {
                     default:
                         XCTAssertEqual(removed, loc < ns.length ? 1 : 0, "\(tag): removed \(removed) units")
                     }
-                    h.undo()
+                    h.undo(wait: 0.001)
                     XCTAssertEqual(h.string, original, tag)
                     XCTAssertEqual(h.markdown, originalMarkdown, "\(tag): undo restores the exact bytes")
                 }

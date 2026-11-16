@@ -124,10 +124,11 @@ final class NewEditorHost {
 
     /// Lets the run loop close the current undo group, so that the next change is a separate undo step
     /// (as it is between two real events).
-    func endUndoGroup() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+    /// `wait` is how long the run loop may run; loops that undo thousands of times pass a shorter one.
+    func endUndoGroup(wait: TimeInterval = 0.02) { RunLoop.current.run(until: Date(timeIntervalSinceNow: wait)) }
 
     /// Undoes one step.
-    func undo() { endUndoGroup(); textView.undoManager?.undo(); endUndoGroup() }
+    func undo(wait: TimeInterval = 0.02) { endUndoGroup(wait: wait); textView.undoManager?.undo(); endUndoGroup(wait: wait) }
 
     /// Where AppKit itself reports the insertion point (screen -> view coordinates).
     var appKitCaretRect: NSRect {
