@@ -287,22 +287,9 @@ enum NoteBuffer {
     // MARK: Marks
 
     /// Font and decoration of every piece of `range` (a paragraph) from its marks: bold, italic, underline,
-    /// strikethrough, inline code, link. Strikethrough is per piece: the mark, or a checked item. A pill character
-    /// that lost its object (text typed next to it inherited the attribute) is plain text again.
+    /// strikethrough, inline code, link. Strikethrough is per piece: the mark, or a checked item.
     private static func stylePieces(of storage: NSTextStorage, in range: NSRange, kind: BlockKind) {
-        let ns = storage.string as NSString
         for key in [NSAttributedString.Key.underlineStyle, .strikethroughStyle, .backgroundColor] { storage.removeAttribute(key, range: range) }
-        var strayPills: [NSRange] = []
-        storage.enumerateAttribute(.noteStyle, in: range, options: []) { value, sub, _ in
-            guard let style = value as? NoteRunStyle, style.pill != nil else { return }
-            for i in sub.location..<NSMaxRange(sub) where ns.character(at: i) != 0xFFFC { strayPills.append(NSRange(location: i, length: 1)) }
-        }
-        for r in strayPills {
-            let style = storage.attribute(.noteStyle, at: r.location, effectiveRange: nil) as? NoteRunStyle
-            if let rest = style?.removing(pill: true, link: false) { storage.addAttribute(.noteStyle, value: rest, range: r) }
-            else { storage.removeAttribute(.noteStyle, range: r) }
-            storage.removeAttribute(.attachment, range: r)
-        }
         let checked: Bool
         if case .checklist(checked: true) = kind { checked = true } else { checked = false }
         let single = NSUnderlineStyle.single.rawValue

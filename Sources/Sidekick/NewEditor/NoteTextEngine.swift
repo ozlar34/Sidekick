@@ -45,8 +45,10 @@ enum NoteTextEngine {
             } else {
                 let g = lm.numberOfGlyphs - 1
                 let frag = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
-                let box = lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc)
-                rect = NSRect(x: box.maxX, y: frag.minY, width: 1, height: frag.height)
+                // The end of the used rect less the right padding. (The bounding box of a glyph is not usable on a line
+                // that holds an attachment, a pill: it comes back as the box of the whole run.)
+                let used = lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)
+                rect = NSRect(x: used.maxX - tc.lineFragmentPadding, y: frag.minY, width: 1, height: frag.height)
             }
         } else {
             let g = lm.glyphIndexForCharacter(at: location)
