@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Cocoa auto-enables/disables each item against the responder, so
         // TextEditor's NSUndoManager becomes reachable with no other code.
         let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
+        let editMenu = PlainCommandMenu(title: "Edit")
 
         editMenu.addItem(NSMenuItem(
             title: "Undo",
@@ -714,5 +714,16 @@ extension AppDelegate: NSUserInterfaceValidations {
             // responder chain doesn't support the action.
             return true
         }
+    }
+}
+
+
+/// The Edit menu answers Command plus a letter only. AppKit also matches Command-Shift-X, -C, -V and -A to the plain
+/// items (their key equivalent is lowercase), and Edit comes before Format, so Command-Shift-X cut text instead of
+/// reaching Format > Strikethrough. With Shift held the Edit menu declines, except for Redo (Command-Shift-Z).
+final class PlainCommandMenu: NSMenu {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.shift), event.charactersIgnoringModifiers?.lowercased() != "z" { return false }
+        return super.performKeyEquivalent(with: event)
     }
 }

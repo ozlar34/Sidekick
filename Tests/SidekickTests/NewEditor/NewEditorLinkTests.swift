@@ -407,6 +407,23 @@ final class NewEditorLinkTests: XCTestCase {
         XCTAssertFalse(plain.subviews.contains { $0 is NoteLinkFieldView }, "no field in the old editor")
     }
 
+    /// Seed 270 of the generated test below (found by the 300-seed final run): a bare URL pill whose address is changed.
+    /// A pill's text is its address, so the new address is the new text; the rest of the line is untouched.
+    func testChangingThePillAddressChangesItsTextAndNothingElse() {
+        let source = "caf\u{e9} https://example.com/beta 42"
+        let h = host(source)
+        h.textView.setSelectedRange(NSRange(location: 5, length: 1))   // the pill is one character after "café "
+        h.endUndoGroup()
+        XCTAssertEqual(h.textView.linkTarget()?.address, "https://example.com/beta")
+        XCTAssertNotNil(cmdK(h))
+        h.clearField()
+        commit("https://e.co/270", h)
+        XCTAssertEqual(h.textView.document.blocks.map(\.text), ["caf\u{e9} https://e.co/270 42"])
+        XCTAssertEqual(h.markdown, "caf\u{e9} https://e.co/270 42")
+        h.undo()
+        XCTAssertEqual(h.markdown, source)
+    }
+
     // MARK: generated
 
     private struct Pick {
@@ -432,6 +449,8 @@ final class NewEditorLinkTests: XCTestCase {
             h.textView.setSelectedRange(NSRange(location: location, length: length))
             h.endUndoGroup()
             let textBefore = h.textView.document.blocks.map(\.text)
+            let target = h.textView.linkTarget()
+            let blockIndex = h.textView.paragraph(at: location)?.0
             guard cmdK(h) != nil else {
                 XCTAssertEqual(h.markdown, source, "seed \(seed): nothing opened, nothing changed")
                 XCTAssertEqual(h.textView.undoManager?.canUndo, false, "seed \(seed)")
@@ -443,7 +462,13 @@ final class NewEditorLinkTests: XCTestCase {
             h.clearField()
             commit(address, h)
             let written = h.markdown
-            XCTAssertEqual(h.textView.document.blocks.map(\.text), textBefore, "seed \(seed) [\(address)]: visible text unchanged")
+            // A link keeps its label text. A pill's text is its address, so a new address is the new text (an empty
+            // address leaves the address as plain text).
+            var expectedText = textBefore
+            if case .pill? = target?.kind, !address.isEmpty, let i = blockIndex, let old = textBefore[i].range(of: target!.address) {
+                expectedText[i].replaceSubrange(old, with: Run.linkAddress(address))
+            }
+            XCTAssertEqual(h.textView.document.blocks.map(\.text), expectedText, "seed \(seed) [\(address)]: visible text is the label (a pill: its new address)")
             XCTAssertEqual(NoteDocument(markdown: written).markdown(), written, "seed \(seed): stable")
             XCTAssertEqual(NewEditorHost(markdown: written).string, h.string, "seed \(seed) [\(address)] at \(location)+\(length): the buffer is what a reload shows\n\(source.debugDescription)\n\(written.debugDescription)")
             XCTAssertTrue(h.window.firstResponder === h.textView, "seed \(seed)")
