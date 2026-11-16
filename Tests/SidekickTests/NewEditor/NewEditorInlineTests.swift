@@ -401,7 +401,17 @@ final class NewEditorInlineTests: XCTestCase {
         }
         move(.command)
         XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
+        XCTAssertTrue(tv.showsLinkCursor)
         move([])
+        XCTAssertNotEqual(NSCursor.current, NSCursor.pointingHand)
+        XCTAssertFalse(tv.showsLinkCursor)
+
+        // Releasing Command without moving the mouse puts the I-beam back at once.
+        move(.command)
+        let up = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: tv.window!.windowNumber,
+                                  context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 55)!
+        tv.modifiersChanged(up)
+        XCTAssertFalse(tv.showsLinkCursor, "the hand goes away on Command up")
         XCTAssertNotEqual(NSCursor.current, NSCursor.pointingHand)
     }
 

@@ -514,19 +514,47 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         updateLinkCursor(at: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
     }
 
-    override func flagsChanged(with event: NSEvent) {
-        super.flagsChanged(with: event)
-        guard let window else { return }
+    /// Command down or up. `flagsChanged` reaches only the first responder, and the note text is not always it (the
+    /// title field, the sidebar), so a monitor sees every modifier change in the app instead.
+    private var modifierMonitor: Any?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if let m = modifierMonitor { NSEvent.removeMonitor(m); modifierMonitor = nil }
+        guard newWindow != nil else { return }
+        modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.modifiersChanged(event)
+            return event
+        }
+    }
+
+    func modifiersChanged(_ event: NSEvent) {
+        guard let window, event.window == nil || event.window === window else { return }
         updateLinkCursor(at: convert(window.mouseLocationOutsideOfEventStream, from: nil), modifiers: event.modifierFlags)
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if let c = cursor(at: convert(event.locationInWindow, from: nil), modifiers: NSEvent.modifierFlags) { c.set() } else { super.cursorUpdate(with: event) }
+        if let c = cursor(at: convert(event.locationInWindow, from: nil), modifiers: NSEvent.modifierFlags) {
+            c.set()
+            showsLinkCursor = true
+        } else {
+            showsLinkCursor = false
+            super.cursorUpdate(with: event)
+        }
     }
 
+    /// True while this view shows the hand. Kept here because `NSCursor.current` need not be the same object as
+    /// `NSCursor.pointingHand`, so comparing them can miss the hand and leave it up after Command is released.
+    private(set) var showsLinkCursor = false
+
     private func updateLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) {
-        guard visibleRect.contains(point) else { return }
-        if let c = cursor(at: point, modifiers: modifiers) { c.set() } else if NSCursor.current == .pointingHand { NSCursor.iBeam.set() }
+        if visibleRect.contains(point), let c = cursor(at: point, modifiers: modifiers) {
+            c.set()
+            showsLinkCursor = true
+        } else if showsLinkCursor {
+            showsLinkCursor = false
+            (visibleRect.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set()
+        }
     }
 
     override func resetCursorRects() {
