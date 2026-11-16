@@ -254,6 +254,39 @@ final class MigrationTests: XCTestCase {
         }
     }
 
+    func testALaterMigrationMergesTheOldPinsIntoAnOrderFileMadeMeanwhile() async throws {
+        let (_, notes) = try makeParent()
+        try OldFormatFixture.write(into: notes)
+        let indexURL = notes.appendingPathComponent(".index.json")
+        let goodIndex = try Data(contentsOf: indexURL)
+        try Data("{ not json".utf8).write(to: indexURL)           // the migration fails
+
+        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+                                  persistFolder: { _ in })
+        await store.reload()
+        XCTAssertNotNil(store.migrationError)
+        // Normal use meanwhile: a pin on a slug-named note, and a reorder. This writes an order file.
+        let same = try XCTUnwrap(store.notes.first { $0.filename == "same.md" })
+        let cafe = try XCTUnwrap(store.notes.first { $0.filename == "cafe.md" })
+        try await store.setPinned(same.id, true)
+        try await store.reorder([cafe.id, same.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: notes.appendingPathComponent(OrderFile.filename).path))
+
+        try goodIndex.write(to: indexURL)                         // the index is repaired; next launch
+        let store2 = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+                                   persistFolder: { _ in })
+        await store2.reload()
+
+        XCTAssertNil(store2.migrationError)
+        let pinned = Set(store2.notes.filter { $0.pinned }.map { nfc($0.filename) })
+        XCTAssertEqual(pinned, [nfc("Meeting notes.md"), nfc("Time- 12-30.md"), nfc("Same.md")],
+                       "every old pin and the pin made meanwhile")
+        let names = store2.notes.map { nfc($0.filename) }
+        XCTAssertLessThan(try XCTUnwrap(names.firstIndex(of: nfc("Caf\u{E9}.md"))), try XCTUnwrap(names.firstIndex(of: nfc("Same 2.md"))),
+                          "the order made meanwhile keeps its place (the first note of it comes first among the unpinned)")
+        XCTAssertEqual(Set(names).count, OldFormatFixture.items.count)
+    }
+
     func testAFailedMigrationShowsANoticeAndChangesNothing() async throws {
         let (parent, notes) = try makeParent()
         try Data("a\n".utf8).write(to: notes.appendingPathComponent("some-slug.md"))

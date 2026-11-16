@@ -28,7 +28,7 @@ struct LegacyEntry: Codable, Equatable {
 ///     cannot collide), then mark the journal as staged.
 ///  4. Finish: move each staged file to its final name. A name that a foreign file took meanwhile gets
 ///     a number suffix; nothing is ever replaced.
-///  5. Write the order file from the plan (only when there is none).
+///  5. Write the order file from the plan; when one exists already, merge the plan into it.
 ///  6. Keep the old index: move `.index.json` to `.index.json.migrated`.
 ///  7. Record completion: write `.sidekick-migrated.json`, then remove the journal.
 ///
@@ -77,6 +77,9 @@ enum Migration {
         /// True once every renamed file has been moved to its temporary name. From then on an old name may
         /// belong to a different file (a swapped title), so staging is never run again.
         var staged = false
+        /// The order file as it was before the first rename, if there was a valid one. The merge in step 5 starts
+        /// from this copy, so repeating it after a crash gives the same file (the file itself may already hold final names).
+        var priorOrder: OrderFile?
         var entries: [Entry]
     }
 
@@ -133,7 +136,8 @@ enum Migration {
             let backupName = try makeBackup(of: folder, now: now, hit: hit)
             progress.backup = backupName
             let entries = plan(index: index, in: folder)
-            journal = Journal(backup: backupName, entries: entries)
+            let prior = (try? Data(contentsOf: folder.appendingPathComponent(OrderFile.filename))).flatMap(OrderFile.decode)
+            journal = Journal(backup: backupName, priorOrder: prior, entries: entries)
             try write(journal, to: journalURL)
             progress.renaming = true
             try hit("journal-written")
@@ -174,10 +178,25 @@ enum Migration {
         }
 
         let orderURL = folder.appendingPathComponent(OrderFile.filename)
-        if !journal.entries.isEmpty, !FileOps.exists(orderURL) {
+        if !journal.entries.isEmpty {
             let sorted = journal.entries.sorted { ($0.pinned ? 0 : 1, $0.order) < ($1.pinned ? 0 : 1, $1.order) }
-            let order = OrderFile(pinned: sorted.filter(\.pinned).map(\.new), order: sorted.map(\.new))
-            try order.encoded().write(to: orderURL, options: [.atomic])
+            let planned = OrderFile(pinned: sorted.filter(\.pinned).map(\.new), order: sorted.map(\.new))
+            let merged: OrderFile
+            if let existing = journal.priorOrder {
+                // An order file made since (an earlier attempt failed and the app ran on the old names): its
+                // entries keep their places and pins, names are carried through the renames, and the old
+                // index's pins and order are added. Applying this twice gives the same file.
+                let renamed = Dictionary(journal.entries.map { ($0.old, $0.new) }, uniquingKeysWith: { first, _ in first })
+                let order = existing.order.map { renamed[$0] ?? $0 }
+                let pinned = existing.pinned.map { renamed[$0] ?? $0 }
+                merged = OrderFile(pinned: pinned + planned.pinned.filter { !pinned.contains($0) },
+                                   order: order + planned.order.filter { !order.contains($0) })
+            } else {
+                merged = planned
+            }
+            if (try? Data(contentsOf: orderURL)).flatMap(OrderFile.decode) != merged {
+                try merged.encoded().write(to: orderURL, options: [.atomic])
+            }
         }
         try hit("order-written")
 
