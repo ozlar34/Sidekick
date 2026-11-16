@@ -365,7 +365,7 @@ final class NewEditorInlineTests: XCTestCase {
         if let r = target?.rects.first {
             let p = NSPoint(x: r.midX, y: r.midY)
             XCTAssertEqual(tv.toolTip(at: p), "https://melati.ge")
-            XCTAssertEqual(tv.cursor(at: p), NSCursor.pointingHand)
+            XCTAssertEqual(tv.cursor(at: p, modifiers: .command), NSCursor.pointingHand)
         }
 
         // Typing breaks the address; the drawing follows the text.
@@ -375,7 +375,7 @@ final class NewEditorInlineTests: XCTestCase {
         XCTAssertNil(lm.temporaryAttribute(.foregroundColor, atCharacterIndex: g.location, effectiveRange: nil))
     }
 
-    func testHoverShowsTheFullAddressAndAPointingHand() {
+    func testHoverShowsTheFullAddressAndAPointingHandOnlyWhileCommandIsDown() {
         let h = NewEditorHost(markdown: "see https://www.e.co/some/long/path/ and [label](mailto:a@b.c) here\nplain\n")
         let targets = h.textView.hoverTargets
         XCTAssertEqual(targets.count, 2)
@@ -383,12 +383,26 @@ final class NewEditorInlineTests: XCTestCase {
         for t in targets {
             let p = NSPoint(x: t.rects[0].midX, y: t.rects[0].midY)
             XCTAssertEqual(h.textView.toolTip(at: p), t.address)
-            XCTAssertEqual(h.textView.cursor(at: p), NSCursor.pointingHand)
+            XCTAssertEqual(h.textView.cursor(at: p, modifiers: .command), NSCursor.pointingHand)
+            XCTAssertNil(h.textView.cursor(at: p, modifiers: []), "without Command a click edits, so no hand")
         }
         XCTAssertEqual(targets[0].address, "https://www.e.co/some/long/path/", "the full address, not the chip text")
         let plain = NSPoint(x: 30, y: h.caret.midY + 30)
         XCTAssertNil(h.textView.toolTip(at: plain))
-        XCTAssertNil(h.textView.cursor(at: plain))
+        XCTAssertNil(h.textView.cursor(at: plain, modifiers: .command))
+
+        // A real mouse move sets the cursor: the hand with Command down, back to the I-beam without it.
+        let tv = h.textView
+        let onLink = NSPoint(x: targets[0].rects[0].midX, y: targets[0].rects[0].midY)
+        func move(_ mods: NSEvent.ModifierFlags) {
+            let e = NSEvent.mouseEvent(with: .mouseMoved, location: tv.convert(onLink, to: nil), modifierFlags: mods, timestamp: 0,
+                                       windowNumber: tv.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+            tv.mouseMoved(with: e)
+        }
+        move(.command)
+        XCTAssertEqual(NSCursor.current, NSCursor.pointingHand)
+        move([])
+        XCTAssertNotEqual(NSCursor.current, NSCursor.pointingHand)
     }
 
     func testAWrappedLinkHasOneRectPerLine() {

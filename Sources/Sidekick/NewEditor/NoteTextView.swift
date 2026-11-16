@@ -491,15 +491,49 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// The full address shown when the pointer rests on a link, pill or found address at `point` (view coordinates).
     func toolTip(at point: NSPoint) -> String? { address(at: point) }
 
-    /// Pointing hand over a link or pill, the text cursor's default everywhere else (nil).
-    func cursor(at point: NSPoint) -> NSCursor? { toolTip(at: point) == nil ? nil : .pointingHand }
+    /// Pointing hand over a link, pill or found address while Command is down (Cmd+click opens it); nil (the text
+    /// cursor's default) everywhere else.
+    func cursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> NSCursor? {
+        modifiers.contains(.command) && address(at: point) != nil ? .pointingHand : nil
+    }
+
+    // NSTextView puts the I-beam back on every mouse move, so cursor rects never show the hand. The view sets the cursor
+    // itself instead: on a mouse move, when Command goes down or up, and when the pointer enters.
+    private var linkCursorArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let old = linkCursorArea { removeTrackingArea(old) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        linkCursorArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateLinkCursor(at: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        guard let window else { return }
+        updateLinkCursor(at: convert(window.mouseLocationOutsideOfEventStream, from: nil), modifiers: event.modifierFlags)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if let c = cursor(at: convert(event.locationInWindow, from: nil), modifiers: NSEvent.modifierFlags) { c.set() } else { super.cursorUpdate(with: event) }
+    }
+
+    private func updateLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) {
+        guard visibleRect.contains(point) else { return }
+        if let c = cursor(at: point, modifiers: modifiers) { c.set() } else if NSCursor.current == .pointingHand { NSCursor.iBeam.set() }
+    }
 
     override func resetCursorRects() {
         super.resetCursorRects()
         removeAllToolTips()
         for target in NoteTextEngine.hoverTargets(in: self, visibleOnly: true) + foundLinkTargets {
             for rect in target.rects {
-                addCursorRect(rect, cursor: .pointingHand)
                 addToolTip(rect, owner: self, userData: nil)
             }
         }
