@@ -43,7 +43,8 @@ final class StoreInterleavingTests: XCTestCase {
 
     private static let slots = 3
     // Few titles on purpose: equal titles force the collision path while another operation runs.
-    private static let titles = ["Alpha", "Beta", "Alpha", "Gamma", ""]
+    // Case variants and a path character: renames that differ only by case, and a replaced character.
+    private static let titles = ["Alpha", "Beta", "alpha", "Gamma", "", "A/B", "Alpha"]
 
     private func makeOps(seed: UInt64) -> [Op] {
         var rng = Rng(state: seed &* 0x9E3779B97F4A7C15 | 1)
@@ -89,16 +90,18 @@ final class StoreInterleavingTests: XCTestCase {
         }
     }
 
-    /// What the user could observe: the list in order, and the files with their bytes. Random
-    /// names (untitled-xxxxxxxx.md) are made comparable.
+    /// What the user could observe: the list in order, the files with their bytes, and the order
+    /// file. Names are deterministic now (the title, or "Untitled", with a number suffix on a collision),
+    /// so they are compared as they are.
     private func state(_ store: NoteStore, _ folder: TempFolder) throws -> String {
-        func norm(_ f: String) -> String { f.hasPrefix("untitled-") ? "untitled-*.md" : f }
-        let list = store.notes.map { "\(norm($0.filename))|\($0.title)|\($0.body.debugDescription)|\($0.pinned)|\($0.order)" }
+        let list = store.notes.map { "\($0.filename)|\($0.title)|\($0.body.debugDescription)|\($0.pinned)|\($0.order)" }
         let files = try FileManager.default.contentsOfDirectory(atPath: folder.url.path)
             .filter { $0.hasSuffix(".md") }
-            .map { "\(norm($0))=\(String(decoding: try Data(contentsOf: folder.url.appendingPathComponent($0)), as: UTF8.self).debugDescription)" }
+            .map { "\($0)=\(String(decoding: try Data(contentsOf: folder.url.appendingPathComponent($0)), as: UTF8.self).debugDescription)" }
             .sorted()
-        return (list + ["--"] + files).joined(separator: "\n")
+        let order = (try? Data(contentsOf: folder.url.appendingPathComponent(OrderFile.filename)))
+            .flatMap(OrderFile.decode).map { "pinned=\($0.pinned) order=\($0.order)" } ?? "no order file"
+        return (list + ["--"] + files + ["--", order]).joined(separator: "\n")
     }
 
     func testInterleavedOperationsEqualASerialOrder() async throws {

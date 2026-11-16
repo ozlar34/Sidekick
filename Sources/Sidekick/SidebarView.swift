@@ -4,7 +4,7 @@ import SwiftUI
 struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @ObservedObject var panelState: PanelState
-    @AppStorage(Defaults.lastSelectedNoteID) private var lastSelectedNoteID: String = ""
+    @AppStorage(Defaults.lastSelectedNoteFilename) private var lastSelectedNoteFilename: String = ""
     @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = 190
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
@@ -136,9 +136,8 @@ struct SidebarView: View {
             .frame(width: 6)
         }
         .onAppear {
-            if let uuid = UUID(uuidString: lastSelectedNoteID),
-               store.notes.contains(where: { $0.id == uuid }) {
-                panelState.selectedNoteID = uuid
+            if let restored = SelectionMemory.restored(lastFilename: lastSelectedNoteFilename, in: store.notes) {
+                panelState.selectedNoteID = restored
             } else if panelState.selectedNoteID == nil {
                 panelState.selectedNoteID = store.notes.first?.id
             }
@@ -153,15 +152,16 @@ struct SidebarView: View {
                 showMissingFolderSheet = true
             }
         }
-        .onChange(of: panelState.selectedNoteID) { _, new in
-            lastSelectedNoteID = new?.uuidString ?? ""
+        // Remembered by filename, so a rename of the selected note updates it too.
+        .onChange(of: selectedNote?.filename) { _, new in
+            if let new { lastSelectedNoteFilename = new }   // a momentarily empty list must not forget it
         }
         .onChange(of: store.folderMissing) { _, missing in
             if missing { showMissingFolderSheet = true }
         }
         // IN-04: store.notes is empty on first appearance because
         // applicationDidFinishLaunching kicks off reload() in a detached
-        // Task. Without this, lastSelectedNoteID can never be restored —
+        // Task. Without this, the last selected note can never be restored —
         // the onAppear contains(where:) check already failed against an
         // empty array. Restore on the first non-empty publish.
         // G-03: guard relaxed to also reassign when selectedID references a
@@ -172,9 +172,8 @@ struct SidebarView: View {
             let isStale = panelState.selectedNoteID != nil && !newNotes.contains(where: { $0.id == panelState.selectedNoteID })
             guard panelState.selectedNoteID == nil || isStale else { return }
             if !newNotes.isEmpty {
-                if let uuid = UUID(uuidString: lastSelectedNoteID),
-                   newNotes.contains(where: { $0.id == uuid }) {
-                    panelState.selectedNoteID = uuid
+                if let restored = SelectionMemory.restored(lastFilename: lastSelectedNoteFilename, in: newNotes) {
+                    panelState.selectedNoteID = restored
                 } else {
                     panelState.selectedNoteID = newNotes.first?.id
                 }

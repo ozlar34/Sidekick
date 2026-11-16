@@ -249,7 +249,7 @@ final class OpenNoteTests: XCTestCase {
         let h = host(a)
         h.type("x")
         a.setTitle("My title")
-        await a.flush()
+        await a.commitTitle()
         let updated = env.store.notes.first { $0.id == notes[0].id }!
         XCTAssertEqual(updated.title, "My title")
         XCTAssertEqual(try env.bytes(updated), Data("xalpha\n".utf8))
