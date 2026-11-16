@@ -60,7 +60,15 @@ final class NoteContent {
         let newMid = Array(wanted[prefix..<(wanted.count - suffix)])
         let oldCount = synced.count - suffix - prefix
         for (j, p) in newMid.enumerated() {
-            if j < oldCount { document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs)) }
+            if j < oldCount {
+                // Only the checkbox changed: toggling keeps the file's bytes except the bracket character.
+                if case .checklist(let was) = synced[prefix + j].kind, case .checklist(let now) = p.kind, was != now,
+                   synced[prefix + j].runs == p.runs {
+                    document.apply(.toggleCheckbox(block: prefix + j))
+                } else {
+                    document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs))
+                }
+            }
             else { document.apply(.insert(at: prefix + j, kind: p.kind, runs: p.runs)) }
         }
         if oldCount > newMid.count {
