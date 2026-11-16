@@ -439,6 +439,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Write the debounced autosave before exiting; replying later keeps
         // the app alive until the save has landed.
         guard let store else { return .terminateNow }
+        // A title still being typed is committed (renamed) first: ending the edit fires the title field's commit.
+        NSApp.keyWindow?.makeFirstResponder(nil)
         Task { @MainActor in
             await store.autosave.flush()
             await store.flushOpenNotes()

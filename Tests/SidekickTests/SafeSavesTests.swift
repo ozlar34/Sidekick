@@ -21,16 +21,12 @@ final class SafeSavesTests: XCTestCase {
     /// Records what the store would have written to the shared defaults.
     final class PersistedFolders: @unchecked Sendable { var paths: [String] = [] }
 
-    /// Index saves fail while this is set (the file write before it has already succeeded).
-    final class IndexFault: @unchecked Sendable { var failing = false }
-
-    private func makeEnv(_ bodies: [String], indexFault: IndexFault = IndexFault()) async throws -> (Env, [Note]) {
+    private func makeEnv(_ bodies: [String]) async throws -> (Env, [Note]) {
         let folder = TempFolder()
         let persisted = PersistedFolders()
         let store = try NoteStore(folder: folder.url, startWatcherImmediately: false,
                                   trash: { try FileManager.default.removeItem(at: $0) },
-                                  persistFolder: { persisted.paths.append($0.path) },
-                                  indexSaveFault: { if indexFault.failing { throw CocoaError(.fileWriteUnknown) } })
+                                  persistFolder: { persisted.paths.append($0.path) })
         var ids: [UUID] = []
         for body in bodies {
             let n = try await store.create()
@@ -160,32 +156,6 @@ final class SafeSavesTests: XCTestCase {
         XCTAssertEqual(env.store.notes.first { $0.id == id }?.body, "new\n")
     }
 
-    /// The file write succeeded and only the index step failed: the note's baseline must follow the
-    /// file, or the retry would compare against its own bytes and raise a false conflict.
-    func testIndexFailureAfterASuccessfulWriteDoesNotCauseAFalseConflictOnRetry() async throws {
-        let fault = IndexFault()
-        let (env, notes) = try await makeEnv(["alpha\n"], indexFault: fault)
-        let a = env.open(notes[0])
-        let h = host(a)
-        h.type("x")
-        a.setTitle("Renamed")
-        fault.failing = true
-        await a.flush()
-        XCTAssertTrue(a.saveFailed, "the index failure is still reported")
-        XCTAssertFalse(a.hasConflict)
-        XCTAssertTrue(env.store.failedSaveIDs.contains(notes[0].id))
-
-        fault.failing = false
-        await a.retrySave()
-
-        XCTAssertFalse(a.hasConflict, "no false conflict against its own bytes")
-        XCTAssertFalse(a.saveFailed)
-        XCTAssertFalse(a.isDirty)
-        let saved = env.store.notes.first { $0.id == notes[0].id }!
-        XCTAssertEqual(saved.title, "Renamed")
-        XCTAssertEqual(try env.bytes(saved), Data(h.string.utf8), "file == editor")
-    }
-
     func testAConflictRenamesNothing() async throws {
         let (env, notes) = try await makeEnv(["alpha\n"])
         let a = env.open(notes[0])
@@ -193,10 +163,10 @@ final class SafeSavesTests: XCTestCase {
         h.type("x")
         a.setTitle("Renamed")
         try Data("theirs\n".utf8).write(to: env.url(notes[0]))
-        await a.flush()
+        await a.commitTitle()
         XCTAssertTrue(a.hasConflict)
         XCTAssertTrue(FileManager.default.fileExists(atPath: env.url(notes[0]).path), "old file stays")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: env.folder.url.appendingPathComponent("renamed.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: env.folder.url.appendingPathComponent("Renamed.md").path))
     }
 
     // MARK: 2. Every save reports its result

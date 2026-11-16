@@ -48,7 +48,9 @@ final class OpenNote: ObservableObject {
 
     /// Writes title and markdown to the notes folder (the store's conditional `save`). `baseline` is the
     /// file's bytes as this note last read or wrote them; the store refuses with `.conflict` when they differ.
-    typealias Save = (_ title: String, _ markdown: String, _ baseline: Data) async throws -> Void
+    /// Returns the title the note has afterwards: the requested one, or with a number suffix when the
+    /// name was taken.
+    typealias Save = (_ title: String, _ markdown: String, _ baseline: Data) async throws -> String
 
     let id: UUID
     let content: NoteContent
@@ -68,7 +70,9 @@ final class OpenNote: ObservableObject {
     /// Called when `isDirty` changes (the panel's unsaved dot).
     var onDirtyChange: ((Bool) -> Void)?
 
-    private(set) var title: String
+    /// The note's title as the title field shows it: the filename without ".md". It changes when a
+    /// committed edit renames the file (the real name may carry a number suffix).
+    @Published private(set) var title: String
     /// Disk baseline: what the app last read from or wrote to the file.
     private var baselineMarkdown = ""
     private var baselineData = Data()
@@ -109,6 +113,7 @@ final class OpenNote: ObservableObject {
             }
             baselineMarkdown = text
             baselineData = data
+            title = fileURL.deletingPathExtension().lastPathComponent   // an unsaved title draft is dropped with the edits
             baselineTitle = title
             content.isEditable = true
             content.reload(markdown: text)
@@ -144,10 +149,12 @@ final class OpenNote: ObservableObject {
 
     // MARK: Editing and saving
 
+    /// The title field's text while the user types. It renames nothing and schedules no save: the file
+    /// is renamed when the edit is committed (`commitTitle`).
     func setTitle(_ newTitle: String) {
         guard case .editable = state, newTitle != title else { return }
         title = newTitle
-        stateChanged()
+        setDirty(markdown != baselineMarkdown || title != baselineTitle)
     }
 
     private func contentDidChange() {
@@ -178,6 +185,9 @@ final class OpenNote: ObservableObject {
 
     func retrySave() async { await flush() }
 
+    /// The title field was committed (Return or focus left it): rename now.
+    func commitTitle() async { await flush() }
+
     private func saveNow() async {
         let previous = inFlight
         let run = Task { @MainActor in
@@ -193,20 +203,13 @@ final class OpenNote: ObservableObject {
         let text = markdown, currentTitle = title
         guard text != baselineMarkdown || currentTitle != baselineTitle else { return }
         do {
-            try await save(currentTitle, text, baselineData)
+            let resolved = try await save(currentTitle, text, baselineData)
             baselineData = Data(text.utf8)
             baselineMarkdown = text
-            baselineTitle = currentTitle
+            baselineTitle = resolved
+            // The real name wins (a taken name got a suffix), unless the user has typed another title since.
+            if title == currentTitle { title = resolved }
             saveFailed = false
-        } catch NoteStoreError.fileWrittenIndexFailed {
-            // The text is on disk, so the baseline follows it (a retry must not see its own bytes as a
-            // conflict). The title baseline stays: the retry writes again and redoes the index step.
-            baselineData = Data(text.utf8)
-            baselineMarkdown = text
-            NSLog("[Sidekick] \(fileURL.lastPathComponent) written, index not saved")
-            saveFailed = true
-            setDirty(true)
-            return
         } catch NoteStoreError.conflict {
             NSLog("[Sidekick] \(fileURL.lastPathComponent) changed on disk since it was loaded; save refused")
             hasConflict = true

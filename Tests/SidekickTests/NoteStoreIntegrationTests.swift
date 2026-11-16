@@ -30,7 +30,7 @@ final class NoteStoreIntegrationTests: XCTestCase {
         XCTAssertTrue(tmpFiles.isEmpty, "Found residual .md.tmp files: \(tmpFiles)")
     }
 
-    func testIndexRoundTrip() async throws {
+    func testOrderFileRoundTrip() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
 
@@ -39,54 +39,20 @@ final class NoteStoreIntegrationTests: XCTestCase {
         try await store.setPinned(note1.id, true)
         try await store.reorder([note1.id, note2.id])
 
-        // Capture state before teardown.
-        let beforeNotes = store.notes
-        XCTAssertEqual(beforeNotes.count, 2)
+        let before = store.notes.map { "\($0.filename)|\($0.pinned)" }
+        XCTAssertEqual(before.count, 2)
 
-        // Instantiate a fresh store pointed at the same folder.
+        // Instantiate a fresh store pointed at the same folder (a restart).
         let store2 = try NoteStore(folder: tmp.url)
         await store2.reload()
 
-        XCTAssertEqual(store2.notes.count, 2)
-        // UUIDs survive restart.
-        let ids2 = Set(store2.notes.map(\.id))
-        XCTAssertEqual(ids2, Set(beforeNotes.map(\.id)))
-        // Pin state survives restart.
-        let pinnedInStore2 = store2.notes.first { $0.id == note1.id }?.pinned
-        XCTAssertEqual(pinnedInStore2, true)
-    }
-
-    func testCorruptIndexRecovery() async throws {
-        let tmp = TempFolder()
-        let store = try NoteStore(folder: tmp.url)
-        _ = try await store.create()
-
-        // Write garbage to .index.json.
-        let indexURL = tmp.url.appendingPathComponent(".index.json")
-        try "not json".write(to: indexURL, atomically: true, encoding: .utf8)
-
-        // New store should recover: move corrupt file to .bak, rebuild from scan.
-        let store2 = try NoteStore(folder: tmp.url)
-        await store2.reload()
-
-        let bakURL = tmp.url.appendingPathComponent(".index.json.bak")
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: bakURL.path),
-            ".index.json.bak should exist after corrupt recovery"
-        )
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: indexURL.path),
-            ".index.json should be rebuilt"
-        )
-        // Verify the rebuilt index is valid JSON.
-        let data = try Data(contentsOf: indexURL)
-        XCTAssertNoThrow(try JSONDecoder().decode(NoteIndex.self, from: data))
-        XCTAssertEqual(store2.notes.count, 1)
+        // Filenames are the identity: they and the pin state survive a restart.
+        XCTAssertEqual(store2.notes.map { "\($0.filename)|\($0.pinned)" }, before)
+        XCTAssertEqual(store2.notes.first { $0.filename == note1.filename }?.pinned, true)
     }
 
     func testRenameOnTitleChange() async throws {
-        // Post-2026-05-01 title-shift: filename slug is driven by the explicit
-        // `title` field, not the body's first heading.
+        // The title is the filename: a title change renames the file to it.
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         let note = try await store.create()
@@ -94,25 +60,23 @@ final class NoteStoreIntegrationTests: XCTestCase {
 
         try await store.update(note.id, title: "Hello World", body: "any body content")
 
-        // New filename should be slug of title.
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: tmp.url.appendingPathComponent("hello-world.md").path
+                atPath: tmp.url.appendingPathComponent("Hello World.md").path
             ),
-            "hello-world.md should exist"
+            "Hello World.md should exist"
         )
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: tmp.url.appendingPathComponent(originalFilename).path
             ),
-            "Original untitled-* file should be gone after rename"
+            "Original Untitled file should be gone after rename"
         )
-        XCTAssertEqual(store.notes.first?.filename, "hello-world.md")
+        XCTAssertEqual(store.notes.first?.filename, "Hello World.md")
+        XCTAssertEqual(store.notes.first?.title, "Hello World")
     }
 
-    /// Regression: changing only the body must NOT rename the file. Pre-shift,
-    /// the body's first `# Heading` drove the slug; post-shift, only `title`
-    /// does. A body-only edit is now a pure content write.
+    /// Changing only the body must NOT rename the file: only the title names it.
     func testBodyHeadingChange_doesNotRename() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
@@ -121,20 +85,19 @@ final class NoteStoreIntegrationTests: XCTestCase {
 
         try await store.update(note.id, title: "", body: "# Hello World\ncontent")
 
-        // Filename must NOT have changed — title is still empty.
         XCTAssertEqual(store.notes.first?.filename, originalFilename,
-                       "Body heading must not rename the file post-title-shift")
+                       "A body heading must not rename the file")
         XCTAssertFalse(
             FileManager.default.fileExists(
-                atPath: tmp.url.appendingPathComponent("hello-world.md").path
+                atPath: tmp.url.appendingPathComponent("Hello World.md").path
             ),
-            "Body-driven slug file must not be created"
+            "Body-driven name must not be created"
         )
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: tmp.url.appendingPathComponent(originalFilename).path
             ),
-            "Original untitled-* file must still exist"
+            "Original file must still exist"
         )
     }
 

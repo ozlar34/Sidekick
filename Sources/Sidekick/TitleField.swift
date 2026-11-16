@@ -36,9 +36,12 @@ struct TitleField: NSViewRepresentable {
     let controller: TitleFieldController
     var onTab: () -> Void = {}
     var onSubmit: () -> Void = {}
+    /// The edit is finished: Return, Tab or focus left the field. The title is the filename, so this is
+    /// where the rename happens (not per keystroke).
+    var onCommit: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onTab: onTab, onSubmit: onSubmit)
+        Coordinator(text: $text, onTab: onTab, onSubmit: onSubmit, onCommit: onCommit)
     }
 
     func makeNSView(context: Context) -> NSTextField {
@@ -57,6 +60,7 @@ struct TitleField: NSViewRepresentable {
         tf.cell?.isScrollable = true
         tf.stringValue = text
         controller.textField = tf
+        context.coordinator.watchWindowResign(of: tf)
         return tf
     }
 
@@ -73,6 +77,7 @@ struct TitleField: NSViewRepresentable {
         // body re-evaluation, so the coordinator must capture the latest.
         context.coordinator.onTab = onTab
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onCommit = onCommit
         context.coordinator.binding = $text
         // Re-bind controller in case the parent recreated it on note switch.
         if controller.textField !== nsView {
@@ -84,13 +89,37 @@ struct TitleField: NSViewRepresentable {
         var binding: Binding<String>
         var onTab: () -> Void
         var onSubmit: () -> Void
+        var onCommit: () -> Void
 
         init(text: Binding<String>,
              onTab: @escaping () -> Void,
-             onSubmit: @escaping () -> Void) {
+             onSubmit: @escaping () -> Void,
+             onCommit: @escaping () -> Void = {}) {
             self.binding = text
             self.onTab = onTab
             self.onSubmit = onSubmit
+            self.onCommit = onCommit
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            onCommit()
+        }
+
+        private var resignObserver: NSObjectProtocol?
+
+        /// The panel is dismissed (its window stops being key) while the title still has focus: the field
+        /// never ends editing then, so commit here or the rename would wait for the next focus change.
+        func watchWindowResign(of field: NSTextField) {
+            resignObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
+            ) { [weak self, weak field] note in
+                guard let self, let field, let window = field.window, note.object as? NSWindow === window else { return }
+                self.onCommit()
+            }
+        }
+
+        deinit {
+            if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         }
 
         func controlTextDidChange(_ obj: Notification) {
