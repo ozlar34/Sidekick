@@ -318,6 +318,30 @@ final class NewEditorInlineTests: XCTestCase {
         XCTAssertEqual(opened.count, 2, "Cmd+click on plain text opens nothing")
     }
 
+    func testCmdClickOnAPlainWwwAddressOpensItOverHttps() {
+        let md = "go to www.google.com/maps, or swww.x.y here\n"
+        let h = NewEditorHost(markdown: md)
+        XCTAssertEqual(h.textView.markdown, md, "the address stays plain text: the file is unchanged")
+        var opened: [String] = []
+        h.textView.openURL = { opened.append($0.absoluteString) }
+        let tv = h.textView
+        func point(of text: String) -> NSPoint {
+            let r = (tv.string as NSString).range(of: text)
+            let g = tv.layoutManager!.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+            let rect = tv.layoutManager!.boundingRect(forGlyphRange: g, in: tv.textContainer!)
+            return NSPoint(x: rect.midX + tv.textContainerOrigin.x, y: rect.midY + tv.textContainerOrigin.y)
+        }
+        h.select(0)
+        h.click(at: point(of: "google"), modifiers: .command)
+        XCTAssertEqual(opened, ["https://www.google.com/maps"], "trailing comma left out")
+        XCTAssertEqual(h.location, 0, "Cmd+click leaves the caret alone")
+        h.click(at: point(of: "google"))
+        XCTAssertEqual(opened.count, 1, "a plain click opens nothing")
+        h.click(at: point(of: "x.y"), modifiers: .command)
+        XCTAssertEqual(h.textView.markdown, md)
+        XCTAssertEqual(opened.count, 1, "www inside a word is not an address")
+    }
+
     func testHoverShowsTheFullAddressAndAPointingHand() {
         let h = NewEditorHost(markdown: "see https://www.e.co/some/long/path/ and [label](mailto:a@b.c) here\nplain\n")
         let targets = h.textView.hoverTargets

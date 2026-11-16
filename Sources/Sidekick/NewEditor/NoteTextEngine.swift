@@ -94,13 +94,37 @@ enum NoteTextEngine {
     /// The link or pill drawn at `point` (view coordinates): its address. Nil for anything else, also for the empty
     /// space after a line.
     static func address(in tv: NSTextView, at point: NSPoint) -> String? {
+        guard let index = characterIndex(in: tv, at: point), let storage = tv.textStorage else { return nil }
+        return address(ofCharacterAt: index, in: storage)
+    }
+
+    /// The character drawn at `point` (view coordinates). Nil for the empty space after a line.
+    private static func characterIndex(in tv: NSTextView, at point: NSPoint) -> Int? {
         guard let lm = tv.layoutManager, let tc = tv.textContainer, let storage = tv.textStorage, storage.length > 0 else { return nil }
         let origin = tv.textContainerOrigin
         let p = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
         var fraction: CGFloat = 0
         let glyph = lm.glyphIndex(for: p, in: tc, fractionOfDistanceThroughGlyph: &fraction)
         guard glyph < lm.numberOfGlyphs, lm.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: tc).contains(p) else { return nil }
-        return address(ofCharacterAt: lm.characterIndexForGlyph(at: glyph), in: storage)
+        return lm.characterIndexForGlyph(at: glyph)
+    }
+
+    /// A plain-text `www.` address drawn at `point`, as an `https://` address to open. The note's markdown has no link
+    /// there (only `http://` and `https://` make one), so this is for Cmd+click only: the text stays plain.
+    /// The address starts after a blank (or at the line start), ends at a blank, and drops trailing punctuation.
+    static func wwwAddress(in tv: NSTextView, at point: NSPoint) -> String? {
+        guard let index = characterIndex(in: tv, at: point) else { return nil }
+        let s = (tv.string as NSString)
+        func blank(_ i: Int) -> Bool { CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(s.character(at: i)) ?? " ") }
+        guard !blank(index) else { return nil }
+        var lo = index, hi = index + 1
+        while lo > 0, !blank(lo - 1) { lo -= 1 }
+        while hi < s.length, !blank(hi) { hi += 1 }
+        var word = s.substring(with: NSRange(location: lo, length: hi - lo))
+        guard word.lowercased().hasPrefix("www."), word.count > 4 else { return nil }
+        while let last = word.last, ".,;:!?'\")".contains(last) { word.removeLast() }
+        guard index < lo + (word as NSString).length, word.dropFirst(4).contains(".") else { return nil }
+        return "https://" + word
     }
 
     /// Every link and pill (`visible` limits them to what is on screen), in document order.

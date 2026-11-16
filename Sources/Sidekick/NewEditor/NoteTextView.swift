@@ -485,8 +485,11 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     /// A click on a drawn checkbox toggles it (and does nothing else). Every other click is native.
     override func mouseDown(with event: NSEvent) {
-        // Cmd+click opens a link or pill and leaves the caret alone; a plain click is native (it places the caret).
-        if event.modifierFlags.contains(.command), let address = NoteTextEngine.address(in: self, at: convert(event.locationInWindow, from: nil)) {
+        // Cmd+click opens a link, a pill or a plain `www.` address and leaves the caret alone; a plain click is native
+        // (it places the caret).
+        let point = convert(event.locationInWindow, from: nil)
+        if event.modifierFlags.contains(.command),
+           let address = NoteTextEngine.address(in: self, at: point) ?? NoteTextEngine.wwwAddress(in: self, at: point) {
             if let url = URL(string: address) { openURL(url) }
             return
         }
