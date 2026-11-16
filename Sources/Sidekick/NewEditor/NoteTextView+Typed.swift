@@ -101,34 +101,4 @@ extension NoteTextView {
         plainAfterConversion = (selectedRange().location, attrs)
         publishFormatState()
     }
-
-    /// Makes a pill of every bare URL that the pasted text (buffer range `from..<to`) touches, as one undo step.
-    func convertPastedURLs(from: Int, to: Int) {
-        guard to > from else { return }
-        let ns = string as NSString
-        var firstDone = false
-        var caret = to
-        // First to last paragraph: a replaced paragraph shifts what follows it, so ranges are read again each time.
-        for i in 0..<NoteBuffer.paragraphRanges(in: ns).count {
-            let ranges = NoteBuffer.paragraphRanges(in: string as NSString)
-            guard ranges.indices.contains(i) else { break }
-            let para = ranges[i]
-            guard para.length > 0, para.location < caret, NSMaxRange(para) >= from, let m = model(of: para) else { continue }
-            let lo = runOffset(of: max(from, para.location), in: para)
-            let hi = runOffset(of: min(caret, NSMaxRange(para)), in: para)
-            guard let runs = TypedMarkdown.pills(kind: m.kind, runs: m.runs, overlapping: lo..<max(hi, lo + 1)) else { continue }
-            if !firstDone { splitUndoGroup(); firstDone = true }
-            var pillID = 1
-            let out = NoteBuffer.attributedRuns(runs, kind: m.kind, pillID: &pillID)
-            let before = para.length
-            if hasTerminator(para) { out.append(lineBreak(m.kind)) }
-            let whole = NSRange(location: para.location, length: para.length + (hasTerminator(para) ? 1 : 0))
-            // The caret keeps its place in the text: what is left of it is shortened by the pills before it.
-            let newCaret = caret >= para.location && caret <= NSMaxRange(para)
-                ? para.location + bufferLength(of: runOffset(of: caret, in: para), in: runs)
-                : caret - before + (out.length - (hasTerminator(para) ? 1 : 0))
-            replace(whole, with: out, caret: newCaret)
-            caret = newCaret
-        }
-    }
 }

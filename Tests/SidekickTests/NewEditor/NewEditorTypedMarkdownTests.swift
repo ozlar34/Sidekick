@@ -192,9 +192,7 @@ final class NewEditorTypedMarkdownTests: XCTestCase {
         XCTAssertEqual(h.location, (h.string as NSString).length, "the caret stays after the pasted text")
         XCTAssertEqual(h.textView.document.blocks.flatMap(\.runs).filter { $0.pill != nil }.map(\.text), ["https://x.co/1", "https://x.co/2", "https://x.co/3"])
         h.undo()
-        XCTAssertEqual(h.string, "a see https://x.co/1 and https://x.co/2\nnext https://x.co/3", "one step back: the pasted text as it came")
-        h.undo()
-        XCTAssertEqual(h.markdown, "a ")
+        XCTAssertEqual(h.markdown, "a ", "ticket 13: the pills belong to the paste, which is one undo step")
         // Pasted into a code block it stays text.
         let c = NewEditorHost(markdown: "```\n\n```\n")
         c.select(0)

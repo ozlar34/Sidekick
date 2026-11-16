@@ -28,6 +28,10 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
     /// (every scheme passes, as in the old editor).
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// The pasteboard that copy, cut and paste use. Tests give the view a private one, never the general pasteboard.
+    var clipboard: NSPasteboard = .general
+    /// True once a drop inside this view did the whole move (see `performDragOperation`), so the end of that drag deletes nothing.
+    var dragSourceHandled = false
 
     var markdown: String { content.markdown }
     var document: NoteDocument { content.document }
@@ -583,14 +587,5 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         out.append(lineBreak(.divider))
         if hasTerminator(para) { out.append(lineBreak(.paragraph)) }
         replace(whole, with: out, caret: para.location + 1)
-    }
-
-    // MARK: Paste
-
-    /// Pasted rich text is reduced to plain text, as in the old editor. A bare URL in the pasted text becomes a pill.
-    override func paste(_ sender: Any?) {
-        let start = selectedRange().location
-        pasteAsPlainText(sender)
-        convertPastedURLs(from: start, to: selectedRange().location)
     }
 }

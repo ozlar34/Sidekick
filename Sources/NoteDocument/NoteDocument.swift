@@ -25,6 +25,11 @@ public enum Edit: Equatable, Sendable {
     case split(block: Int, offset: Int)
     /// Append the next block's text to this one (Backspace at a line start). A divider on either side is dropped.
     case join(block: Int)
+    /// Insert the block that `source` (the file bytes of exactly one block, no final line ending) reads as, with its
+    /// literal spellings (a pasted block keeps `*` bullets, its numbers, its fence). Falls back to a plain insert.
+    case insertSource(at: Int, source: String, kind: BlockKind, runs: [Run])
+    /// The same in place of block `at`.
+    case replaceSource(at: Int, source: String, kind: BlockKind, runs: [Run])
 }
 
 /// The in-memory form of one note: markdown text in, edit, markdown text out.
@@ -81,6 +86,20 @@ public struct NoteDocument: Equatable, Sendable {
         var out = ""
         for b in blocks { out += b.body; out += b.terminator }
         return out
+    }
+
+    /// The file bytes of blocks `range`, line endings included, each written as `markdown()` writes it.
+    public func markdown(blocks range: Range<Int>) -> String {
+        var out = ""
+        for b in blocks[range] { out += b.body; out += b.terminator }
+        return out
+    }
+
+    /// How a newly made block of `kind` with `runs` is written (its default spelling, no line ending).
+    public static func markdown(kind: BlockKind, runs: [Run]) -> String {
+        var doc = NoteDocument(markdown: "")
+        doc.apply(.insert(at: 0, kind: kind, runs: runs))
+        return doc.blocks[0].body
     }
 
     /// Line ending for new lines: the first one in the document, else LF.
@@ -170,6 +189,23 @@ public struct NoteDocument: Equatable, Sendable {
             default: rightKind = b.kind
             }
             insertBlock(at: i + 1, kind: rightKind, prefix: rightKind == .paragraph ? "" : b.prefix, runs: Array(runs[at...]))
+        case .insertSource(let i, let source, let kind, let runs):
+            precondition((0...blocks.count).contains(i), "insert index out of range")
+            if let read = readSource(source, kind: kind, runs: runs) {
+                insertBlock(at: i, kind: read.kind, prefix: read.prefix, runs: read.runs, adopting: read)
+            } else {
+                apply(.insert(at: i, kind: kind, runs: runs))
+            }
+        case .replaceSource(let i, let source, let kind, let runs):
+            precondition(blocks.indices.contains(i), "replace index out of range")
+            if let read = readSource(source, kind: kind, runs: runs) {
+                var block = read
+                block.id = nextID; nextID += 1
+                block.terminator = blocks[i].terminator
+                blocks[i] = block
+            } else {
+                apply(.replace(at: i, kind: kind, runs: runs))
+            }
         case .join(let i):
             precondition(blocks.indices.contains(i) && i + 1 < blocks.count, "join needs a next block")
             let a = blocks[i], next = blocks[i + 1]
@@ -269,11 +305,27 @@ public struct NoteDocument: Equatable, Sendable {
         blocks[i] = changed
     }
 
-    private mutating func insertBlock(at i: Int, kind: BlockKind, prefix: String, runs: [Run]) {
+    /// The block that `source` reads as, when it is exactly one block of `kind` with `runs` (the file's line ending
+    /// is used inside a code block or table).
+    private func readSource(_ source: String, kind: BlockKind, runs: [Run]) -> Block? {
+        let ending = lineEnding
+        let text = ending == "\n" ? source : source.replacingOccurrences(of: "\n", with: ending)
+        let read = NoteDocument(markdown: text + ending)
+        guard read.blocks.count == 1, read.blocks[0].kind == kind, read.blocks[0].runs == runs else { return nil }
+        return read.blocks[0]
+    }
+
+    private mutating func insertBlock(at i: Int, kind: BlockKind, prefix: String, runs: [Run], adopting adopted: Block? = nil) {
         var terminator = lineEnding
         if i == blocks.count, let last = blocks.last, last.terminator.isEmpty {
             blocks[blocks.count - 1].terminator = terminator   // keeps "no final newline" on the new last line
             terminator = ""
+        }
+        if var read = adopted {
+            read.id = nextID; nextID += 1
+            read.terminator = terminator
+            blocks.insert(read, at: i)
+            return
         }
         let block = Block(id: nextID, kind: kind, runs: runs, prefix: prefix, terminator: terminator,
                           inner: lineEnding, origin: nil)

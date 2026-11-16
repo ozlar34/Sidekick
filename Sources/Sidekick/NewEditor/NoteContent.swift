@@ -24,6 +24,11 @@ final class NoteContent {
     private var history: [(paragraphs: [NoteBuffer.Paragraph], document: NoteDocument)] = []
     private static let historyLimit = 16
 
+    /// Blocks that a paste has just read, with their file bytes. A block of the buffer that equals one of them is written
+    /// with its literal spellings (rule 1 of the note document), so that paste keeps `*` bullets, numbers and fences.
+    /// Set around one paste only.
+    var pastedSources: [(kind: BlockKind, runs: [Run], source: String)] = []
+
     /// Called with the document's markdown after every edit made through the view.
     var onEdit: ((String) -> Void)?
 
@@ -83,23 +88,37 @@ final class NoteContent {
               wanted[wanted.count - 1 - suffix] == synced[synced.count - 1 - suffix] { suffix += 1 }
         let newMid = Array(wanted[prefix..<(wanted.count - suffix)])
         let oldCount = synced.count - suffix - prefix
-        for (j, p) in newMid.enumerated() {
-            if j < oldCount {
-                // Only the checkbox changed: toggling keeps the file's bytes except the bracket character.
-                if case .checklist(let was) = synced[prefix + j].kind, case .checklist(let now) = p.kind, was != now,
-                   synced[prefix + j].runs == p.runs {
-                    document.apply(.toggleCheckbox(block: prefix + j))
-                } else {
-                    document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs))
-                }
+        for (j, p) in newMid.enumerated() where j < oldCount {
+            // Only the checkbox changed: toggling keeps the file's bytes except the bracket character.
+            if case .checklist(let was) = synced[prefix + j].kind, case .checklist(let now) = p.kind, was != now,
+               synced[prefix + j].runs == p.runs {
+                document.apply(.toggleCheckbox(block: prefix + j))
+            } else if let source = pastedSource(of: p, fromEnd: false) {
+                document.apply(.replaceSource(at: prefix + j, source: source, kind: p.kind, runs: p.runs))
+            } else {
+                document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs))
             }
-            else { document.apply(.insert(at: prefix + j, kind: p.kind, runs: p.runs)) }
+        }
+        // New blocks go in last to first at one place, so that a new table never stands next to an old one for a moment
+        // (the document reads two tables in a row as one).
+        for j in stride(from: newMid.count - 1, through: oldCount, by: -1) {
+            let p = newMid[j]
+            if let source = pastedSource(of: p, fromEnd: true) { document.apply(.insertSource(at: prefix + oldCount, source: source, kind: p.kind, runs: p.runs)) }
+            else { document.apply(.insert(at: prefix + oldCount, kind: p.kind, runs: p.runs)) }
         }
         if oldCount > newMid.count {
             for _ in 0..<(oldCount - newMid.count) { document.apply(.remove(at: prefix + newMid.count)) }
         }
         synced = wanted
         remember(wanted)
+    }
+
+    /// The file bytes of the pasted block that `p` equals, each used once (two equal blocks, such as dividers, may be
+    /// spelled differently): in document order, or from the last one when the blocks are visited last to first.
+    private func pastedSource(of p: NoteBuffer.Paragraph, fromEnd: Bool) -> String? {
+        let match: (Int) -> Bool = { self.pastedSources[$0].kind == p.kind && self.pastedSources[$0].runs == p.runs }
+        guard let i = fromEnd ? pastedSources.indices.last(where: match) : pastedSources.indices.first(where: match) else { return nil }
+        return pastedSources.remove(at: i).source
     }
 
     /// Numbers the numbered items at these block indices 1, 2, 3 ... (the "numbered list" command over lines of which some
