@@ -2,7 +2,7 @@ import AppKit
 import NoteDocument
 
 extension NSAttributedString.Key {
-    /// Block kind of a paragraph, carried by every character of it (NSNumber: 0 paragraph, 1...6 heading level).
+    /// Block kind of a paragraph, carried by every character of it (NSNumber: 0 paragraph, 1...6 heading level, 10 bullet, 11 numbered, 12/13 unchecked/checked item, 14 quote, 15 divider).
     static let noteBlockKind = NSAttributedString.Key("sidekick.noteBlockKind")
     /// Bold mark with the delimiter spelling the file used (NSString "**" or "__"). Absent = not bold.
     static let noteBold = NSAttributedString.Key("sidekick.noteBold")
@@ -192,8 +192,10 @@ enum NoteBuffer {
         switch kind {
         case .fence:   // as today: monospaced 14, and a code block holds no marks
             return NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .table:   // styling of these kinds is tickets 07/08
+        case .paragraph, .bullet, .numbered, .checklist, .divider, .table:
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
+        case .quote:   // italic, as in the old editor
+            return NSFontManager.shared.convert(NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular), toHaveTrait: .italicFontMask)
         case .heading(let level):
             let size: CGFloat = level == 1 ? 28 : level == 2 ? 22 : 18
             return NSFont.systemFont(ofSize: size, weight: bold ? .bold : .semibold)
@@ -204,24 +206,62 @@ enum NoteBuffer {
     static let tableCellPadding: CGFloat = 8
     private static let tableMinimumColumn: CGFloat = 40
 
-    static func paragraphStyle(for kind: BlockKind) -> NSParagraphStyle {
-        func style(_ line: CGFloat, _ spacing: CGFloat, before: CGFloat = 0) -> NSParagraphStyle {
+    /// Text indent of a paragraph of `kind`: where its text starts (and wrapped lines hang) so that the drawn
+    /// marker (bullet, number, checkbox) has room on the left. Quotes are indented as a block.
+    static func indent(for kind: BlockKind) -> CGFloat {
+        switch kind {
+        case .bullet: return 11   // text starts where the old editor put it (bullet glyph + space)
+        case .numbered: return 17   // one-digit number; `numberIndent` widens it for longer ones
+        case .checklist: return 18   // 14 pt box column + 4 pt gap, as in the old editor
+        case .quote: return 18
+        case .paragraph, .heading, .divider, .fence, .table: return 0
+        }
+    }
+
+    /// Font of the drawn number of a numbered item.
+    static let numberFont = NSFont.systemFont(ofSize: 15, weight: .regular)
+
+    /// Gap between a drawn number and its text (what the one-digit gutter of `indent(for: .numbered)` leaves).
+    private static let numberGap: CGFloat = indent(for: .numbered) - ("1." as NSString).size(withAttributes: [.font: numberFont]).width
+
+    /// Width of a drawn number such as `10.` or `3)`.
+    static func numberWidth(_ text: String) -> CGFloat { (text as NSString).size(withAttributes: [.font: numberFont]).width }
+
+    /// Where the text of a numbered item starts: the number and the same gap whatever the number of digits.
+    static func numberIndent(for text: String) -> CGFloat { numberWidth(text) + numberGap }
+
+    /// Paragraph style of `kind`; a numbered item takes the gutter its own number needs (`numberText`, e.g. `10.`).
+    static func paragraphStyle(for kind: BlockKind, numberText: String? = nil) -> NSParagraphStyle {
+        func style(_ line: CGFloat, _ spacing: CGFloat, indent: CGFloat = 0, before: CGFloat = 0) -> NSParagraphStyle {
             let s = NSMutableParagraphStyle()
             s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing; s.paragraphSpacingBefore = before
+            s.firstLineHeadIndent = indent; s.headIndent = indent
             return s
         }
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider: return style(20, 1)
+        case .paragraph, .divider: return style(20, 1)
         case .fence: return style(20, 8, before: 8)   // room for the background's own padding
         case .table: return style(26, 8, before: 8)
+        case .quote: return style(20, 1, indent: indent(for: kind))
+        case .numbered: return style(20, 7, indent: numberText.map(numberIndent(for:)) ?? indent(for: kind))
+        case .bullet, .checklist: return style(20, 7, indent: indent(for: kind))   // list rows have air between them
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)
+        }
+    }
+
+    /// Text colour of a paragraph: checked items are dimmed, quotes are secondary.
+    static func color(for kind: BlockKind) -> NSColor {
+        switch kind {
+        case .checklist(checked: true): return .tertiaryLabelColor
+        case .quote: return .secondaryLabelColor
+        default: return .textColor
         }
     }
 
     /// Typing attributes for new text in a paragraph of `kind`.
     static func typingAttributes(for kind: BlockKind) -> [NSAttributedString.Key: Any] {
         [.noteBlockKind: attributeValue(kind), .font: font(for: kind, bold: false),
-         .paragraphStyle: paragraphStyle(for: kind), .foregroundColor: NSColor.textColor]
+         .paragraphStyle: paragraphStyle(for: kind), .foregroundColor: color(for: kind)]
     }
 
     /// Makes every paragraph touched by `edited` uniform: its kind is the kind of its terminating
@@ -238,8 +278,11 @@ enum NoteBuffer {
             guard range.length > 0 else { continue }
             let kind = Self.kind(fromAttribute: storage.attribute(.noteBlockKind, at: end - 1, effectiveRange: nil))
             storage.addAttributes([.noteBlockKind: attributeValue(kind), .paragraphStyle: paragraphStyle(for: kind),
-                                   .foregroundColor: NSColor.textColor], range: range)
+                                   .foregroundColor: color(for: kind)], range: range)
             storage.removeAttribute(.baselineOffset, range: range)
+            // Checked items are struck through. (Ticket 08 styles the strikethrough mark: it must make this per run.)
+            if case .checklist(checked: true) = kind { storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
+            else { storage.removeAttribute(.strikethroughStyle, range: range) }
             storage.enumerateAttribute(.noteBold, in: range, options: []) { value, sub, _ in
                 storage.addAttribute(.font, value: font(for: kind, bold: value != nil), range: sub)
             }

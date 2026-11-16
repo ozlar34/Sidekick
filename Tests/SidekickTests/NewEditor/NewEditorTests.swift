@@ -121,6 +121,18 @@ final class NewEditorTests: XCTestCase {
         }
     }
 
+    /// Found by generated seed 96 (and 84 on the 06 base): the caret at the end of a last line that has no line break.
+    func testCaretAtTheEndOfTheLastLineWithoutALineBreakMatchesAppKit() {
+        for md in ["# beta caf\u{e9} snake_case", "# snake_case", "# beta snake_case", "## beta", "text\n# Head", "alpha", "- item", "- [ ] item", "> quote", "1. one", "# a\n\n# b"] {
+            let h = NewEditorHost(markdown: md)
+            for loc in 0...h.length {
+                h.select(loc)
+                XCTAssertEqual(h.caret.origin.x, h.appKitCaretOrigin.x, accuracy: 1.5, "\(md.debugDescription) loc \(loc) x")
+                XCTAssertEqual(h.caret.origin.y, h.appKitCaretOrigin.y, accuracy: 1.5, "\(md.debugDescription) loc \(loc) y")
+            }
+        }
+    }
+
     func testEveryRightAndLeftMovesTheCaretAndLeftReversesRight() {
         for seed in 1...UInt64(seeds) {
             var gen = NewEditorNoteGenerator(seed: seed)

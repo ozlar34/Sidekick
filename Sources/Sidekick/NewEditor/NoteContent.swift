@@ -16,6 +16,11 @@ final class NoteContent {
     /// Kind of the tail paragraph while it has no characters (it has nothing to carry a kind).
     var tailKind: BlockKind = .paragraph
     private var synced: [NoteBuffer.Paragraph] = []
+    /// The last few (buffer content, document) pairs. When the buffer comes back to a content it had before (undo, or
+    /// typing and deleting), the document of that time is used again, so the file's exact bytes come back too: the
+    /// paragraph diff alone cannot know which line breaks an earlier state had.
+    private var history: [(paragraphs: [NoteBuffer.Paragraph], document: NoteDocument)] = []
+    private static let historyLimit = 16
 
     /// Called with the document's markdown after every edit made through the view.
     var onEdit: ((String) -> Void)?
@@ -31,6 +36,7 @@ final class NoteContent {
         let (text, tail) = NoteBuffer.attributed(for: document)
         tailKind = tail
         synced = NoteBuffer.paragraphs(of: document)
+        history = [(synced, document)]
         storage.beginEditing()
         storage.setAttributedString(text)
         NoteBuffer.restyle(storage, edited: NSRange(location: 0, length: storage.length))
@@ -52,6 +58,13 @@ final class NoteContent {
             tailKind = NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: NSMaxRange(tail) - 1, effectiveRange: nil))
         }
         let wanted = NoteBuffer.paragraphs(in: storage, tailKind: tailKind)
+        if wanted == synced { return }
+        if let earlier = history.last(where: { $0.paragraphs.count == wanted.count && $0.paragraphs == wanted }) {
+            document = earlier.document
+            synced = wanted
+            remember(wanted)
+            return
+        }
         var prefix = 0
         while prefix < wanted.count, prefix < synced.count, wanted[prefix] == synced[prefix] { prefix += 1 }
         var suffix = 0
@@ -60,12 +73,26 @@ final class NoteContent {
         let newMid = Array(wanted[prefix..<(wanted.count - suffix)])
         let oldCount = synced.count - suffix - prefix
         for (j, p) in newMid.enumerated() {
-            if j < oldCount { document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs)) }
+            if j < oldCount {
+                // Only the checkbox changed: toggling keeps the file's bytes except the bracket character.
+                if case .checklist(let was) = synced[prefix + j].kind, case .checklist(let now) = p.kind, was != now,
+                   synced[prefix + j].runs == p.runs {
+                    document.apply(.toggleCheckbox(block: prefix + j))
+                } else {
+                    document.apply(.replace(at: prefix + j, kind: p.kind, runs: p.runs))
+                }
+            }
             else { document.apply(.insert(at: prefix + j, kind: p.kind, runs: p.runs)) }
         }
         if oldCount > newMid.count {
             for _ in 0..<(oldCount - newMid.count) { document.apply(.remove(at: prefix + newMid.count)) }
         }
         synced = wanted
+        remember(wanted)
+    }
+
+    private func remember(_ paragraphs: [NoteBuffer.Paragraph]) {
+        history.append((paragraphs, document))
+        if history.count > Self.historyLimit { history.removeFirst() }
     }
 }

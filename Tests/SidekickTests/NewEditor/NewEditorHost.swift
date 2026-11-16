@@ -33,7 +33,7 @@ final class NewEditorHost {
         textView.attach(note.content)
     }
 
-    deinit { MainActor.assumeIsolated { window.close() } }
+    deinit { MainActor.assumeIsolated { window.contentView = nil; window.close() } }
 
     var string: String { textView.string }
     var length: Int { (textView.string as NSString).length }
@@ -81,6 +81,30 @@ final class NewEditorHost {
         window.sendEvent(up)
     }
 
+    /// A real left click at `point` (view coordinates): a mouse-down event delivered to the view, the mouse-up queued
+    /// first because NSTextView tracks a click until it sees it (same trick as `HostedEditorRunner.click`).
+    /// A synthetic mouse event sent through `NSWindow.sendEvent` does not reach the view in a test run.
+    func click(at point: NSPoint) {
+        window.makeKeyAndOrderFront(nil)
+        let inWindow = textView.convert(point, to: nil)
+        let ts = ProcessInfo.processInfo.systemUptime
+        func event(_ type: NSEvent.EventType, _ t: TimeInterval) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [], timestamp: t, windowNumber: window.windowNumber,
+                               context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        window.postEvent(event(.leftMouseUp, ts + 0.05), atStart: false)
+        textView.mouseDown(with: event(.leftMouseDown, ts))
+        // Whatever of the click is left unread must not leak into the next test.
+        while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) != nil {}
+    }
+
+    /// Lets the run loop close the current undo group, so that the next change is a separate undo step
+    /// (as it is between two real events).
+    func endUndoGroup() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+
+    /// Undoes one step.
+    func undo() { endUndoGroup(); textView.undoManager?.undo(); endUndoGroup() }
+
     /// Where AppKit itself reports the insertion point (screen -> view coordinates).
     var appKitCaretRect: NSRect {
         var actual = NSRange()
@@ -113,7 +137,7 @@ final class NewEditorHost {
     }
 }
 
-/// Small seeded generator of markdown inside the scope of this slice (paragraphs, headings, bold).
+/// Small seeded generator of markdown inside the scope of this slice (paragraphs, headings, bold, lists, checklists, quotes).
 struct NewEditorNoteGenerator {
     private var state: UInt64
     init(seed: UInt64) { state = seed == 0 ? 0x9E37_79B9 : seed }
@@ -154,7 +178,13 @@ struct NewEditorNoteGenerator {
         var out = ""
         let count = 1 + int(6)
         for i in 0..<count {
-            switch int(8) {
+            switch int(11) {
+            case 5: out += "- " + words(3)
+            case 6: out += "\(1 + int(9)). " + words(3)
+            case 7: out += "- [" + (int(2) == 0 ? " " : "x") + "] " + (int(5) == 0 ? "" : words(3))
+            case 8: out += "> " + words(3)
+            case 9: out += "- [ ] " + words(1) + " **" + words(1) + "** " + words(2)
+            case 10: out += "- "
             case 0: out += String(repeating: "#", count: 1 + int(3)) + " " + words(3)
             case 1: break   // blank line
             case 2: out += words(2) + " **" + words(2) + "** " + words(2)
