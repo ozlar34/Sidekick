@@ -40,13 +40,13 @@ enum NoteTextEngine {
         if location >= length {
             let extra = lm.extraLineFragmentRect
             if length == 0 || extra.height > 0 {
-                let indent = (lm as? NoteLayoutManager).map { NoteBuffer.indent(for: $0.tailKind) } ?? 0
+                let indent = (lm as? NoteLayoutManager).map { $0.tailIndent(blockIndex: (tv.string as NSString).components(separatedBy: "\n").count - 1) } ?? 0
                 rect = NSRect(x: extra.minX + tc.lineFragmentPadding + indent, y: extra.minY, width: 1, height: extra.height)
             } else {
                 let g = lm.numberOfGlyphs - 1
                 let frag = lm.lineFragmentRect(forGlyphAt: g, effectiveRange: nil)
-                // The end of the used rect less the right padding. (The bounding box of a glyph is not usable on a line
-                // that holds an attachment, a pill: it comes back as the box of the whole run.)
+                // The end of the text on its line (the used rect ends one padding past it). (The last glyph's bounding box is not it: for a heading it
+                // reaches past the text by a constant, and on a line that holds an attachment, a pill, it comes back as the box of the whole run.)
                 let used = lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)
                 rect = NSRect(x: used.maxX - tc.lineFragmentPadding, y: frag.minY, width: 1, height: frag.height)
             }
@@ -147,10 +147,10 @@ enum NoteTextEngine {
     }
 
     /// Kind of the empty last paragraph (it has no character to carry one) and the literal number of the
-    /// document block at an index (for lists that start at a number other than 1).
-    static func configure(_ tv: NSTextView, tailKind: BlockKind, startNumber: @escaping (Int) -> Int?) {
+    /// document block at an index, with its delimiter (`7.`, `3)`), exactly as the file spells it.
+    static func configure(_ tv: NSTextView, tailKind: BlockKind, markerText: @escaping (Int) -> String?) {
         guard let lm = tv.layoutManager as? NoteLayoutManager else { return }
-        lm.startNumber = startNumber
+        lm.markerText = markerText
         setTailKind(tailKind, in: tv)
     }
 
@@ -184,17 +184,21 @@ enum NoteTextEngine {
 @MainActor
 final class NoteLayoutManager: NSLayoutManager {
     var tailKind: BlockKind = .paragraph
-    var startNumber: (Int) -> Int? = { _ in nil }
+    var markerText: (Int) -> String? = { _ in nil }
 
     private static let markerFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
-    private static let numberFont = NSFont.systemFont(ofSize: 15, weight: .regular)
-    private static let squareSide: CGFloat = 11
+        private static let squareSide: CGFloat = 11
 
     /// Baseline of the first line of a paragraph with a 20 pt line box and 15 pt body font.
     private func baseline(ofLineAt frag: NSRect, glyph: Int?) -> CGFloat {
         if let g = glyph, g < numberOfGlyphs { return frag.minY + location(forGlyphAt: g).y }
-        let f = Self.numberFont
+        let f = NoteBuffer.numberFont
         return frag.minY + (frag.height - (f.ascender - f.descender)) / 2 + f.ascender
+    }
+
+    /// Text indent of the empty last paragraph.
+    func tailIndent(blockIndex: Int) -> CGFloat {
+        tailKind == .numbered ? NoteBuffer.numberIndent(for: markerText(blockIndex) ?? "1.") : NoteBuffer.indent(for: tailKind)
     }
 
     func markers(in glyphRange: NSRange) -> [NoteTextEngine.Marker] {
@@ -210,9 +214,10 @@ final class NoteLayoutManager: NSLayoutManager {
                 let f = Self.markerFont
                 out.append(.init(start: start, shape: .bullet, rect: NSRect(x: x, y: base - f.ascender, width: 8, height: f.ascender - f.descender)))
             case .numbered:
-                let f = Self.numberFont
-                out.append(.init(start: start, shape: .number(numberText(at: start, paragraphIndex: paragraphIndex())),
-                                 rect: NSRect(x: x, y: base - f.ascender, width: NoteBuffer.indent(for: kind), height: f.ascender - f.descender)))
+                let f = NoteBuffer.numberFont
+                let text = markerText(paragraphIndex()) ?? "1."
+                out.append(.init(start: start, shape: .number(text),
+                                 rect: NSRect(x: x, y: base - f.ascender, width: NoteBuffer.numberWidth(text), height: f.ascender - f.descender)))
             case .checklist(let checked):
                 let side = Self.squareSide
                 out.append(.init(start: start, shape: .checkbox(checked: checked),
@@ -254,22 +259,6 @@ final class NoteLayoutManager: NSLayoutManager {
         return out
     }
 
-    /// The number shown for the numbered paragraph at `start`: the literal number of the first item of its run
-    /// plus the items before it.
-    private func numberText(at start: Int, paragraphIndex: Int) -> String {
-        guard let storage = textStorage else { return "1." }
-        let ns = storage.string as NSString
-        var before = 0
-        var p = start
-        while p > 0 {
-            let prev = ns.paragraphRange(for: NSRange(location: p - 1, length: 0))
-            guard NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: prev.location, effectiveRange: nil)) == .numbered else { break }
-            before += 1; p = prev.location
-        }
-        let first = startNumber(paragraphIndex - before) ?? 1
-        return "\(first + before)."
-    }
-
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         for m in markers(in: glyphsToShow) {
@@ -278,7 +267,7 @@ final class NoteLayoutManager: NSLayoutManager {
             case .bullet:
                 ("\u{2022}" as NSString).draw(at: rect.origin, withAttributes: [.font: Self.markerFont, .foregroundColor: NSColor.textColor])
             case .number(let text):
-                (text as NSString).draw(at: rect.origin, withAttributes: [.font: Self.numberFont, .foregroundColor: NSColor.secondaryLabelColor])
+                (text as NSString).draw(at: rect.origin, withAttributes: [.font: NoteBuffer.numberFont, .foregroundColor: NSColor.secondaryLabelColor])
             case .divider:
                 NSColor.tertiaryLabelColor.setFill()
                 rect.fill()

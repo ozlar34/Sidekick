@@ -72,24 +72,47 @@ final class NewEditorListsTests: XCTestCase {
         }
     }
 
-    func testNumbersCountOnFromTheFirstItemOfARun() {
-        let h = NewEditorHost(markdown: "3. a\n4. b\n1. c\n\n- x\n1. d\n")
-        let numbers = NoteTextEngine.markers(in: h.textView).compactMap { m -> String? in
+    private func numbers(_ h: NewEditorHost) -> [String] {
+        NoteTextEngine.markers(in: h.textView).compactMap { m -> String? in
             if case .number(let n) = m.shape { return n } else { return nil }
         }
-        XCTAssertEqual(numbers, ["3.", "4.", "5.", "1."])
     }
 
-    func testTheNextItemShowsTheNextNumber() {
-        // New items are written with the default `1.` (fidelity rule 2); the drawn number counts on from the run's first item.
+    func testDrawnNumbersAreTheFilesNumbersWithTheirDelimiter() {
+        XCTAssertEqual(numbers(NewEditorHost(markdown: "3. a\n4. b\n1. c\n\n- x\n1. d\n")), ["3.", "4.", "1.", "1."])
+        XCTAssertEqual(numbers(NewEditorHost(markdown: "3) a\n  10. b\n")), ["3)", "10."])
+    }
+
+    func testTheNextItemGetsTheNextNumberInTheFileAndOnScreen() {
         let h = NewEditorHost(markdown: "4. a\n5. b")
         h.select(1)
         h.press(.enter)
-        let numbers = NoteTextEngine.markers(in: h.textView).compactMap { m -> String? in
-            if case .number(let n) = m.shape { return n } else { return nil }
-        }
-        XCTAssertEqual(numbers, ["4.", "5.", "6."])
-        XCTAssertEqual(h.savedMarkdown, "4. a\n1. \n5. b")
+        XCTAssertEqual(h.savedMarkdown, "4. a\n5. \n5. b")
+        XCTAssertEqual(numbers(h), ["4.", "5.", "5."], "the screen shows what the file says")
+        let started = NewEditorHost(markdown: "1. a")
+        started.select(1)
+        started.press(.enter)
+        started.type("b")
+        XCTAssertEqual(started.savedMarkdown, "1. a\n2. b")
+        let paren = NewEditorHost(markdown: "3) x")
+        paren.select(1)
+        paren.press(.enter)
+        XCTAssertEqual(paren.savedMarkdown, "3) x\n4) ")
+        XCTAssertEqual(numbers(paren), ["3)", "4)"])
+    }
+
+    func testTheGapBetweenANumberAndItsTextDoesNotShrinkWithMoreDigits() {
+        let h = NewEditorHost(markdown: "9. a\n10. b\n100. c\n1000. d\n")
+        let markers = NoteTextEngine.markers(in: h.textView).filter { if case .number = $0.shape { return true } else { return false } }
+        XCTAssertEqual(markers.count, 4)
+        let gaps = markers.map { m in NoteTextEngine.caretRect(in: h.textView, at: m.start).minX - m.rect.maxX }
+        XCTAssertGreaterThan(gaps[0], 2, "a visible gap for one digit")
+        for (i, g) in gaps.enumerated() { XCTAssertGreaterThanOrEqual(g, gaps[0] - 0.5, "gap of item \(i) is \(g), one digit has \(gaps[0])") }
+        // Typing in the item must not touch the gutter either.
+        h.select(markers[1].start + 1)
+        h.type("Z")
+        let m1 = NoteTextEngine.markers(in: h.textView)[1]
+        XCTAssertGreaterThanOrEqual(NoteTextEngine.caretRect(in: h.textView, at: m1.start).minX - m1.rect.maxX, gaps[0] - 0.5)
     }
 
     // MARK: Enter
@@ -98,8 +121,9 @@ final class NewEditorListsTests: XCTestCase {
         let cases: [(source: String, caretAfter: String, expected: String, kinds: [String])] = [
             ("- a", "a", "- a\n- b", ["bullet", "bullet"]),
             ("- a\nrest\n", "a", "- a\n- b\nrest\n", ["bullet", "bullet", "p"]),
-            ("1. a", "a", "1. a\n1. b", ["numbered", "numbered"]),
-            ("7. a\n8. z\n", "a", "7. a\n1. b\n8. z\n", ["numbered", "numbered", "numbered"]),
+            ("1. a", "a", "1. a\n2. b", ["numbered", "numbered"]),
+            ("7. a\n8. z\n", "a", "7. a\n8. b\n8. z\n", ["numbered", "numbered", "numbered"]),
+            ("3) x\n", "x", "3) x\n4) b\n", ["numbered", "numbered"]),
             ("- [ ] a", "a", "- [ ] a\n- [ ] b", ["todo", "todo"]),
             ("- [x] a\n", "a", "- [x] a\n- [ ] b\n", ["checked", "todo"]),
         ]
@@ -148,13 +172,12 @@ final class NewEditorListsTests: XCTestCase {
     func testEachEnterRuleIsOneUndoStep() {
         // (note, caret offset in the buffer text, markdown after Enter)
         let cases: [(String, Int, String)] = [
-            ("- a\n", 1, "- a\n- \n"), ("- [x] a\n", 1, "- [x] a\n- [ ] \n"), ("1. a\n2. b\n", 1, "1. a\n1. \n2. b\n"),
-            ("- a\n- \n", 2, "- a\n\n"), ("- [ ] a\n- [ ] ", 2, "- [ ] a\n"), ("> q\n", 1, "> q\n\n"),
+            ("- a\n", 1, "- a\n- \n"), ("- [x] a\n", 1, "- [x] a\n- [ ] \n"), ("1. a\n2. b\n", 1, "1. a\n2. \n2. b\n"),
+            ("- a\n- \n", 2, "- a\n\n"), ("- [ ] a\n- [ ] ", 2, "- [ ] a\n"), ("1. a\n2. ", 2, "1. a\n"), ("> q\n", 1, "> q\n\n"),
             ("- [x] ab\n", 1, "- [x] a\n- [ ] b\n"), ("- a", 1, "- a\n- "),
         ]
         for (source, caret, after) in cases {
             let h = NewEditorHost(markdown: source)
-            let (string, kinds) = (h.string, h.textView.blockKinds)
             h.select(caret)
             h.endUndoGroup()
             h.textView.undoManager?.removeAllActions()
@@ -162,8 +185,7 @@ final class NewEditorListsTests: XCTestCase {
             h.endUndoGroup()
             XCTAssertEqual(h.markdown, after, source)
             h.undo()
-            XCTAssertEqual(h.string, string, "one undo gives the text back: \(source)")
-            XCTAssertEqual(h.textView.blockKinds, kinds, "and the kinds: \(source)")
+            XCTAssertEqual(h.markdown, source, "one undo gives back the exact bytes: \(source.debugDescription)")
             XCTAssertFalse(h.textView.undoManager?.canUndo ?? false, "Enter was a single undo step: \(source)")
         }
     }
@@ -219,14 +241,14 @@ final class NewEditorListsTests: XCTestCase {
     }
 
     func testBackspaceAtBlockStartIsOneUndoStep() {
-        for source in ["x\n- a\n", "x\n- [x] a\n", "x\n> a\n"] {
+        for source in ["x\n- a\n", "x\n- [x] a\n", "x\n> a\n", "x\r\n- a", "- [ ] a\n- [ ] "] {
             let h = NewEditorHost(markdown: source)
-            h.select(range(of: "a", in: h).location)
+            h.select(source.hasSuffix("- [ ] ") ? h.length : range(of: "a", in: h).location)
             h.endUndoGroup()
             h.textView.undoManager?.removeAllActions()
             h.press(.backspace)
             h.undo()
-            XCTAssertEqual(h.markdown, source)
+            XCTAssertEqual(h.markdown, source, "exact bytes: \(source.debugDescription)")
             XCTAssertFalse(h.textView.undoManager?.canUndo ?? false, source)
         }
     }
@@ -315,7 +337,7 @@ final class NewEditorListsTests: XCTestCase {
     }
 
     func testEnterAtTheEndOfTheNoteMakesAnEmptyLastItemThatSaves() {
-        for (source, typed, kinds) in [("- [ ] a", "- [ ] ", ["todo", "todo"]), ("- a", "- ", ["bullet", "bullet"]), ("1. a", "1. ", ["numbered", "numbered"])] {
+        for (source, typed, kinds) in [("- [ ] a", "- [ ] ", ["todo", "todo"]), ("- a", "- ", ["bullet", "bullet"]), ("1. a", "2. ", ["numbered", "numbered"])] {
             let h = NewEditorHost(markdown: source)
             h.select(h.length)
             h.press(.enter)
@@ -323,10 +345,10 @@ final class NewEditorListsTests: XCTestCase {
             XCTAssertEqual(h.textView.blockKinds, kinds)
             XCTAssertEqual(NoteTextEngine.markers(in: h.textView).last?.start, h.length, "marker of the empty last item: \(source)")
             h.press(.enter)   // Enter on the empty last item ends the list
-            XCTAssertEqual(h.savedMarkdown, source + "\n", source)
+            XCTAssertEqual(h.savedMarkdown, source, "back to the note's own bytes: \(source)")
             XCTAssertEqual(h.textView.blockKinds, [kinds[0]])
             h.type("after")
-            XCTAssertEqual(h.savedMarkdown, source + "\nafter\n", source)
+            XCTAssertEqual(h.savedMarkdown, source + "\nafter", source)
         }
     }
 
@@ -355,7 +377,7 @@ final class NewEditorListsTests: XCTestCase {
         XCTAssertEqual(h.textView.blockKinds, ["todo"])
         h.undo()
         XCTAssertEqual(h.textView.blockKinds, ["todo", "todo"])
-        XCTAssertEqual(h.markdown, "- [ ] a\n- [ ] \n", "the empty item is back (the file now ends with a line break)")
+        XCTAssertEqual(h.markdown, "- [ ] a\n- [ ] ", "undo gives back the exact original bytes (no added line break)")
     }
 
     // MARK: named old case

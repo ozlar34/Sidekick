@@ -19,6 +19,7 @@ final class NewEditorHost {
         textView.frame = NSRect(origin: .zero, size: size)
         window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable],
                           backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = scroll
         textView.load(markdown: markdown)
         textView.onMarkdownChange = { [unowned self] md in self.savedMarkdown = md }
@@ -32,7 +33,7 @@ final class NewEditorHost {
         textView.attach(note.content)
     }
 
-    deinit { MainActor.assumeIsolated { window.orderOut(nil) } }
+    deinit { MainActor.assumeIsolated { window.contentView = nil; window.close() } }
 
     var string: String { textView.string }
     var length: Int { (textView.string as NSString).length }

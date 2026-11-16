@@ -10,7 +10,7 @@ struct DocumentGenerator {
     init(seed: UInt64) { rng = SeededRNG(seed: seed) }
 
     enum LineShape: CaseIterable {
-        case blank, paragraph, heading, bullet, numbered, checklist, quote, divider, literalOther, nasty, fence, table
+        case blank, paragraph, heading, bullet, numbered, checklist, quote, divider, literalOther, nasty, fence, table, setext
     }
 
     mutating func int(_ n: Int) -> Int { Int(rng.next() % UInt64(n)) }
@@ -19,7 +19,8 @@ struct DocumentGenerator {
     static let words = ["alpha", "beta", "gamma", "x", "snake_case", "a*b", "_", "*", "\\", "#", "##", "caf\u{e9}", "e\u{301}",
                         "\u{1F600}", "\u{4E2D}", "- item", "> q", "1.", "[l](u)", "https://a.b/c_d", "__", "**", "\\*", "\\#", "\t", " ",
                         "~", "~~", "`", "<u>", "</u>", "[", "]", "](", "http://x.y", "https://", "[ ] t", "---", "\\:", "!",
-                        "|", "\\|", "||", "|---|", "\n", "\u{2028}", "```", "~~~", "# c"]
+                        "|", "\\|", "||", "|---|", "\n", "\u{2028}", "```", "~~~", "# c",
+                        "- not a list", "# not a heading", "> not a quote", "1. not numbered", "![img](u)", "<div>", "[a][b]", "[b]: u", "[^1]", "[^1]: n", "==="]
 
     mutating func plainText() -> String {
         (0..<(1 + int(4))).map { _ in pick(Self.words) }.joined(separator: pick(["", " ", "  "]))
@@ -92,7 +93,10 @@ struct DocumentGenerator {
             let sep = indent + (outer ? "|" + cells + "|" : (n == 1 ? cells + "|" : cells))
             return ([row(n), sep] + (0..<int(4)).map { _ in row(1 + int(4)) }).joined(separator: eol)
         case .literalOther:
-            return pick(["```", "| a | b |", "![i](x)", "    indented", "  # indented", "+ plus", "-x", "1.x", ">x", "- [ ]x", "- []", "* * *", "- - -", "--", "<div>", "[^1]: n"])
+            return pick(["```", "| a | b |", "![i](x)", "    indented", "  # indented", "+ plus", "-x", "1.x", ">x", "- [ ]x", "- []", "* * *", "- - -", "--", "<div>", "[^1]: n", "![img](u)", "[a][b]", "[b]: u", "===", "<div>x</div>"])
+        case .setext:
+            // Text over `===` / `---`: setext headings are not supported, both lines stay literal.
+            return ([plainText(), pick(["===", "======", "---", "-----", "==="])]).joined(separator: eol)
         case .nasty:
             return pick(["** **", "**", "****", "___", "\\#", "\\\\#", "# ", "#", "#######", "**a **b** c**", "a\\", "**a\\**", "***a**", "***a*", "**a***b*", "*a***b**", "*a **b***", "_a_b_", "- ", "> ", "1. ", "- [ ] ", "\\- x", "\\\\- x", "~~a~b~~", "[a](b", "[a]()", "<u>a</u", "`a``b`"])
         }

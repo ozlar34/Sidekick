@@ -213,7 +213,7 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .divider, .fence, .table:   // code blocks and tables: ticket 12
+        case .paragraph, .bullet, .numbered, .checklist, .divider, .fence, .table:
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .quote:   // italic, as in the old editor
             return NSFontManager.shared.convert(NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular), toHaveTrait: .italicFontMask)
@@ -228,14 +228,27 @@ enum NoteBuffer {
     static func indent(for kind: BlockKind) -> CGFloat {
         switch kind {
         case .bullet: return 11   // text starts where the old editor put it (bullet glyph + space)
-        case .numbered: return 17
+        case .numbered: return 17   // one-digit number; `numberIndent` widens it for longer ones
         case .checklist: return 18   // 14 pt box column + 4 pt gap, as in the old editor
         case .quote: return 18
         case .paragraph, .heading, .divider, .fence, .table: return 0
         }
     }
 
-    static func paragraphStyle(for kind: BlockKind) -> NSParagraphStyle {
+    /// Font of the drawn number of a numbered item.
+    static let numberFont = NSFont.systemFont(ofSize: 15, weight: .regular)
+
+    /// Gap between a drawn number and its text (what the one-digit gutter of `indent(for: .numbered)` leaves).
+    private static let numberGap: CGFloat = indent(for: .numbered) - ("1." as NSString).size(withAttributes: [.font: numberFont]).width
+
+    /// Width of a drawn number such as `10.` or `3)`.
+    static func numberWidth(_ text: String) -> CGFloat { (text as NSString).size(withAttributes: [.font: numberFont]).width }
+
+    /// Where the text of a numbered item starts: the number and the same gap whatever the number of digits.
+    static func numberIndent(for text: String) -> CGFloat { numberWidth(text) + numberGap }
+
+    /// Paragraph style of `kind`; a numbered item takes the gutter its own number needs (`numberText`, e.g. `10.`).
+    static func paragraphStyle(for kind: BlockKind, numberText: String? = nil) -> NSParagraphStyle {
         func style(_ line: CGFloat, _ spacing: CGFloat, indent: CGFloat = 0) -> NSParagraphStyle {
             let s = NSMutableParagraphStyle()
             s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing
@@ -245,7 +258,8 @@ enum NoteBuffer {
         switch kind {
         case .paragraph, .divider, .fence, .table: return style(20, 1)
         case .quote: return style(20, 1, indent: indent(for: kind))
-        case .bullet, .numbered, .checklist: return style(20, 7, indent: indent(for: kind))   // list rows have air between them
+        case .numbered: return style(20, 7, indent: numberText.map(numberIndent(for:)) ?? indent(for: kind))
+        case .bullet, .checklist: return style(20, 7, indent: indent(for: kind))   // list rows have air between them
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)
         }
     }
