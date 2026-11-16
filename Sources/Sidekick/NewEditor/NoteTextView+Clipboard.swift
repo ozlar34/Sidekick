@@ -165,7 +165,7 @@ extension NoteTextView {
             var cell = text
             while cell.hasSuffix("\n") { cell.removeLast() }
             let literal = startKind == .fence ? text.replacingOccurrences(of: "\n", with: "\u{2028}") : cell
-            insertText(NSAttributedString(string: literal, attributes: NoteBuffer.typingAttributes(for: startKind)), replacementRange: range)
+            insertAt(NSAttributedString(string: literal, attributes: NoteBuffer.typingAttributes(for: startKind)), range: range)
             return NSRange(location: range.location, length: max(0, selectedRange().location - range.location))
         }
 

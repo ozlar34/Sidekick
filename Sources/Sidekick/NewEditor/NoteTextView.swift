@@ -331,7 +331,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         if let (_, para) = paragraph(at: sel.location) {
             switch kind(of: para) {
             case .fence:
-                insertText(NSAttributedString(string: "\u{2028}", attributes: NoteBuffer.typingAttributes(for: .fence)), replacementRange: sel)
+                insertAt(NSAttributedString(string: "\u{2028}", attributes: NoteBuffer.typingAttributes(for: .fence)), range: sel)
                 return
             case .table:
                 return
@@ -382,13 +382,13 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         if NSMaxRange(para) < ns.length {
             // Break after the heading's own "\n": the new empty paragraph gets its own plain "\n".
             let at = NSMaxRange(para) + 1
-            insertText(NSAttributedString(string: "\n", attributes: NoteBuffer.typingAttributes(for: .paragraph)),
-                       replacementRange: NSRange(location: at, length: 0))
+            insertAt(NSAttributedString(string: "\n", attributes: NoteBuffer.typingAttributes(for: .paragraph)),
+                       range: NSRange(location: at, length: 0))
             setSelectedRange(NSRange(location: at, length: 0))
         } else {
             tailKind = .paragraph
             let kindAttrs = NoteBuffer.typingAttributes(for: NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: para.location, effectiveRange: nil)))
-            insertText(NSAttributedString(string: "\n", attributes: kindAttrs), replacementRange: sel)
+            insertAt(NSAttributedString(string: "\n", attributes: kindAttrs), range: sel)
         }
         refreshTailTypingAttributes()
     }
@@ -523,7 +523,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// is taken as "the selection".
     override func insertText(_ string: Any, replacementRange requested: NSRange) {
         var replacementRange = requested
-        if !hasMarkedText(), requested.location != NSNotFound, !NSEqualRanges(requested, selectedRange()) {
+        if !insertingAtGivenRange, !hasMarkedText(), requested.location != NSNotFound, !NSEqualRanges(requested, selectedRange()) {
             replacementRange = NSRange(location: NSNotFound, length: 0)
         }
         // A table cell holds no tab and no row break: typed or pasted ones become blanks.
@@ -558,6 +558,15 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         if convertSlashDividerIfTyped() { return }
         // One typed character can complete a typed-markdown trigger (`- `, `**x**`, a bare URL, ...).
         if isPlainText, sel.length == 0, typed.count == 1, let ch = typed.first { applyTypedMarkdown(typed: ch, typedAttributes: typedAttributes) }
+    }
+
+    private var insertingAtGivenRange = false
+
+    /// The editor's own insert at a range that is not the selection (the range is meant, not stale).
+    func insertAt(_ text: NSAttributedString, range: NSRange) {
+        insertingAtGivenRange = true
+        defer { insertingAtGivenRange = false }
+        insertText(text, replacementRange: range)
     }
 
     /// The typing attributes at `location` without the pill or the link of the style they come from, unless the caret is
