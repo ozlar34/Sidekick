@@ -101,6 +101,22 @@ final class NewEditorInlineTests: XCTestCase {
         }
     }
 
+    func testTextTypedAtTheEdgeOfALinkIsPlainAndInsideItStaysInTheLink() {
+        let source = "see [lab](http://u) x\n"
+        var h = NewEditorHost(markdown: source)
+        h.select(range(of: "lab", in: h).upperBound)
+        h.type("Q")
+        XCTAssertEqual(h.savedMarkdown, "see [lab](http://u)Q x\n", "after the label: outside the link")
+        h = NewEditorHost(markdown: source)
+        h.select(range(of: "lab", in: h).location)
+        h.type("Q")
+        XCTAssertEqual(h.savedMarkdown, "see Q[lab](http://u) x\n", "before the label: outside the link")
+        h = NewEditorHost(markdown: source)
+        h.select(range(of: "lab", in: h).location + 1)
+        h.type("Q")
+        XCTAssertEqual(h.savedMarkdown, "see [lQab](http://u) x\n", "inside: part of the link")
+    }
+
     // MARK: dividers
 
     func testADividerIsDrawnAsAHairlineAndTakesNoTextOrMarker() throws {
