@@ -520,10 +520,14 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     ///
     /// The emoji picker can hand over a replacement range captured before the selection moved (FB13789916); honoured, it would
     /// replace the emoji just inserted by the next typed character. Outside a composition, a range that is not the selection
-    /// is taken as "the selection".
+    /// is taken as "the selection". The one exception is the press-and-hold accent popup, which replaces the character just
+    /// before the caret: a non-empty range that ends exactly at an empty selection. The stale picker range seen so far is
+    /// empty, so it never matches; a stale non-empty range ending exactly at the caret could not be told apart and is honoured.
     override func insertText(_ string: Any, replacementRange requested: NSRange) {
         var replacementRange = requested
-        if !insertingAtGivenRange, !hasMarkedText(), requested.location != NSNotFound, !NSEqualRanges(requested, selectedRange()) {
+        let selection = selectedRange()
+        let replacesCharacterBeforeCaret = selection.length == 0 && requested.length > 0 && NSMaxRange(requested) == selection.location
+        if !insertingAtGivenRange, !hasMarkedText(), requested.location != NSNotFound, !NSEqualRanges(requested, selection), !replacesCharacterBeforeCaret {
             replacementRange = NSRange(location: NSNotFound, length: 0)
         }
         // A table cell holds no tab and no row break: typed or pasted ones become blanks.

@@ -273,6 +273,17 @@ final class NewEditorTests: XCTestCase {
         XCTAssertEqual(h.markdown, "party \u{1F389}t")
     }
 
+    /// Press-and-hold accent popup: no marked text, the range is the one character before the caret.
+    func testPressAndHoldAccentReplacesTheCharacterBeforeTheCaret() {
+        let h = NewEditorHost(markdown: "")
+        h.textView.insertText("e", replacementRange: NSRange(location: NSNotFound, length: 0))
+        let caret = h.location
+        h.textView.insertText("\u{E9}", replacementRange: NSRange(location: caret - 1, length: 1))
+        XCTAssertEqual(h.string, "\u{E9}")
+        XCTAssertEqual(h.markdown, "\u{E9}\n", "saved bytes: one accented letter plus the note's trailing newline")
+        XCTAssertEqual(h.location, 1)
+    }
+
     func testAReplacementRangeThatIsTheSelectionOrNotFoundIsHonoured() {
         let h = NewEditorHost(markdown: "hello")
         h.textView.setSelectedRange(NSRange(location: 0, length: 5))
