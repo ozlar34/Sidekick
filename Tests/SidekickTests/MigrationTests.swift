@@ -31,7 +31,7 @@ final class MigrationTests: XCTestCase {
             "meeting-notes": "Meeting notes.md",
             "a-b-plan": "A-B plan.md",
             "time-12-30": "Time- 12-30.md",
-            "dotted": "hidden?.md",
+            "dotted": "hidden-.md",
             "party": "Party \u{1F389}.md",
             "same": "Same.md",
             "same-2": "Same 2.md",
@@ -209,6 +209,25 @@ final class MigrationTests: XCTestCase {
         let made = try backups(parent)
         XCTAssertEqual(made.count, 1, "the half-migrated folder is never backed up as if it were the original")
         XCTAssertEqual(try FolderTree.snapshot(try XCTUnwrap(made.first)), before)
+    }
+
+    /// Characters Obsidian rejects in a note name, one per title; two titles that map to the same name stay distinct.
+    func testTitlesWithCharactersObsidianRejectsBecomeFilenamesWithoutThem() throws {
+        let (_, notes) = try makeParent()
+        let forbidden = Array("?*\"<>|\\/:")
+        var items = forbidden.enumerated().map { i, c in
+            OldFormatFixture.Item(slug: "s\(i)", title: "T\(c)x", body: "body \(i)\n", pinned: false, order: i)
+        }
+        items.append(.init(slug: "tw1", title: "same?name", body: "one\n", pinned: false, order: 20))
+        items.append(.init(slug: "tw2", title: "same*name", body: "two\n", pinned: false, order: 21))
+        try OldFormatFixture.write(into: notes, items: items)
+        _ = try Migration.run(folder: notes, now: today)
+        let mds = try FileManager.default.contentsOfDirectory(atPath: notes.path).filter { $0.hasSuffix(".md") }
+        XCTAssertEqual(mds.count, items.count)
+        for name in mds { XCTAssertNil(name.dropLast(3).firstIndex(where: { forbidden.contains($0) }), "\(name) holds a forbidden character") }
+        XCTAssertEqual(Set(mds.map { $0.lowercased() }).count, items.count, "colliding names stay distinct")
+        XCTAssertEqual(try Data(contentsOf: notes.appendingPathComponent("same-name.md")), Data("one\n".utf8))
+        XCTAssertEqual(try Data(contentsOf: notes.appendingPathComponent("same-name 2.md")), Data("two\n".utf8))
     }
 
     func testAFileThatAppearsAtATargetNameDuringTheMigrationIsNeverOverwritten() throws {

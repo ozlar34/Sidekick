@@ -2,20 +2,23 @@ import Foundation
 
 /// The note's title is its filename without ".md". These rules turn what the user typed into a name.
 ///
-/// Replaced: `/` and `:` (not allowed in a Finder name), control characters and line breaks. Dropped at
+/// Replaced with "-": `/` and `:` (not allowed in a Finder name), `? * " < > | \` (Obsidian rejects them in
+/// a note name), control characters and line breaks. `# ^ [ ]` stay: Obsidian lists such a file and opens
+/// it, they only break `[[links]]` to it, and rewriting "C#" to "C-" would cost more than it protects. Dropped at
 /// the ends: whitespace, leading dots (the file would be hidden and vanish from the list) and trailing
 /// dots. An empty result is "Untitled". Names stay under 200 UTF-8 bytes so ".md" and a number suffix
 /// fit inside the 255-byte limit.
 enum TitleRules {
     static let untitled = "Untitled"
     static let maxBytes = 200
+    private static let replaced: Set<Unicode.Scalar> = ["/", ":", "?", "*", "\"", "<", ">", "|", "\\"]
 
     static func fileBase(forTitle title: String) -> String {
-        let replaced = String(String.UnicodeScalarView(title.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.map { scalar -> Unicode.Scalar in
-            if scalar == "/" || scalar == ":" || isControl(scalar) { return "-" }
+        let cleaned = String(String.UnicodeScalarView(title.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars.map { scalar -> Unicode.Scalar in
+            if replaced.contains(scalar) || isControl(scalar) { return "-" }
             return scalar
         }))
-        var base = trimmed(replaced)
+        var base = trimmed(cleaned)
         if base.utf8.count > maxBytes {
             var cut = ""
             for ch in base {
