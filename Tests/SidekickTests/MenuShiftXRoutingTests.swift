@@ -60,4 +60,12 @@ final class MenuShiftXRoutingTests: XCTestCase {
             XCTAssertNotEqual(picked(c, code: code, shift: true), plain, "Command-Shift-\(c) must not run \(plain)")
         }
     }
+
+    /// Edit > Find: Command-Shift-G must get past the Edit menu's Shift filter to Find Previous.
+    func testFindShortcuts() {
+        XCTAssertEqual(picked("f", code: 3, shift: false), "Find…")
+        XCTAssertEqual(picked("g", code: 5, shift: false), "Find Next")
+        XCTAssertEqual(picked("g", code: 5, shift: true), "Find Previous")
+        XCTAssertEqual(picked("e", code: 14, shift: false), "Use Selection for Find")
+    }
 }

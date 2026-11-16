@@ -141,6 +141,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "a"
         ))
 
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(Self.makeFindMenuItem())
+
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
@@ -668,12 +671,51 @@ extension AppDelegate: NSUserInterfaceValidations {
 }
 
 
+extension AppDelegate {
+    /// Edit > Find: the editor's find bar (⌘F), next and previous match (⌘G, ⇧⌘G), and Use Selection for Find (⌘E).
+    /// Each item sends performFindPanelAction: down the responder chain; its tag names the NSTextFinder action.
+    static func makeFindMenuItem() -> NSMenuItem {
+        let findMenu = NSMenu(title: "Find")
+        // Command-Shift-G would also match Find Next; PlainCommandMenu sends it to Find Previous.
+        let entries: [(String, String, NSEvent.ModifierFlags, NSTextFinder.Action)] = [
+            ("Find…", "f", [.command], .showFindInterface),
+            ("Find Next", "g", [.command], .nextMatch),
+            ("Find Previous", "g", [.command, .shift], .previousMatch),
+            ("Use Selection for Find", "e", [.command], .setSearchString),
+        ]
+        for (title, key, mods, action) in entries {
+            let item = NSMenuItem(title: title, action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = mods
+            item.tag = action.rawValue
+            findMenu.addItem(item)
+        }
+        let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        findItem.submenu = findMenu
+        return findItem
+    }
+}
+
 /// The Edit menu answers Command plus a letter only. AppKit also matches Command-Shift-X, -C, -V and -A to the plain
 /// items (their key equivalent is lowercase), and Edit comes before Format, so Command-Shift-X cut text instead of
-/// reaching Format > Strikethrough. With Shift held the Edit menu declines, except for Redo (Command-Shift-Z).
+/// reaching Format > Strikethrough. With Shift held the Edit menu declines, except for Redo (Command-Shift-Z) and
+/// Find Previous (Command-Shift-G). AppKit would match Command-Shift-G to Find Next (Command-G), which comes first, so
+/// this menu sends it to Find Previous itself.
 final class PlainCommandMenu: NSMenu {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.shift), event.charactersIgnoringModifiers?.lowercased() != "z" { return false }
+        if event.modifierFlags.contains(.shift) {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "z": break
+            case "g": return findPrevious()
+            default: return false
+            }
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    private func findPrevious() -> Bool {
+        let tag = NSTextFinder.Action.previousMatch.rawValue
+        guard let item = items.lazy.compactMap({ $0.submenu?.items.first { $0.tag == tag } }).first,
+              let action = item.action else { return false }
+        return NSApp.sendAction(action, to: item.target, from: item)
     }
 }

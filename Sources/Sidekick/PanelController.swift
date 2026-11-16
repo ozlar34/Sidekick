@@ -222,12 +222,31 @@ final class PanelController {
                 // keyCode 53 == Escape. Gate on panel identity so we don't swallow
                 // Escape elsewhere in the process.
                 if event.keyCode == 53, event.window === self?.panel {
+                    // An open find bar closes first; the next Escape hides the panel.
+                    if self?.closeFindBar() == true { return nil }
                     self?.slideOut()
                     return nil   // swallow so Escape doesn't leak further
                 }
                 return event
             }
         }
+    }
+
+    /// Closes the editor's find bar and puts the caret back in the note. False when no find bar is open.
+    private func closeFindBar() -> Bool {
+        guard let tv = Self.editor(in: panel?.contentView),
+              let scrollView = tv.enclosingScrollView, scrollView.isFindBarVisible else { return false }
+        let hide = NSMenuItem()
+        hide.tag = NSTextFinder.Action.hideFindInterface.rawValue
+        tv.performTextFinderAction(hide)
+        panel?.makeFirstResponder(tv)
+        return true
+    }
+
+    private static func editor(in view: NSView?) -> NoteTextView? {
+        guard let view else { return nil }
+        if let tv = view as? NoteTextView { return tv }
+        return view.subviews.lazy.compactMap { editor(in: $0) }.first
     }
 
     private func removeDismissHandlers() {

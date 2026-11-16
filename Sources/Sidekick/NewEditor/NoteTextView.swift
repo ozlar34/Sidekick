@@ -108,6 +108,9 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         isRichText = true
         importsGraphics = false
         allowsUndo = true
+        // ⌘F shows the find bar above the note (not the old floating Find panel); matches highlight as you type.
+        usesFindBar = true
+        isIncrementalSearchingEnabled = true
         isEditable = true
         isSelectable = true
         // No automatic text mutation.
