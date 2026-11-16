@@ -21,8 +21,10 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     var onFormatStateChange: ((NoteFormatState) -> Void)?
     /// True while `attach` switches notes: SwiftUI is updating then, so the state is published right after.
     var formatStateSuspended = false
-    /// Typing attributes for the next typed text, valid while the caret stays at `location` (set by a typed-markdown conversion).
-    var plainAfterConversion: (location: Int, attributes: [NSAttributedString.Key: Any])?
+    /// The style chosen for the next typed text (an armed Cmd+B/I/U/..., or the plain text right after a typed-markdown
+    /// conversion). It wins over the style of the characters before the caret, and lasts while the caret stays at `location`
+    /// (any other selection drops it) and until one character is typed.
+    var armedTyping: (location: Int, attributes: [NSAttributedString.Key: Any])?
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
     /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
@@ -130,7 +132,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
             DispatchQueue.main.async { [weak self] in self?.publishFormatState() }
         }
         content.savedSelection = selectedRange()
-        plainAfterConversion = nil
+        armedTyping = nil
         content.storage.delegate = nil
         content = new
         pendingStyleRange = nil
@@ -245,6 +247,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelectingFlag)
+        if let armed = armedTyping, selectedRange().length > 0 || selectedRange().location != armed.location { armedTyping = nil }
         refreshTailTypingAttributes()
         publishFormatState()
     }
@@ -531,11 +534,12 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
             replace(NSRange(location: para.location, length: 1), with: lineBreak(.paragraph), caret: para.location)
         }
         if isPlainText, sel.length == 0 {
-            // Right after a typed-markdown conversion the next text is plain: the mark that was just made does not run on.
-            if let after = plainAfterConversion, after.location == sel.location { typingAttributes = after.attributes }
+            // An armed style (09, or the plain text right after a typed-markdown conversion) wins over what the characters
+            // before the caret would give; pill and link still stay out of what is typed at their edge (08).
+            if let armed = armedTyping, armed.location == sel.location { typingAttributes = typingAttributesAtEdge(of: sel.location, armed: armed.attributes) }
             else { typingAttributes = typingAttributesAtEdge(of: sel.location) }
         }
-        plainAfterConversion = nil
+        armedTyping = nil
         let typedAttributes = typingAttributes
         super.insertText(string, replacementRange: replacementRange)
         guard !hasMarkedText() else { return }
@@ -544,16 +548,19 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         if isPlainText, sel.length == 0, typed.count == 1, let ch = typed.first { applyTypedMarkdown(typed: ch, typedAttributes: typedAttributes) }
     }
 
-    /// The typing attributes at `location` without the pill or the link of the character before it, unless the
-    /// caret is inside that link (the character after carries the same one).
-    private func typingAttributesAtEdge(of location: Int) -> [NSAttributedString.Key: Any] {
-        var attrs = typingAttributes
-        guard location > 0, location <= (string as NSString).length, let storage = textStorage,
-              let before = storage.attribute(.noteStyle, at: location - 1, effectiveRange: nil) as? NoteRunStyle else { return attrs }
+    /// The typing attributes at `location` without the pill or the link of the style they come from, unless the caret is
+    /// inside that link (the characters on both sides carry it). They come from the characters before the caret, or from
+    /// `armed` (the style chosen for the next text) when there is one.
+    private func typingAttributesAtEdge(of location: Int, armed: [NSAttributedString.Key: Any]? = nil) -> [NSAttributedString.Key: Any] {
+        var attrs = armed ?? typingAttributes
+        guard location <= (string as NSString).length, let storage = textStorage else { return attrs }
+        let before = location > 0 ? storage.attribute(.noteStyle, at: location - 1, effectiveRange: nil) as? NoteRunStyle : nil
         let after = location < storage.length ? storage.attribute(.noteStyle, at: location, effectiveRange: nil) as? NoteRunStyle : nil
-        let insideLink = before.link != nil && after?.link == before.link
-        let rest = before.removing(pill: before.pill != nil, link: before.link != nil && !insideLink)
-        if before.pill != nil { attrs.removeValue(forKey: .attachment) }
+        let source = armed == nil ? before : attrs[.noteStyle] as? NoteRunStyle
+        guard let style = source else { return attrs }
+        let insideLink = style.link != nil && before?.link == style.link && after?.link == style.link
+        let rest = style.removing(pill: style.pill != nil, link: style.link != nil && !insideLink)
+        if style.pill != nil { attrs.removeValue(forKey: .attachment) }
         if let rest { attrs[.noteStyle] = rest } else { attrs.removeValue(forKey: .noteStyle) }
         return attrs
     }
