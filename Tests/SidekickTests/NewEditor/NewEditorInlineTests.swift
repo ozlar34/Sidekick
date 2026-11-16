@@ -281,6 +281,16 @@ final class NewEditorInlineTests: XCTestCase {
 
     // MARK: Cmd+click and hover
 
+    /// The click helper must not depend on its queued mouse-up reaching NSTextView's tracking loop (it never does on the CI runner).
+    func testClickReturnsAndPlacesTheCaretEvenWhenTheQueuedMouseUpNeverArrives() {
+        let h = NewEditorHost(markdown: "first line\nsecond line\n")
+        h.select(h.length)
+        let start = Date()
+        h.click(at: NSPoint(x: 20, y: h.caret.midY - 20), queueMouseUp: false)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "click returned by its own backstop (a hang is unbounded; 5 s leaves room for a loaded runner)")
+        XCTAssertLessThan(h.location, h.length, "and placed the caret")
+    }
+
     func testCmdClickOpensTheAddressAndAPlainClickPlacesTheCaret() {
         let h = NewEditorHost(markdown: "see https://e.co/p and [label](http://x.y/z) here\nsecond line\n")
         var opened: [String] = []
