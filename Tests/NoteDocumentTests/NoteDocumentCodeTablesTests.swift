@@ -137,9 +137,14 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
             doc.apply(.insertText(block: i, offset: gen.int(before.text.utf16.count + 1), text: typed))
             let after = doc.blocks[i]
             // A line break can cut a content line so that its front reads as a closing fence: the fence is then longer
-            // (same info word), never ended early.
-            let same = after.prefix == before.prefix && after.trailer == before.trailer
-            let ok = after.kind == .fence && after.fenceInfo == before.fenceInfo && (same || typed.contains("\n"))
+            // (same character, same info word, closing line still there), never changed otherwise.
+            func fenceChar(_ b: Block) -> Character? { b.prefix.first }
+            func fenceLength(_ b: Block) -> Int { b.prefix.prefix(while: { $0 == b.prefix.first }).count }
+            let sameFence = fenceChar(after) == fenceChar(before) && fenceLength(after) >= fenceLength(before)
+                && after.fenceInfo == before.fenceInfo && !after.trailer.isEmpty == !before.trailer.isEmpty
+                && after.trailer.first == before.trailer.first
+            let unchanged = after.prefix == before.prefix && after.trailer == before.trailer
+            let ok = after.kind == .fence && sameFence && (unchanged || typed.contains("\n"))
             XCTAssertTrue(ok, "seed \(seed) \(md.debugDescription): \(before.prefix.debugDescription)/\(before.trailer.debugDescription) -> \(after.prefix.debugDescription)/\(after.trailer.debugDescription)")
             return ok
         }
@@ -178,10 +183,9 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
             doc.apply(.insertText(block: i, offset: places[gen.int(places.count)], text: "k"))
             var ok = withoutTable(doc).utf8.elementsEqual(before.utf8)
             XCTAssertTrue(ok, "seed \(seed): another block changed in \(md.debugDescription)")
-            // Valid pipe table: every line starts with `|`, the second one is a delimiter row of the header's width.
-            let rows = doc.markdown().components(separatedBy: "\n").filter { $0.hasPrefix("|") }
-            XCTAssertTrue(rows.count >= 2 && doc.blocks[i].kind == .table, "seed \(seed): \(rows)")
+            // Valid pipe table: it reads back as a table with the same cells.
             let reloaded = NoteDocument(markdown: doc.markdown())
+            XCTAssertTrue(doc.blocks[i].kind == .table && reloaded.blocks[i].kind == .table, "seed \(seed): \(doc.markdown().debugDescription)")
             XCTAssertEqual(reloaded, doc, "seed \(seed)")
             return ok && reloaded == doc
         }
@@ -207,6 +211,94 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
         XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc)
     }
 
+    // MARK: table shapes of the old editor (MarkdownInlineParser.findTableBlocks)
+
+    /// Every shape the old detector drew as a grid: a line with a pipe, then a delimiter line of `| - :` and blanks with
+    /// a pipe and a dash, then lines with a pipe. Header and delimiter widths need not agree there.
+    static let oldTableShapes: [(name: String, md: String, rows: Int)] = [
+        ("outer pipes", "| a | b |\n|---|---|\n| 1 | 2 |\n", 2),
+        ("no outer pipes", "a | b\n--|--\n1 | 2\n", 2),
+        ("no outer pipes, spaced", "x | y\n--- | ---\nbody | row\nmore | rows\n", 3),
+        ("alignment colons", "| a | b | c |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n", 2),
+        ("colons without outer pipes", "x | y\n:--- | ---:\n1 | 2", 2),
+        ("indented rows", "  | a | b |\n  |---|---|\n  | 1 | 2 |\n", 2),
+        ("tab indented, pipe-less", "\ta | b\n\t-|-\n\t1 | 2\n", 2),
+        ("leading pipe only", "| a | b\n|---|---\n| 1 | 2\n", 2),
+        ("trailing pipe only", "a | b |\n--|--|\n1 | 2 |\n", 2),
+        ("header only", "a|b\n-|-\n", 1),
+        ("width mismatch", "| a | b |\n|---|\n| 1 |\n", 2),
+        ("ragged body", "|x|y|z|\n|-|-|-|\n|1|\n| 1 | 2 | 3 | 4 |\n", 3),
+        ("single column", "| a |\n|---|\n| 1 |\n", 2),
+        ("crlf", "a | b\r\n--|--\r\n1 | 2\r\n", 2),
+    ]
+
+    func testEveryTableShapeOfTheOldEditorLoadsAsATableAndKeepsItsBytes() {
+        for (name, md, _) in Self.oldTableShapes {
+            for text in [md, "before\n\n" + md + "\nafter\n"] {
+                let doc = NoteDocument(markdown: text)
+                XCTAssertEqual(doc.blocks.filter { $0.kind == .table }.count, 1, "\(name): \(text.debugDescription)")
+                XCTAssertEqual(doc.markdown(), text, name)
+                // An edit elsewhere leaves the table's bytes alone.
+                var other = doc
+                if let i = other.blocks.firstIndex(where: { $0.kind == .paragraph && !$0.runs.isEmpty }) {
+                    other.apply(.insertText(block: i, offset: 0, text: "Z"))
+                    XCTAssertEqual(other.markdown(), text.replacingOccurrences(of: "before", with: "Zbefore"), name)
+                }
+            }
+        }
+    }
+
+    func testCellEditKeepsAValidTableOfTheSameShape() {
+        for (name, md, rows) in Self.oldTableShapes {
+            var doc = NoteDocument(markdown: md)
+            guard let t = doc.blocks.firstIndex(where: { $0.kind == .table }) else { XCTFail(name); continue }
+            let before = doc.blocks[t].text.components(separatedBy: "\u{2028}")
+            doc.apply(.insertText(block: t, offset: 0, text: "K"))
+            let reloaded = NoteDocument(markdown: doc.markdown())
+            XCTAssertEqual(reloaded, doc, name)
+            XCTAssertEqual(reloaded.blocks.map(\.kind), [.table], "\(name): \(doc.markdown().debugDescription)")
+            let after = reloaded.blocks[t].text.components(separatedBy: "\u{2028}")
+            XCTAssertEqual(after.count, rows, name)
+            XCTAssertEqual(after.dropFirst().joined(), before.dropFirst().joined(), "\(name): only the edited cell changes")
+            XCTAssertTrue(after[0].hasPrefix("K"), name)
+            // Written in the regular layout, with a delimiter row as wide as the header.
+            let lines = doc.markdown().components(separatedBy: "\n")
+            XCTAssertTrue(lines[0].hasPrefix("| K"), "\(name): \(lines[0])")
+            func width(_ l: String) -> Int {
+                var cells = l.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+                if l.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("|") { cells.removeFirst() }
+                if cells.count > 1, cells.last!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { cells.removeLast() }
+                return cells.count
+            }
+            XCTAssertEqual(width(lines[1]), width(lines[0]), name)
+        }
+    }
+
+    func testALineWithAPipeWithoutADelimiterRowStaysAParagraph() {
+        for md in ["a | b\nc | d\n", "a | b\n", "a | b\n\n--|--\n", "x | y\n--\n", "x | y\n---\n1 | 2\n", "a \\| b\n--|--\n",
+                   "`a|b`\n-|-\n", "- a | b\n--|--\n", "# a | b\n--|--\n", "> a | b\n--|--\n"] {
+            let doc = NoteDocument(markdown: md)
+            XCTAssertFalse(doc.blocks.contains { $0.kind == .table }, md.debugDescription)
+            XCTAssertEqual(doc.markdown(), md)
+        }
+        // A text line with a pipe directly below a table is a row of it (as in the old editor); after a blank it is text.
+        XCTAssertEqual(NoteDocument(markdown: "a|b\n-|-\nrow | x\n").blocks.map(\.kind), [.table])
+        XCTAssertEqual(NoteDocument(markdown: "a|b\n-|-\n\nrow | x\n").blocks.map(\.kind), [.table, .paragraph, .paragraph])
+    }
+
+    func testPipeLinesAreWrittenEscapedWhenTheyWouldJoinATable() {
+        var doc = NoteDocument(markdown: "a|b\n-|-\n\nnote | x\n")
+        doc.apply(.remove(at: 1))                    // the blank line between the table and the text goes
+        XCTAssertEqual(doc.blocks.map(\.kind), [.table, .paragraph])
+        XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc)
+        XCTAssertTrue(doc.markdown().contains("note \\| x"), doc.markdown())
+        // Text typed into a paragraph above a delimiter-looking line.
+        var two = NoteDocument(markdown: "x\n--|--\n")
+        two.apply(.insertText(block: 0, offset: 1, text: " | y"))
+        XCTAssertEqual(NoteDocument(markdown: two.markdown()), two)
+        XCTAssertEqual(two.blocks.map(\.kind), [.paragraph, .paragraph])
+    }
+
     // MARK: unclosed fence, corner cases
 
     func testUnclosedFenceIsText() {
@@ -216,7 +308,6 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
         XCTAssertEqual(doc.markdown(), md)
         // A header row without a delimiter row is text as well.
         XCTAssertEqual(NoteDocument(markdown: "| a | b |\n| c | d |\n").blocks.map(\.kind), [.paragraph, .paragraph])
-        XCTAssertEqual(NoteDocument(markdown: "| a | b |\n|---|\n").blocks.map(\.kind), [.paragraph, .paragraph])
     }
 
     func testLookalikeLinesAreEscapedWhenAFenceArrives() {

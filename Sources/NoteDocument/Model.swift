@@ -108,6 +108,9 @@ public struct Block: Equatable, Sendable {
         let trailer: String
     }
     var origin: Origin?
+    /// Write the pipes of the text escaped (set when a text line would otherwise read as a table row). Not part of
+    /// the block's content: ignored by `==`.
+    var escapesPipes = false
 
     /// Visible text of the block: the run texts joined (a pill counts as its address).
     public var text: String { runs.map(\.text).joined() }
@@ -159,7 +162,7 @@ public struct Block: Equatable, Sendable {
             inner = inner.isEmpty ? "\n" : inner
             prefix = ""
             let columns = Table.rows(from: runs).first?.count ?? 1
-            if BlockSyntax.separatorCount(Array(trailer.unicodeScalars)) != columns { trailer = BlockSyntax.defaultSeparator(columns: columns) }
+            if BlockSyntax.separatorCount(Array(trailer.unicodeScalars)) == nil { trailer = BlockSyntax.defaultSeparator(columns: columns) }
         default:
             trailer = ""; inner = ""
         }
@@ -247,7 +250,7 @@ public struct Block: Equatable, Sendable {
             var lines = [line(rows[0]), trailer]
             lines += rows.dropFirst().map(line)
             return lines.joined(separator: inner)
-        default: return prefix + InlineWriter.write(runs, kind: kind)
+        default: return prefix + InlineWriter.write(runs, kind: kind, escapePipes: escapesPipes)
         }
     }
 
@@ -323,9 +326,9 @@ public struct Block: Equatable, Sendable {
         return merge(pilled)
     }
 
-    /// A link address cannot hold a line break or `)` (the reader ends the address there).
+    /// A link address cannot hold a line break, `)` (the reader ends the address there) or `|` (it would split a table row).
     static func sanitizeURL(_ url: String) -> String {
-        String(url.unicodeScalars.filter { $0 != "\n" && $0 != "\r" }.map { $0 == ")" ? "%29" : String($0) }.joined())
+        String(url.unicodeScalars.filter { $0 != "\n" && $0 != "\r" }.map { $0 == ")" ? "%29" : $0 == "|" ? "%7C" : String($0) }.joined())
     }
 }
 

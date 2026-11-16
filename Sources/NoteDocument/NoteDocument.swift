@@ -190,19 +190,25 @@ public struct NoteDocument: Equatable, Sendable {
         repairLookalikes()
     }
 
-    /// An unedited paragraph is written from its file bytes, so a line that only looks like the start of a code block
-    /// or table row (an unclosed fence, a row without delimiter row) stays text until an edit puts a fence or a
-    /// row next to it, or two of them next to each other. Then it is written again with escapes (fidelity rule 3).
+    /// A text line can look like the start of a code block or like a table row: an unclosed fence, a line with a pipe
+    /// and no delimiter row below it. It stays text until an edit puts a fence or table next to it, or two such lines
+    /// next to each other. Then those lines are written again with their fence characters and pipes escaped
+    /// (fidelity rule 3).
     private mutating func repairLookalikes() {
-        let lookalikes = blocks.indices.filter { k in
-            blocks[k].kind == .paragraph && blocks[k].origin != nil && "`~|".unicodeScalars.contains { $0 == blocks[k].body.unicodeScalars.first }
+        func isLookalike(_ b: Block) -> Bool {
+            guard b.kind == .paragraph else { return false }
+            let line = Array(b.body.unicodeScalars)
+            return BlockSyntax.fenceOpen(line) != nil || BlockSyntax.hasStructuralPipe(line)
         }
+        let lookalikes = blocks.indices.filter { isLookalike(blocks[$0]) }
         guard !lookalikes.isEmpty, lookalikes.count > 1 || blocks.contains(where: { $0.kind.isMultiline }) else { return }
         if NoteDocument(markdown: markdown()) == self { return }
         for k in lookalikes {
             var b = blocks[k]
             b.origin = nil
+            b.escapesPipes = true
             var settled = NoteDocument.settle(b)
+            settled.escapesPipes = true
             settled.id = nextID; nextID += 1
             blocks[k] = settled
         }
@@ -258,7 +264,7 @@ public struct NoteDocument: Equatable, Sendable {
     /// A code block or table starting at line `k`, and how many lines it takes. An opening fence without a closing
     /// line, and a header row without a delimiter row, are not blocks (the lines stay paragraphs).
     private static func parseMultiline(_ lines: [(text: String, term: String)], at k: Int, id: Int) -> (Block, Int)? {
-        guard let first = lines[k].text.unicodeScalars.first, first == "`" || first == "~" || first == "|" else { return nil }
+        guard lines[k].text.utf8.contains(where: { $0 == 0x60 || $0 == 0x7E || $0 == 0x7C }) else { return nil }   // ` ~ |
         let head = Array(lines[k].text.unicodeScalars)
         func source(_ range: Range<Int>) -> String {
             range.map { lines[$0].text + ($0 == range.upperBound - 1 ? "" : lines[$0].term) }.joined()
@@ -270,10 +276,10 @@ public struct NoteDocument: Equatable, Sendable {
                               trailer: lines[close].text, inner: lines[k].term, origin: nil)
             return (withOrigin(block, source: source(k..<(close + 1))), close + 1 - k)
         }
-        guard k + 1 < lines.count, let header = BlockSyntax.rowCells(head),
-              BlockSyntax.separatorCount(Array(lines[k + 1].text.unicodeScalars)) == header.count else { return nil }
+        guard k + 1 < lines.count, BlockSyntax.isTableLine(head), let header = BlockSyntax.rowCells(head),
+              BlockSyntax.separatorCount(Array(lines[k + 1].text.unicodeScalars)) != nil else { return nil }
         var end = k + 2
-        while end < lines.count, lines[end].text.unicodeScalars.first == "|" { end += 1 }
+        while end < lines.count, BlockSyntax.isTableLine(Array(lines[end].text.unicodeScalars)) { end += 1 }
         let rows = [header] + lines[(k + 2)..<end].map { BlockSyntax.rowCells(Array($0.text.unicodeScalars))! }
         let grid = rows.map { row in row.map(Table.readCell) }
         let block = Block(id: id, kind: .table, runs: Table.flatten(grid), prefix: "", terminator: lines[end - 1].term,
@@ -334,13 +340,21 @@ public struct NoteDocument: Equatable, Sendable {
                   trailer: block.trailer, inner: block.inner, origin: nil)
         }
         if block.kind == .table {
-            // Every cell is settled on its own, as the text between two pipes.
+            // Every cell is settled on its own, as the text between two pipes. A delimiter row of another width than
+            // the header is replaced (a table that was edited is written regularly).
             let cells = Table.rows(from: block.runs).map { row in row.map { cell in
                 settleRuns(cell) { Table.readCell(Table.cellText($0)) == Table.normalizeCell($0) }
             } }
-            return rebuilt(Table.flatten(cells))
+            var out = Block(id: block.id, kind: .table, runs: Table.flatten(cells), prefix: "", terminator: block.terminator,
+                            trailer: block.trailer, inner: block.inner, origin: nil)
+            if BlockSyntax.separatorCount(Array(out.trailer.unicodeScalars)) != cells[0].count {
+                out = Block(id: block.id, kind: .table, runs: out.runs, prefix: "", terminator: block.terminator,
+                            trailer: BlockSyntax.defaultSeparator(columns: cells[0].count), inner: block.inner, origin: nil)
+            }
+            return out
         }
         func fixed(_ b: Block) -> Bool {
+            var b = b; b.escapesPipes = block.escapesPipes
             let p = parseLine(b.body, id: b.id, terminator: b.terminator)
             return p.kind == b.kind && p.runs == b.runs && p.prefix.utf8.elementsEqual(b.prefix.utf8)
         }

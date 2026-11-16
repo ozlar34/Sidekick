@@ -79,11 +79,17 @@ struct DocumentGenerator {
             }
             return ([open] + content + [close]).joined(separator: eol)
         case .table:
+            // The shapes the old editor drew as a grid: outer pipes optional, indent, ragged rows, `:` in the delimiter row.
+            let indent = pick(["", "", "", "  ", "\t"])
+            let outer = pick([true, true, false])
             func row(_ cells: Int) -> String {
-                return "|" + (0..<cells).map { _ in pick([" ", "", "  "]) + (int(6) == 0 ? "" : inline().replacingOccurrences(of: "|", with: "\\|")) + pick([" ", "", "  "]) + "|" }.joined()
+                let body = (0..<cells).map { _ in pick([" ", "", "  "]) + (int(6) == 0 ? "" : inline().replacingOccurrences(of: "|", with: "\\|")) + pick([" ", "", "  "]) }
+                    .joined(separator: "|")
+                return indent + (outer ? "|" + body + "|" : (cells == 1 ? body + "|" : body))
             }
             let n = 1 + int(3)
-            let sep = "|" + (0..<n).map { _ in pick([" --- ", "---", ":--", "--:", " :-: ", "----"]) + "|" }.joined()
+            let cells = (0..<n).map { _ in pick([" --- ", "---", ":--", "--:", " :-: ", "----", "-"]) }.joined(separator: "|")
+            let sep = indent + (outer ? "|" + cells + "|" : (n == 1 ? cells + "|" : cells))
             return ([row(n), sep] + (0..<int(4)).map { _ in row(1 + int(4)) }).joined(separator: eol)
         case .literalOther:
             return pick(["```", "| a | b |", "![i](x)", "    indented", "  # indented", "+ plus", "-x", "1.x", ">x", "- [ ]x", "- []", "* * *", "- - -", "--", "<div>", "[^1]: n"])

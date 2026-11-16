@@ -23,6 +23,8 @@ enum Corpus {
         .init(name: "code-block-edges", text: "```\n```\n```\n\n```\n```c++ x\nunclosed at the end\n"),
         .init(name: "unclosed-fence-is-text", text: "```swift\n# heading\n**bold**\n- item\n"),
         .init(name: "tables", text: "| a | b |\n|---|---|\n| **1** | `2` |\n\n|x|y|z|\n| :-- | :-: | --: |\n|1|\n| [l](http://x.y) | a \\| b | https://a.b |\nafter\n"),
+        .init(name: "tables-old-editor-shapes", text: "a | b\n--|--\n1 | 2\n\n  | x | y |\n  |:-:|--:|\n  | 1 | 2 |\n\nh1 | h2 | h3\n--- | --- | ---\nonly | two\n\n\tp|q\n\t-|-\n"),
+        .init(name: "pipe-text-near-tables", text: "a | b\nc | d\n\nx | y\n--\n\n`a|b`\n-|-\n\n# h | i\n--|--\n- l | m\n--|--\n"),
         .init(name: "table-near-misses", text: "| a | b |\n| c | d |\n|---|\n| a |\n|--|\n| a | b |\n|---|-x-|\n a | b\n--|--\n|\n|-|\n"),
         .init(name: "urls-and-links", text: "see https://example.com/a_b_c and [label](http://x.y/__z__) now\n"),
         .init(name: "unicode", text: "# Caf\u{e9} e\u{301} \u{1F44D}\u{1F3FD} \u{4E2D}\u{6587}\n**\u{1F600}** \u{FEFF}bom-ish\n"),

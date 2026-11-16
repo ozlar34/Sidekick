@@ -30,7 +30,7 @@ enum InlineReader {
     }
 
     /// Length of the bare URL starting at `i` (must be inside `hi`), or nil. Needs `http://` or `https://`, at least
-    /// one more scalar, and ends at a blank or one of `< > ` * ~ [ ] \`; trailing punctuation is not part of it.
+    /// one more scalar, and ends at a blank or one of `< > ` * ~ [ ] \ |`; trailing punctuation is not part of it.
     static func urlLength(_ s: [Unicode.Scalar], at i: Int, upTo hi: Int) -> Int? {
         let scheme = "https://".unicodeScalars.map { $0 }
         var head = 0
@@ -38,7 +38,7 @@ enum InlineReader {
         else if s[i...].starts(with: "http://".unicodeScalars) { head = 7 }
         else { return nil }
         var end = i + head
-        while end < hi, !isBlank(s[end]), !"<>`*~[]\\".unicodeScalars.contains(s[end]) { end += 1 }
+        while end < hi, !isBlank(s[end]), !"<>`*~[]\\|".unicodeScalars.contains(s[end]) { end += 1 }
         while end > i + head {
             let last = s[end - 1]
             if ".,;:!?'\"".unicodeScalars.contains(last) { end -= 1; continue }
@@ -223,17 +223,19 @@ enum InlineReader {
 }
 
 enum InlineWriter {
+    /// Set by `write` for the duration of one call: plain `|` is written escaped.
+    nonisolated(unsafe) private static var pipesEscaped = false
     /// Generates inline text such that `InlineReader.read` gives the same runs back (fidelity rule 3), as far as the
     /// forms allow; `NoteDocument.settle` repairs the model where they do not.
     /// Marks nest in a fixed order: link, underline, strikethrough, bold, italic, then the leaf (code, pill, text).
-    static func write(_ runs: [Run], kind: BlockKind) -> String {
+    static func write(_ runs: [Run], kind: BlockKind, escapePipes: Bool = false) -> String {
+        pipesEscaped = escapePipes
+        defer { pipesEscaped = false }
         var w = emit(runs, 0..<runs.count, layer: 0)
         let s = Array(w.unicodeScalars)
         switch kind {
         case .paragraph:
-            if s.first == "|" {
-                w = "\\" + w          // a line starting with `|` could join a table
-            } else if let first = s.first, first == "\\", s.count > 1, !InlineReader.isEscapable(s[1]),
+            if let first = s.first, first == "\\", s.count > 1, !InlineReader.isEscapable(s[1]),
                BlockSyntax.looksLikeBlock(Array(s.dropFirst())) {
                 w = "\\" + w
             } else if BlockSyntax.looksLikeBlock(s) {
@@ -315,6 +317,7 @@ enum InlineWriter {
             case "\\":
                 if let nx = next { escape = InlineReader.isEscapable(nx) } else { escape = hasNext || marked }
             case "`": escape = true
+            case "|": escape = pipesEscaped
             case "~":
                 escape = run.strikethrough || prev == "~" || next == "~" || ((prev == nil || next == nil) && (hasPrev || hasNext || marked))
             case "<":

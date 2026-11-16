@@ -15,6 +15,9 @@ import NoteDocument
 ///      -> FuzzConfig (FuzzSupport.swift), used by every *_generated test; budget asserted in testBudgetNotExceeded helper
 /// 6. no type imports a view framework
 ///      -> testModuleImportsOnlyFoundation (scans Sources/NoteDocument)
+/// Text that could read as a fence opener or table row (a pipe or a fence character): a test-side approximation.
+private func BlockSyntax_looksLikeFenceOrRow(_ text: String) -> Bool { text.contains("|") || text.hasPrefix("`") || text.hasPrefix("~") }
+
 final class NoteDocumentTests: XCTestCase {
 
     // MARK: helpers
@@ -75,13 +78,18 @@ final class NoteDocumentTests: XCTestCase {
             let kind = gen.kind()
             // A new code block or table can pair with a text line that only looks like a fence or a row (an unclosed
             // fence, a row without delimiter row); that line is then written escaped, see testLookalikeLinesAreEscapedWhenAFenceArrives.
-            let lookalike = doc.blocks.contains { $0.kind == .paragraph && "`~|".contains($0.text.first ?? " ") }
+            let lookalike = doc.blocks.contains { $0.kind == .paragraph && (BlockSyntax_looksLikeFenceOrRow($0.text)) }
             doc.apply(.replace(at: i, kind: kind, runs: gen.runs()))
-            guard doc.blocks.count == count, !(kind.isMultiline && lookalike) else { return true }   // adjacent tables become one block
-            // A block spans one or more lines: compare the file without block `i`, before and after.
-            var before = NoteDocument(markdown: md), after = doc
+            guard doc.blocks.count == count else { return true }   // adjacent tables become one block
+            // A block spans one or more lines: compare the file without block `i`, before and after. Text lines that
+            // look like a table row or fence may be rewritten escaped (their visible text is unchanged; settle may drop a
+            // mark that cannot be written back).
+            let pristine = NoteDocument(markdown: md)
+            var before = pristine, after = doc
             before.apply(.remove(at: i)); after.apply(.remove(at: i))
-            let ok = bytes(before.markdown()) == bytes(after.markdown())
+            let ok = lookalike
+                ? (0..<before.blocks.count).allSatisfy { j in j >= after.blocks.count || before.blocks[j].kind == after.blocks[j].kind && before.blocks[j].text == after.blocks[j].text }
+                : bytes(before.markdown()) == bytes(after.markdown())
             XCTAssertTrue(ok, "seed \(seed) edit block \(i) of \(md.debugDescription) -> \(doc.markdown().debugDescription)")
             return ok
         }
