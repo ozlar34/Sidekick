@@ -465,7 +465,8 @@ final class NewEditorInlineTests: XCTestCase {
     /// or quote, just clears the kind (nothing is removed and the line becomes a paragraph). Forward Delete removes the
     /// character after the caret, a divider's line included, and nothing at the end of the note. Undo restores the bytes.
     func testBackspaceAndDeleteRemoveExactlyOneUnitOnGeneratedNotes() {
-        for seed in seedList {
+        // Every location and both keys cost about 30 times a sampled run, so this test takes at most 15 seeds (25 took almost 6 minutes, 100 over 12).
+        for seed in seedList.prefix(15) {
             let h = NewEditorHost(markdown: note(seed))
             for loc in 0...h.length {
                 for key in [NewEditorHost.Key.backspace, .forwardDelete] {
@@ -473,7 +474,8 @@ final class NewEditorInlineTests: XCTestCase {
                     let original = h.string, ns = original as NSString
                     let originalMarkdown = h.markdown
                     func kind(_ at: Int, _ host: NewEditorHost) -> BlockKind {
-                        NoteBuffer.kind(fromAttribute: host.textView.textStorage?.attribute(.noteBlockKind, at: min(at, max(host.length - 1, 0)), effectiveRange: nil))
+                        if host.length == 0 { return .paragraph }
+                        return NoteBuffer.kind(fromAttribute: host.textView.textStorage?.attribute(.noteBlockKind, at: min(at, max(host.length - 1, 0)), effectiveRange: nil))
                     }
                     let kindBefore = kind(loc, h)
                     h.select(loc)
