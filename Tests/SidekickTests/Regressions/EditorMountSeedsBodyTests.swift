@@ -17,6 +17,8 @@ final class EditorMountSeedsBodyTests: XCTestCase {
                         pinned: false, order: 0, modified: Date(), createdAt: Date())
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("EditorMountSeedsBodyTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(body.utf8).write(to: folder.appendingPathComponent(note.filename))   // the open note reads its file
         let store = try NoteStore(folder: folder, seededNotes: [note])
         defer { try? FileManager.default.removeItem(at: folder) }
         let panelState = PanelState()
