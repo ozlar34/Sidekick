@@ -76,3 +76,10 @@ public extension Run {
         return r
     }
 }
+
+public extension Run {
+    /// A typed link address as a link keeps it: trimmed, no line breaks, `)` and `|` escaped (as `Block.normalize` does). Empty = no address.
+    static func linkAddress(_ raw: String) -> String {
+        Block.sanitizeURL(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}

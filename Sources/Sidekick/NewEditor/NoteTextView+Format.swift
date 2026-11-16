@@ -40,14 +40,14 @@ extension NoteTextView {
 
     // MARK: Inline marks
 
-    private func holdsMarks(_ kind: BlockKind) -> Bool {
+    func holdsMarks(_ kind: BlockKind) -> Bool {
         switch kind {
         case .fence, .table, .divider: return false
         default: return true
         }
     }
 
-    private func run(_ attrs: [NSAttributedString.Key: Any]) -> Run {
+    func run(_ attrs: [NSAttributedString.Key: Any]) -> Run {
         var r = Run("")
         r.bold = (attrs[.noteBold] as? String).flatMap(BoldDelimiter.init(rawValue:))
         if let s = attrs[.noteStyle] as? NoteRunStyle {
@@ -56,7 +56,7 @@ extension NoteTextView {
         return r
     }
 
-    private func write(_ r: Run, into attrs: inout [NSAttributedString.Key: Any]) {
+    func write(_ r: Run, into attrs: inout [NSAttributedString.Key: Any]) {
         if let d = r.bold { attrs[.noteBold] = d.rawValue } else { attrs.removeValue(forKey: .noteBold) }
         if let style = NoteRunStyle(r, pillID: 0) { attrs[.noteStyle] = style } else { attrs.removeValue(forKey: .noteStyle) }
     }
