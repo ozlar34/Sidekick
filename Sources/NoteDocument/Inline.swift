@@ -2,11 +2,11 @@ import Foundation
 
 /// Reads the inline marks of one line: bold, italic (`*` or `_`), underline (`<u>`), strikethrough (`~~`),
 /// inline code, links, and URL pills (a bare URL, or a link whose label equals its address).
-/// Backslash escapes `* _ \ ` ~ < [ ] : !`. Inside a link label there are no links and no bare URLs. Everything else is literal text.
+/// Backslash escapes `* _ \ ` ~ < [ ] : ! |`. Inside a link label there are no links and no bare URLs. Everything else is literal text.
 enum InlineReader {
     static func isEscapable(_ c: Unicode.Scalar) -> Bool {
         switch c {
-        case "*", "_", "\\", "`", "~", "<", "[", "]", ":", "!": return true
+        case "*", "_", "\\", "`", "~", "<", "[", "]", ":", "!", "|": return true
         default: return false
         }
     }
@@ -30,7 +30,7 @@ enum InlineReader {
     }
 
     /// Length of the bare URL starting at `i` (must be inside `hi`), or nil. Needs `http://` or `https://`, at least
-    /// one more scalar, and ends at a blank or one of `< > ` * ~ [ ] \`; trailing punctuation is not part of it.
+    /// one more scalar, and ends at a blank or one of `< > ` * ~ [ ] \ |`; trailing punctuation is not part of it.
     static func urlLength(_ s: [Unicode.Scalar], at i: Int, upTo hi: Int) -> Int? {
         let scheme = "https://".unicodeScalars.map { $0 }
         var head = 0
@@ -38,7 +38,7 @@ enum InlineReader {
         else if s[i...].starts(with: "http://".unicodeScalars) { head = 7 }
         else { return nil }
         var end = i + head
-        while end < hi, !isBlank(s[end]), !"<>`*~[]\\".unicodeScalars.contains(s[end]) { end += 1 }
+        while end < hi, !isBlank(s[end]), !"<>`*~[]\\|".unicodeScalars.contains(s[end]) { end += 1 }
         while end > i + head {
             let last = s[end - 1]
             if ".,;:!?'\"".unicodeScalars.contains(last) { end -= 1; continue }
@@ -226,8 +226,8 @@ enum InlineWriter {
     /// Generates inline text such that `InlineReader.read` gives the same runs back (fidelity rule 3), as far as the
     /// forms allow; `NoteDocument.settle` repairs the model where they do not.
     /// Marks nest in a fixed order: link, underline, strikethrough, bold, italic, then the leaf (code, pill, text).
-    static func write(_ runs: [Run], kind: BlockKind) -> String {
-        var w = emit(runs, 0..<runs.count, layer: 0)
+    static func write(_ runs: [Run], kind: BlockKind, escapePipes: Bool = false) -> String {
+        var w = emit(runs, 0..<runs.count, layer: 0, pipes: escapePipes)
         let s = Array(w.unicodeScalars)
         switch kind {
         case .paragraph:
@@ -257,15 +257,15 @@ enum InlineWriter {
         }
     }
 
-    private static func emit(_ runs: [Run], _ range: Range<Int>, layer: Int) -> String {
-        if layer == 5 { return range.map { leaf(runs, $0) }.joined() }
+    private static func emit(_ runs: [Run], _ range: Range<Int>, layer: Int, pipes: Bool) -> String {
+        if layer == 5 { return range.map { leaf(runs, $0, pipes: pipes) }.joined() }
         var out = ""
         var i = range.lowerBound
         while i < range.upperBound {
             let key = layerKey(runs[i], layer)
             var j = i + 1
             while j < range.upperBound, layerKey(runs[j], layer) == key { j += 1 }
-            let inner = emit(runs, i..<j, layer: layer + 1)
+            let inner = emit(runs, i..<j, layer: layer + 1, pipes: pipes)
             if key == nil { out += inner } else {
                 switch layer {
                 case 0: out += "[" + inner + "](" + (runs[i].link ?? "") + ")"
@@ -280,14 +280,14 @@ enum InlineWriter {
         return out
     }
 
-    private static func leaf(_ runs: [Run], _ idx: Int) -> String {
+    private static func leaf(_ runs: [Run], _ idx: Int, pipes: Bool) -> String {
         let run = runs[idx]
         if let form = run.pill { return form == .bare ? run.text : "[" + run.text + "](" + run.text + ")" }
         if run.code { return "`" + run.text + "`" }
-        return escaped(runs, idx)
+        return escaped(runs, idx, pipes: pipes)
     }
 
-    private static func escaped(_ runs: [Run], _ idx: Int) -> String {
+    private static func escaped(_ runs: [Run], _ idx: Int, pipes: Bool) -> String {
         let run = runs[idx]
         let s = Array(run.text.unicodeScalars)
         let hasPrev = idx > 0, hasNext = idx + 1 < runs.count
@@ -313,6 +313,7 @@ enum InlineWriter {
             case "\\":
                 if let nx = next { escape = InlineReader.isEscapable(nx) } else { escape = hasNext || marked }
             case "`": escape = true
+            case "|": escape = pipes
             case "~":
                 escape = run.strikethrough || prev == "~" || next == "~" || ((prev == nil || next == nil) && (hasPrev || hasNext || marked))
             case "<":

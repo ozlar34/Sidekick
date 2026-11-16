@@ -92,6 +92,8 @@ enum NoteBuffer {
         case .checklist(let checked): return checked ? 13 : 12
         case .quote: return 14
         case .divider: return 15
+        case .fence: return 16
+        case .table: return 17
         }
     }
 
@@ -104,9 +106,16 @@ enum NoteBuffer {
         case 13: return .checklist(checked: true)
         case 14: return .quote
         case 15: return .divider
+        case 16: return .fence
+        case 17: return .table
         default: return .heading(level: min(6, n))
         }
     }
+
+    /// A code block is one paragraph: its lines are separated by U+2028 (a line break inside a paragraph), so that
+    /// "\n" stays the paragraph separator. A table's text already uses U+2028 between rows. Styling as a code
+    /// block or grid is ticket 12.
+    private static let lineSeparator = "\u{2028}"
 
     // MARK: Document -> buffer
 
@@ -123,7 +132,7 @@ enum NoteBuffer {
                 var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
                 if let d = run.bold { attrs[.noteBold] = d.rawValue }
                 if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
-                var text = run.text
+                var text = block.kind == .fence ? run.text.replacingOccurrences(of: "\n", with: lineSeparator, options: .literal) : run.text
                 if run.pill != nil {   // one object: the character stands for the whole address
                     text = String(NotePillAttachment.objectCharacter)
                     attrs[.attachment] = NotePillAttachment(address: run.text)
@@ -192,6 +201,9 @@ enum NoteBuffer {
                     }
                 }
             }
+            if kind == .fence {
+                for k in runs.indices { runs[k].text = runs[k].text.replacingOccurrences(of: lineSeparator, with: "\n", options: .literal) }
+            }
             out.append(Paragraph(kind: kind, runs: runs))
         }
         return out
@@ -201,7 +213,7 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .divider:
+        case .paragraph, .bullet, .numbered, .checklist, .divider, .fence, .table:   // code blocks and tables: ticket 12
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .quote:   // italic, as in the old editor
             return NSFontManager.shared.convert(NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular), toHaveTrait: .italicFontMask)
@@ -219,7 +231,7 @@ enum NoteBuffer {
         case .numbered: return 17
         case .checklist: return 18   // 14 pt box column + 4 pt gap, as in the old editor
         case .quote: return 18
-        case .paragraph, .heading, .divider: return 0
+        case .paragraph, .heading, .divider, .fence, .table: return 0
         }
     }
 
@@ -231,7 +243,7 @@ enum NoteBuffer {
             return s
         }
         switch kind {
-        case .paragraph, .divider: return style(20, 1)
+        case .paragraph, .divider, .fence, .table: return style(20, 1)
         case .quote: return style(20, 1, indent: indent(for: kind))
         case .bullet, .numbered, .checklist: return style(20, 7, indent: indent(for: kind))   // list rows have air between them
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)

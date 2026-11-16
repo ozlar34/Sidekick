@@ -15,6 +15,16 @@ import NoteDocument
 ///      -> FuzzConfig (FuzzSupport.swift), used by every *_generated test; budget asserted in testBudgetNotExceeded helper
 /// 6. no type imports a view framework
 ///      -> testModuleImportsOnlyFoundation (scans Sources/NoteDocument)
+/// Per UTF-8 byte of the visible text: the marks on it (bold, italic, underline, strike, code, link address, pill form).
+private func markSignature(_ b: Block) -> [String] {
+    b.runs.flatMap { r in
+        [String](repeating: "\(r.bold != nil)\(r.italic != nil)\(r.underline)\(r.strikethrough)\(r.code)\(r.link ?? "-")\(r.pill.map { "\($0)" } ?? "-")", count: r.text.utf8.count)
+    } + [b.text]
+}
+
+/// Text that could read as a fence opener or table row (a pipe or a fence character): a test-side approximation.
+private func BlockSyntax_looksLikeFenceOrRow(_ text: String) -> Bool { text.contains("|") || text.hasPrefix("`") || text.hasPrefix("~") }
+
 final class NoteDocumentTests: XCTestCase {
 
     // MARK: helpers
@@ -71,10 +81,22 @@ final class NoteDocumentTests: XCTestCase {
             var doc = NoteDocument(markdown: md)
             guard !doc.blocks.isEmpty else { return true }
             let i = gen.int(doc.blocks.count)
-            doc.apply(.replace(at: i, kind: gen.kind(), runs: gen.runs()))
-            let before = segments(md), after = segments(doc.markdown())
-            var ok = before.count == after.count
-            if ok { for j in before.indices where j != i && before[j] != after[j] { ok = false } }
+            let count = doc.blocks.count
+            let kind = gen.kind()
+            // A new code block or table can pair with a text line that only looks like a fence or a row (an unclosed
+            // fence, a row without delimiter row); that line is then written escaped, see testLookalikeLinesAreEscapedWhenAFenceArrives.
+            let lookalike = doc.blocks.contains { $0.kind == .paragraph && (BlockSyntax_looksLikeFenceOrRow($0.text)) }
+            doc.apply(.replace(at: i, kind: kind, runs: gen.runs()))
+            guard doc.blocks.count == count else { return true }   // adjacent tables become one block
+            // A block spans one or more lines: compare the file without block `i`, before and after. Text lines that
+            // look like a table row or fence are rewritten with escapes: same text and same marks on every character
+            // (the delimiter form, `_` or `*`, may differ).
+            let pristine = NoteDocument(markdown: md)
+            var before = pristine, after = doc
+            before.apply(.remove(at: i)); after.apply(.remove(at: i))
+            let ok = lookalike
+                ? (0..<before.blocks.count).allSatisfy { j in j >= after.blocks.count || before.blocks[j].kind == after.blocks[j].kind && markSignature(before.blocks[j]) == markSignature(after.blocks[j]) }
+                : bytes(before.markdown()) == bytes(after.markdown())
             XCTAssertTrue(ok, "seed \(seed) edit block \(i) of \(md.debugDescription) -> \(doc.markdown().debugDescription)")
             return ok
         }
@@ -156,11 +178,12 @@ final class NoteDocumentTests: XCTestCase {
         }
     }
 
-    func testCodeFenceContentIsNotInterpretedAsHeadingYet() {
-        // Documented limitation of this slice: fences are literal lines, so a "# comment" line
-        // inside one is read as a heading. It still round-trips byte for byte; the fence ticket fixes the kind.
+    func testCodeFenceContentIsNotInterpretedAsHeading() {
         let md = "```\n# comment\n```\n"
-        XCTAssertEqual(NoteDocument(markdown: md).markdown(), md)
+        let doc = NoteDocument(markdown: md)
+        XCTAssertEqual(doc.blocks.map(\.kind), [.fence])
+        XCTAssertEqual(doc.blocks[0].text, "# comment")
+        XCTAssertEqual(doc.markdown(), md)
     }
 
     func testBlankLinesAreEmptyParagraphs() {
