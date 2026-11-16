@@ -1,5 +1,7 @@
 import Foundation
 
+/// One `.md` file. `filename` is its identity and `title` is the filename without ".md". `id` only
+/// lives for one session (nothing on disk stores it); a rename made by the store keeps it.
 struct Note: Identifiable, Equatable {
     let id: UUID
     var filename: String
@@ -11,30 +13,10 @@ struct Note: Identifiable, Equatable {
     var createdAt: Date? = nil
 }
 
-struct NoteIndex: Codable, Equatable {
-    let version: Int          // == 1, CONTEXT.md schema
-    var notes: [IndexEntry]
-}
-
-struct IndexEntry: Codable, Equatable {
-    let id: UUID
-    var filename: String
-    // Optional for backwards compat with pre-migration .index.json files
-    // (Decodable synthesis tolerates missing keys for Optional). Populated
-    // lazily by NoteStore.applyIndex from HeadingExtractor → first
-    // meaningful line → "Untitled" when nil, then persisted on next save.
-    var title: String? = nil
-    var pinned: Bool
-    var order: Int
-    // Optional for backwards compat with pre-migration .index.json files.
-    // Backfilled in NoteStore.applyIndex from filesystem creation date the
-    // first time an old index is loaded; persisted on the next save.
-    var createdAt: Date? = nil
-}
-
 struct DiskEntry: Equatable {
     let filename: String
     let mtime: Date
+    var created: Date? = nil
 }
 
 enum ChangeEvent: Equatable {
@@ -49,6 +31,4 @@ enum NoteStoreError: Error, Equatable {
     case conflict
     /// The store has no note with this id.
     case unknownNote
-    /// The file was written, but the index step failed. The caller's baseline must follow the file.
-    case fileWrittenIndexFailed
 }

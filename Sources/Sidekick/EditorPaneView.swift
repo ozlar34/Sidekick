@@ -72,6 +72,7 @@ struct EditorPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let notice = store.migrationNotice { MigrationNoticeStrip(text: notice) }
             // External-edit conflict banner (STORE-07) — top of editor. Only
             // shown when the on-disk file changed AND there are unsaved local
             // edits (reloading would discard them). The safe case auto-reloads
@@ -109,18 +110,20 @@ struct EditorPaneView: View {
                     font: NSFont.systemFont(ofSize: 22, weight: .semibold),
                     controller: titleController,
                     onTab: focusBody,
-                    onSubmit: focusBody
+                    onSubmit: focusBody,
+                    onCommit: commitTitle
                 )
                     .frame(height: 28)
                     .onChange(of: localTitle) { _, newValue in
                         // Skip the onAppear / note-switch reseed — it would
                         // re-write the same body to disk and bump mtime.
                         guard newValue != note.title else { return }
-                        if NewEditorSwitch.isOn {
-                            store.openNote(note.id)?.setTitle(newValue)
-                            return
-                        }
-                        scheduleAutoSave(title: newValue, body: localBody)
+                        // The title is the filename: typing renames nothing. The rename happens in `commitTitle`.
+                        if NewEditorSwitch.isOn { store.openNote(note.id)?.setTitle(newValue) }
+                    }
+                    // The real name after a commit (a taken name gets a number suffix) or an outside rename.
+                    .onChange(of: note.title) { _, newTitle in
+                        if localTitle != newTitle { localTitle = newTitle }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
@@ -287,7 +290,7 @@ struct EditorPaneView: View {
         Task {
             await storeRef.autosave.schedule {
                 do {
-                    try await storeRef.update(id, title: title, body: body)
+                    try await storeRef.update(id, body: body)
                     await MainActor.run {
                         // A newer edit (this note or another) owns the flags.
                         guard pendingEdit == edit else { return }
@@ -316,6 +319,29 @@ struct EditorPaneView: View {
         }
     }
 
+    // MARK: - Title commit
+
+    /// The title field was committed (Return, Tab or focus left it): the file is renamed now, once. A
+    /// name that is taken gets a number suffix and `note.title` then carries the real name.
+    private func commitTitle() {
+        guard localTitle != note.title else { return }
+        if NewEditorSwitch.isOn {
+            guard let open = store.openNote(note.id) else { return }
+            open.setTitle(localTitle)
+            Task { await open.commitTitle() }
+            return
+        }
+        let id = note.id, title = localTitle, body = localBody
+        let storeRef = store
+        Task {
+            do { try await storeRef.update(id, title: title, body: body) }
+            catch {
+                NSLog("[Sidekick] rename failed: \(error.localizedDescription)")
+                await MainActor.run { diskWriteError = true }
+            }
+        }
+    }
+
     // MARK: - Focus management
 
     /// Pick the right starting field for the freshly-mounted note. Empty
@@ -323,7 +349,7 @@ struct EditorPaneView: View {
     /// name immediately; otherwise let AppKit hand first-responder to the
     /// NSTextView naturally — no SwiftUI focus needed.
     private func seedFocusForCurrentNote() {
-        if note.title.isEmpty && note.body.isEmpty {
+        if TitleRules.isPlaceholder(note.title) && note.body.isEmpty {
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 titleController.focus()

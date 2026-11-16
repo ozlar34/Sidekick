@@ -1,11 +1,9 @@
-/// Off-main file I/O actor. Owns the notes folder URL; serializes all
-/// reads/writes/scan/rename operations so slug collision detection and
-/// atomic writes cannot race.
+/// Off-main file I/O actor. Owns the notes folder URL; every read, write, scan and rename of the
+/// folder goes through it.
 ///
-/// Pattern sources:
-///   - RESEARCH.md §Code Examples (writeNote, renameNote, loadIndex, saveIndex, scan)
-///   - RESEARCH.md Pitfall 3 (rename race → actor isolation)
-///   - CONTEXT.md: all writes atomic, .index.json authoritative
+/// Files are the only truth: a note is a `.md` file, its title is the filename. No operation here
+/// replaces a file it did not write: creates are exclusive, renames never take a taken name, and a
+/// conditional write checks the file's current bytes against the caller's baseline first.
 import Foundation
 
 actor IOActor {
@@ -14,13 +12,8 @@ actor IOActor {
     /// Moves a file to the Trash. Tests inject a plain removal so they never touch the real Trash.
     private let trash: @Sendable (URL) throws -> Void
 
-    /// Tests inject a failure for the index step; production passes nothing.
-    private let indexSaveFault: (@Sendable () throws -> Void)?
-
-    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil,
-         indexSaveFault: (@Sendable () throws -> Void)? = nil) {
+    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil) {
         self.folder = folder
-        self.indexSaveFault = indexSaveFault
         self.trash = trash ?? { url in
             var resultURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
@@ -30,30 +23,60 @@ actor IOActor {
 
     // MARK: - Notes
 
-    func writeNote(_ body: String, filename: String) throws {
-        let url = folder.appendingPathComponent(filename)
-        let data = Data(body.utf8)
-        // .atomic writes to a sibling temp file and rename(2)s into place.
-        // Single watcher event; no partial-write window.
-        try data.write(to: url, options: [.atomic])
+    /// Creates an empty `<base>.md`, or `<base> 2.md`, ... and returns its filename. The check and the
+    /// create are one kernel call, so a file made by another tool a moment earlier is never replaced.
+    func createNote(base: String) throws -> String {
+        var n = 1
+        while true {
+            let name = TitleRules.candidate(base: base, number: n) + ".md"
+            do {
+                try FileOps.createExclusive(folder.appendingPathComponent(name))
+                return name
+            } catch FileOpsError.exists {
+                n += 1
+            }
+        }
     }
 
-    /// Atomic write that only happens when the file's current bytes equal `baseline`. When
-    /// `newFilename` differs the note moves there, and the old file goes after the new one is in place.
-    /// Throws `NoteStoreError.conflict` (and writes nothing) when the file changed or is gone.
-    func writeConditional(_ data: Data, filename: String, newFilename: String, baseline: Data) throws {
+    /// Writes `data` to the note's file and, when `wantedBase` is given, renames the file to that title
+    /// (or to the first free "<title> 2", ...). Returns the filename the note has afterwards.
+    ///
+    /// With a `baseline` the write happens only when the file's current bytes equal it: otherwise
+    /// `NoteStoreError.conflict` is thrown and nothing changes, not even a rename. Without one (old editor)
+    /// the write is unconditional and recreates a file that is gone.
+    func save(_ data: Data, filename: String, wantedBase: String?, baseline: Data?) throws -> String {
         let url = folder.appendingPathComponent(filename)
-        let target = folder.appendingPathComponent(newFilename)
-        let current = try? Data(contentsOf: url)
-        if current == nil, newFilename != filename, (try? Data(contentsOf: target)) == baseline {
-            // Retry of a rename whose file move succeeded but whose index step failed: the note is
-            // already at its new name.
-            try data.write(to: target, options: [.atomic])
-            return
+        let present = FileOps.exists(url)
+        if let baseline {
+            guard present, let current = try? Data(contentsOf: url), current == baseline else { throw NoteStoreError.conflict }
         }
-        guard let current, current == baseline else { throw NoteStoreError.conflict }
-        try data.write(to: target, options: [.atomic])
-        if newFilename != filename { try FileManager.default.removeItem(at: url) }
+        let created = present ? FileOps.creationDate(url) : nil
+        var finalName = filename
+        if present, let wantedBase { finalName = try move(url, named: filename, toTitle: wantedBase) }
+        let target = folder.appendingPathComponent(finalName)
+        do {
+            try data.write(to: target, options: [.atomic])
+        } catch {
+            if finalName != filename { try? FileOps.moveNoClobber(target, to: url) }   // undo the rename: nothing half done
+            throw error
+        }
+        FileOps.setCreationDate(created, of: target)
+        return finalName
+    }
+
+    /// Moves the file to the first free name for `base` (or keeps its name when that is the first free one).
+    private func move(_ url: URL, named filename: String, toTitle base: String) throws -> String {
+        var n = 1
+        while true {
+            let name = TitleRules.candidate(base: base, number: n) + ".md"
+            if name.precomposedStringWithCanonicalMapping == filename.precomposedStringWithCanonicalMapping { return filename }
+            do {
+                try FileOps.moveNoClobber(url, to: folder.appendingPathComponent(name))
+                return name
+            } catch FileOpsError.exists {
+                n += 1
+            }
+        }
     }
 
     func readNote(filename: String) throws -> String {
@@ -67,58 +90,45 @@ actor IOActor {
         return vals?.contentModificationDate
     }
 
-    func deleteNote(filename: String) throws {
-        let url = folder.appendingPathComponent(filename)
-        try FileManager.default.removeItem(at: url)
-    }
-
     func trashNote(filename: String) throws {
         let url = folder.appendingPathComponent(filename)
         try trash(url)
     }
 
-    func renameNote(oldFilename: String, newFilename: String) throws {
-        guard oldFilename != newFilename else { return }
-        let oldURL = folder.appendingPathComponent(oldFilename)
-        let newURL = folder.appendingPathComponent(newFilename)
-        // Read old body, write new atomically, then delete old.
-        // On write failure, old file is intact (CONTEXT.md rule).
-        let body = try String(contentsOf: oldURL, encoding: .utf8)
-        try Data(body.utf8).write(to: newURL, options: [.atomic])
-        try FileManager.default.removeItem(at: oldURL)
+    // MARK: - Order file
+
+    enum OrderLoad {
+        case missing
+        case loaded(OrderFile)
+        /// The file was not a valid order file; it was moved aside to `.sidekick-order.json.damaged`.
+        case damaged
     }
 
-    // MARK: - Index
-
-    func loadIndex() -> NoteIndex? {
-        let url = folder.appendingPathComponent(".index.json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        do {
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(NoteIndex.self, from: data)
-        } catch {
-            // Move to .bak for post-mortem, return nil to trigger rebuild.
-            NSLog("[Sidekick] IOActor: corrupt .index.json, moving to .bak — \(error)")
-            let bak = folder.appendingPathComponent(".index.json.bak")
-            try? FileManager.default.removeItem(at: bak)
-            try? FileManager.default.moveItem(at: url, to: bak)
-            return nil
-        }
+    func loadOrder() -> OrderLoad {
+        let url = folder.appendingPathComponent(OrderFile.filename)
+        guard FileOps.exists(url) else { return .missing }
+        if let data = try? Data(contentsOf: url), let order = OrderFile.decode(data) { return .loaded(order) }
+        NSLog("[Sidekick] IOActor: damaged \(OrderFile.filename), moving it aside — order and pins reset")
+        let aside = folder.appendingPathComponent(OrderFile.filename + ".damaged")
+        try? FileManager.default.removeItem(at: aside)
+        try? FileManager.default.moveItem(at: url, to: aside)
+        return .damaged
     }
 
-    func saveIndex(_ index: NoteIndex) throws {
-        try indexSaveFault?()
-        let url = folder.appendingPathComponent(".index.json")
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(index)
-        try data.write(to: url, options: [.atomic])
+    func saveOrder(_ order: OrderFile) throws {
+        try order.encoded().write(to: folder.appendingPathComponent(OrderFile.filename), options: [.atomic])
+    }
+
+    // MARK: - Migration
+
+    func migrate(now: Date = Date()) throws -> Migration.Outcome {
+        try Migration.run(folder: folder, now: now)
     }
 
     // MARK: - Scan
 
     func scan() throws -> [DiskEntry] {
-        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .creationDateKey, .isRegularFileKey]
         let contents = try FileManager.default.contentsOfDirectory(
             at: folder,
             includingPropertiesForKeys: keys,
@@ -126,28 +136,13 @@ actor IOActor {
         )
         return contents.compactMap { url in
             guard url.pathExtension == "md" else { return nil }
-            guard !url.lastPathComponent.hasSuffix(".md.tmp") else { return nil }
             let vals = try? url.resourceValues(forKeys: Set(keys))
             guard vals?.isRegularFile == true else { return nil }
             return DiskEntry(
                 filename: url.lastPathComponent,
-                mtime: vals?.contentModificationDate ?? .distantPast
+                mtime: vals?.contentModificationDate ?? .distantPast,
+                created: vals?.creationDate
             )
         }
-    }
-
-    // MARK: - Slug
-
-    /// Computes a collision-free slug for the given heading, excluding the
-    /// current filename of the note being renamed (by `idToSkip`).
-    /// Actor isolation ensures no two concurrent creates/renames race on the
-    /// same `existing` set. (RESEARCH.md Pitfall 3)
-    func slug(for heading: String, excluding idToSkip: UUID?, index: NoteIndex) -> String {
-        let existing: Set<String> = Set(
-            index.notes
-                .filter { idToSkip == nil || $0.id != idToSkip }
-                .map { String($0.filename.dropLast(3)) } // strip ".md"
-        )
-        return Slug.make(from: heading, existing: existing)
     }
 }

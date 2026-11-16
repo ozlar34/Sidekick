@@ -8,7 +8,8 @@ import Foundation
 enum Defaults {
     static let panelWidth = "panelWidth"
     static let notesFolder = "notesFolder"
-    static let lastSelectedNoteID = "lastSelectedNoteID"
+    /// The last selected note, by filename (a note's id only lives for one session).
+    static let lastSelectedNoteFilename = "lastSelectedNoteFilename"
     static let sidebarWidth = "sidebarWidth"
     static let showInDock = "showInDock"
     // launchAtLogin is NOT stored in UserDefaults — read from SMAppService.mainApp.status (RESEARCH Pitfall 1)

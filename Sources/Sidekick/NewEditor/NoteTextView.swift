@@ -37,6 +37,8 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
             case .checklist(let checked): return checked ? "checked" : "todo"
             case .quote: return "quote"
             case .divider: return "divider"
+            case .fence: return "code"
+            case .table: return "table"
             }
         }
     }
@@ -257,12 +259,15 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         }
     }
 
+    /// Kinds whose Backspace-at-start rule is "clear the kind" (not paragraph, divider, code block or table).
     private func isMarked(_ kind: BlockKind) -> Bool {
         switch kind {
-        case .paragraph, .divider: return false
-        default: return true
+        case .heading, .bullet, .numbered, .checklist, .quote: return true
+        default: return false
         }
     }
+
+    private func isOneLineKind(_ kind: BlockKind) -> Bool { kind == .paragraph || isMarked(kind) }
 
     /// Enter in a list continues it (numbered: next number, checklist: unchecked) and on an empty item ends it.
     /// Enter at the end of a heading or quote starts a normal paragraph. Everywhere else Enter is native.
@@ -355,7 +360,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         guard ranges.indices.contains(left + 1) else { return false }
         let a = ranges[left], b = ranges[left + 1]
         let ka = kind(of: a), kb = kind(of: b)
-        guard ka != kb, ka != .divider, kb != .divider else { return false }
+        guard ka != kb, isOneLineKind(ka), isOneLineKind(kb) else { return false }
         let end = NSMaxRange(b) + (hasTerminator(b) ? 1 : 0)
         let out = NSMutableAttributedString()
         out.append(slice(a, as: ka)); out.append(slice(b, as: ka))
