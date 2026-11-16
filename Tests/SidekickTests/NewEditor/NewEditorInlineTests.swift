@@ -395,16 +395,29 @@ final class NewEditorInlineTests: XCTestCase {
 
     // MARK: generated notes
 
-    /// A removed or replaced divider comes back from undo spelled `---`; its other spellings (`***`, `___`) need the
-    /// history of documents that ticket 07 adds, so the exact-bytes assertions below use the default spelling.
-    private func generatedNote(seed: UInt64) -> String {
-        var gen = NewEditorNoteGenerator(seed: seed)
-        return gen.markdown().replacingOccurrences(of: "(?m)^(\\*\\*\\*|___)$", with: "---", options: .regularExpression)
+    /// The caret at the end of a note whose last line is a heading, or holds a pill, sits where AppKit puts it.
+    func testCaretAtTheEndOfALastLineThatIsAHeadingOrHoldsAPillMatchesAppKit() {
+        for md in ["# head https://e.co", "go https://e.co", "# beta https://e.co/a x", "## h", "# snake_case", "a https://e.co https://e.co/b"] {
+            let h = NewEditorHost(markdown: md)
+            for loc in 0...h.length {
+                h.select(loc)
+                XCTAssertEqual(h.caret.origin.x, h.appKitCaretOrigin.x, accuracy: 1.5, "\(md.debugDescription) loc \(loc) x")
+                XCTAssertEqual(h.caret.origin.y, h.appKitCaretOrigin.y, accuracy: 1.5, "\(md.debugDescription) loc \(loc) y")
+            }
+        }
     }
 
+    /// SIDEKICK_ONLY_SEEDS=138,186 re-runs just those seeds.
+    private var seedList: [UInt64] {
+        if let only = ProcessInfo.processInfo.environment["SIDEKICK_ONLY_SEEDS"] { return only.split(separator: ",").compactMap { UInt64($0) } }
+        return Array(1...UInt64(seeds))
+    }
+
+    private func note(_ seed: UInt64) -> String { var gen = NewEditorNoteGenerator(seed: seed); return gen.markdown() }
+
     func testWhatTheViewShowsIsWhatTheFileHoldsAfterAnEditAnywhere() {
-        for seed in 1...UInt64(seeds) {
-            let source = generatedNote(seed: seed)
+        for seed in seedList {
+            let source = note(seed)
             for fraction in [0.0, 0.3, 0.6, 1.0] {
                 let h = NewEditorHost(markdown: source)
                 h.select(Int(Double(h.length) * fraction))
@@ -414,21 +427,15 @@ final class NewEditorInlineTests: XCTestCase {
                 func trimmed(_ s: String) -> String { s.hasSuffix("\n") ? String(s.dropLast()) : s }
                 let reread = NoteBuffer.attributed(for: NoteDocument(markdown: saved)).text.string
                 XCTAssertEqual(trimmed(reread), trimmed(h.string), "seed \(seed) at \(fraction): the file reads back as what the view shows")
-                // (Undo restoring the exact bytes of a block that was regenerated, e.g. one holding `a*b`, or a note that ends
-                // right after its last line, needs ticket 07's document history; seeds 138, 186, 192, 248 showed it at 300 seeds.)
                 h.undo()
-                XCTAssertEqual(h.string, NoteBuffer.attributed(for: NoteDocument(markdown: source)).text.string, "seed \(seed) at \(fraction): undo brings the text back")
+                XCTAssertEqual(h.markdown, source, "seed \(seed) at \(fraction): undo restores the exact bytes")
             }
         }
     }
 
     func testBackspaceAndDeleteRemoveExactlyOneUnitOnGeneratedNotes() {
-        for seed in 1...UInt64(seeds) {
-            let h = NewEditorHost(markdown: generatedNote(seed: seed))
-            let dividerLines = Set(NoteBuffer.paragraphRanges(in: h.string as NSString).filter {
-                $0.length == 0 && NSMaxRange($0) < h.length && NoteBuffer.kind(fromAttribute: h.textView.textStorage?.attribute(.noteBlockKind, at: $0.location, effectiveRange: nil)) == .divider
-            }.map(\.location))
-            // (Not the empty last line: undoing a join there is ticket 07's tail-kind rule, checked by its own tests.)
+        for seed in seedList {
+            let h = NewEditorHost(markdown: note(seed))
             for loc in stride(from: 1, to: h.length, by: 3) {
                 let original = h.string
                 let originalMarkdown = h.markdown
@@ -439,15 +446,7 @@ final class NewEditorInlineTests: XCTestCase {
                 XCTAssertTrue(removed == 1 || (removed == 0 && atBreak), "seed \(seed) loc \(loc): Backspace removed \(removed) units")
                 h.undo()
                 XCTAssertEqual(h.string, original, "seed \(seed) loc \(loc)")
-                // Exact bytes are asserted where the edit touched a pill or a divider (this ticket's objects). Joins of
-                // other lines come back with the exact bytes only with ticket 07's history of documents.
-                let ns = original as NSString
-                let afterPill = ns.character(at: loc - 1) == 0xFFFC
-                // (The line below a rule counts only when it is a plain line: Backspace on a list item or heading just clears
-                // its kind, and undoing that is 07's.)
-                let belowRule = dividerLines.contains(loc - 1) && NoteBuffer.kind(fromAttribute: h.textView.textStorage?.attribute(.noteBlockKind, at: min(loc, h.length - 1), effectiveRange: nil)) == .paragraph
-                let nearRule = dividerLines.contains(loc) || belowRule
-                if afterPill || nearRule { XCTAssertEqual(h.markdown, originalMarkdown, "seed \(seed) loc \(loc): undo restores the exact bytes") }
+                XCTAssertEqual(h.markdown, originalMarkdown, "seed \(seed) loc \(loc): undo restores the exact bytes")
             }
         }
     }
