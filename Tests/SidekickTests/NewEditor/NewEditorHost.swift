@@ -98,7 +98,10 @@ final class NewEditorHost {
     /// A real left click at `point` (view coordinates): a mouse-down event delivered to the view, the mouse-up queued
     /// first because NSTextView tracks a click until it sees it.
     /// A synthetic mouse event sent through `NSWindow.sendEvent` does not reach the view in a test run.
-    func click(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) {
+    /// On the CI runner the queued mouse-up never reaches NSTextView's tracking loop, which then waits forever; so while
+    /// `mouseDown` runs, a timer in the common run-loop modes (it fires inside the tracking loop) re-posts the mouse-up
+    /// until the click returns. `queueMouseUp: false` skips the first post, to test that backstop alone.
+    func click(at point: NSPoint, modifiers: NSEvent.ModifierFlags = [], queueMouseUp: Bool = true) {
         window.makeKeyAndOrderFront(nil)
         let inWindow = textView.convert(point, to: nil)
         let ts = ProcessInfo.processInfo.systemUptime
@@ -106,8 +109,15 @@ final class NewEditorHost {
             NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: modifiers, timestamp: t, windowNumber: window.windowNumber,
                                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
         }
-        window.postEvent(event(.leftMouseUp, ts + 0.05), atStart: false)
+        if queueMouseUp { window.postEvent(event(.leftMouseUp, ts + 0.05), atStart: false) }
+        let backstop = Timer(timeInterval: 0.15, repeats: true) { [window] _ in
+            NSApp.postEvent(NSEvent.mouseEvent(with: .leftMouseUp, location: inWindow, modifierFlags: modifiers,
+                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                               context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!, atStart: false)
+        }
+        RunLoop.main.add(backstop, forMode: .common)
         textView.mouseDown(with: event(.leftMouseDown, ts))
+        backstop.invalidate()
         // Whatever of the click is left unread must not leak into the next test.
         while NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) != nil {}
     }
