@@ -434,6 +434,21 @@ final class NewEditorInlineTests: XCTestCase {
         XCTAssertEqual(h.markdown, source)
     }
 
+    /// Seed 12 and its kin: removing the last line break of a note whose last line is a heading, list item, checklist item
+    /// or quote, then undo, gives back the exact bytes (the empty tail line has no kind).
+    func testUndoOfRemovingTheLastLineBreakGivesBackTheExactBytes() {
+        for source in ["### caf\u{e9} caf\u{e9} alpha\n", "- alpha beta\n", "3. alpha beta\n", "- [ ] alpha beta\n", "- [x] alpha beta\n", "> alpha beta\n"] {
+            let end = NoteBuffer.attributed(for: NoteDocument(markdown: source)).text.length - 1   // before the last line break
+            for (key, at) in [(NewEditorHost.Key.forwardDelete, end), (.backspace, end + 1)] {
+                let h = NewEditorHost(markdown: source)
+                h.select(at)
+                h.press(key)
+                h.undo()
+                XCTAssertEqual(h.markdown, source, "\(source.debugDescription) \(key) at \(at)")
+            }
+        }
+    }
+
     /// SIDEKICK_ONLY_SEEDS=138,186 re-runs just those seeds.
     private var seedList: [UInt64] {
         if let only = ProcessInfo.processInfo.environment["SIDEKICK_ONLY_SEEDS"] { return only.split(separator: ",").compactMap { UInt64($0) } }
@@ -496,15 +511,7 @@ final class NewEditorInlineTests: XCTestCase {
                     }
                     h.undo()
                     XCTAssertEqual(h.string, original, tag)
-                    // Known gap, not this ticket's (07's tail-kind rule): removing the very last line break of a note whose last
-                    // line is a list item, heading or quote, then undoing, brings the break back with the old kind still on the
-                    // empty tail, so the file gains an empty `### ` / `- ` line (e.g. `### a\n` -> `### a\n### \n`). Seeds 5, 7, 11, 12.
-                    let removedAt = key == .backspace ? loc - 1 : loc
-                    let lastBreak = ns.length > 0 && removedAt == ns.length - 1 && ns.character(at: removedAt) == 0x0A
-                    let lastLineKind = lastBreak ? kind(max(removedAt - 1, 0), h) : .paragraph
-                    if !(lastBreak && lastLineKind != .paragraph) {
-                        XCTAssertEqual(h.markdown, originalMarkdown, "\(tag): undo restores the exact bytes")
-                    }
+                    XCTAssertEqual(h.markdown, originalMarkdown, "\(tag): undo restores the exact bytes")
                 }
             }
         }

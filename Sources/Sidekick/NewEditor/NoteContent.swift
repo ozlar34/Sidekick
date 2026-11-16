@@ -16,6 +16,8 @@ final class NoteContent {
     /// Kind of the tail paragraph while it has no characters (it has nothing to carry a kind).
     var tailKind: BlockKind = .paragraph
     private var synced: [NoteBuffer.Paragraph] = []
+    /// Index of the last line at the previous sync (see `syncDocument`).
+    private var tailLine = 0
     /// The last few (buffer content, document) pairs. When the buffer comes back to a content it had before (undo, or
     /// typing and deleting), the document of that time is used again, so the file's exact bytes come back too: the
     /// paragraph diff alone cannot know which line breaks an earlier state had.
@@ -35,6 +37,7 @@ final class NoteContent {
         document = NoteDocument(markdown: markdown)
         let (text, tail) = NoteBuffer.attributed(for: document)
         tailKind = tail
+        tailLine = text.string.components(separatedBy: "\n").count - 1
         synced = NoteBuffer.paragraphs(of: document)
         history = [(synced, document)]
         storage.beginEditing()
@@ -54,9 +57,17 @@ final class NoteContent {
 
     private func syncDocument() {
         let ns = storage.string as NSString
+        // `tailKind` belongs to the last LINE while it is the tail: an empty list item typed into and erased again keeps
+        // its kind. When the last line is a different one than before (the line break after the old last line was
+        // removed, so that line became the tail), its kind must not stay behind: it would come back on the empty line
+        // after the line break returns (undo of its removal), and the file would gain an empty `### ` line.
+        let lastLine = ns.components(separatedBy: "\n").count - 1
         if let tail = NoteBuffer.paragraphRanges(in: ns).last, tail.length > 0 {
-            tailKind = NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: NSMaxRange(tail) - 1, effectiveRange: nil))
+            tailKind = lastLine == tailLine
+                ? NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: NSMaxRange(tail) - 1, effectiveRange: nil))
+                : .paragraph
         }
+        tailLine = lastLine
         let wanted = NoteBuffer.paragraphs(in: storage, tailKind: tailKind)
         if wanted == synced { return }
         if let earlier = history.last(where: { $0.paragraphs.count == wanted.count && $0.paragraphs == wanted }) {
