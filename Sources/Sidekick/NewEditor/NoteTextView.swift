@@ -125,6 +125,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         NoteTextEngine.show(new.storage, in: self)
         new.storage.delegate = self
         isEditable = new.isEditable
+        refreshTableFit()
         NoteTextEngine.setTailKind(new.tailKind, in: self)
         refreshNumberGutters(in: nil)
         let length = new.storage.length
@@ -139,6 +140,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         content.reload(markdown: markdown)
         NoteTextEngine.setTailKind(content.tailKind, in: self)
         refreshNumberGutters(in: nil)
+        refreshTableFit()
         pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
@@ -174,6 +176,21 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         storage.beginEditing()
         NoteBuffer.restyle(storage, edited: range)
         storage.endEditing()
+        refreshTableFit()
+    }
+
+    /// Fits the tables to the panel (attributes only, not an undo step).
+    private func refreshTableFit() {
+        guard let storage = textStorage, let tc = textContainer, storage.length > 0, tc.size.width > 0, tc.size.width < 100_000 else { return }
+        storage.beginEditing()
+        NoteBuffer.fitTables(storage, available: tc.size.width - 2 * tc.lineFragmentPadding)
+        storage.endEditing()
+    }
+
+    /// Tab is the column separator of a table row, so it is not a character a cell can hold: it does nothing there.
+    override func insertTab(_ sender: Any?) {
+        if let (_, para) = paragraph(at: selectedRange().location), kind(of: para) == .table { return }
+        super.insertTab(sender)
     }
 
     // MARK: Buffer -> document
@@ -191,9 +208,12 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        let old = frame.width
         super.setFrameSize(newSize)
+        if newSize.width != old { refreshTableFit() }
         refreshHover()
     }
+
 
     // MARK: Tail paragraph
 
@@ -281,9 +301,21 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     private func isOneLineKind(_ kind: BlockKind) -> Bool { kind == .paragraph || isMarked(kind) }
 
     /// Enter in a list continues it (numbered: next number, checklist: unchecked) and on an empty item ends it.
-    /// Enter at the end of a heading or quote starts a normal paragraph. Everywhere else Enter is native.
+    /// Enter at the end of a heading or quote starts a normal paragraph. Enter inside a code block adds a code line
+    /// (a line break inside its paragraph, so it stays one block); inside a table it does nothing (rows are not
+    /// edited here). Everywhere else Enter is native.
     override func insertNewline(_ sender: Any?) {
         let sel = selectedRange()
+        if let (_, para) = paragraph(at: sel.location) {
+            switch kind(of: para) {
+            case .fence:
+                insertText(NSAttributedString(string: "\u{2028}", attributes: NoteBuffer.typingAttributes(for: .fence)), replacementRange: sel)
+                return
+            case .table:
+                return
+            default: break
+            }
+        }
         if sel.length == 0, let (_, para) = paragraph(at: sel.location) {
             let k = kind(of: para)
             if k == .divider, hasTerminator(para) {   // on the rule's own line: a new plain line above it
@@ -464,6 +496,19 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// Text typed at the edge of a pill or a link is plain text: it never joins the address or the link.
     /// `/hr` or `/divider` alone on a plain line becomes a divider with a new line below.
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        // A table cell holds no tab and no row break: typed or pasted ones become blanks.
+        let at = replacementRange.location == NSNotFound ? selectedRange().location : replacementRange.location
+        if let (_, para) = paragraph(at: at), kind(of: para) == .table {
+            func clean(_ s: String) -> String {
+                String(s.unicodeScalars.map { $0 == "\t" || $0 == "\u{2028}" || $0 == "\n" || $0 == "\r" ? " " : Character($0) })
+            }
+            if let a = string as? NSAttributedString {
+                let m = NSMutableAttributedString(attributedString: a)
+                m.mutableString.setString(clean(a.string))
+                return super.insertText(m, replacementRange: replacementRange)
+            }
+            if let t = string as? String { return super.insertText(clean(t), replacementRange: replacementRange) }
+        }
         let typed = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
         let isPlainText = string is String
         let sel = replacementRange.location == NSNotFound ? selectedRange() : replacementRange

@@ -6,6 +6,8 @@ extension NSAttributedString.Key {
     static let noteBlockKind = NSAttributedString.Key("sidekick.noteBlockKind")
     /// Bold mark with the delimiter spelling the file used (NSString "**" or "__"). Absent = not bold.
     static let noteBold = NSAttributedString.Key("sidekick.noteBold")
+    /// Cell padding of a table paragraph as laid out (NSNumber); derived from the text and the panel width.
+    static let noteTablePadding = NSAttributedString.Key("sidekick.noteTablePadding")
     /// Every other mark of a run (`NoteRunStyle`): italic, underline, strikethrough, code, link, pill. Absent = none.
     static let noteStyle = NSAttributedString.Key("sidekick.noteStyle")
 }
@@ -213,7 +215,9 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .divider, .fence, .table:
+        case .fence:   // as today: monospaced 14, and a code block holds no marks
+            return NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        case .paragraph, .bullet, .numbered, .checklist, .divider, .table:
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .quote:   // italic, as in the old editor
             return NSFontManager.shared.convert(NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular), toHaveTrait: .italicFontMask)
@@ -222,6 +226,12 @@ enum NoteBuffer {
             return NSFont.systemFont(ofSize: size, weight: bold ? .bold : .semibold)
         }
     }
+
+    /// Space a table cell keeps between its text and the grid line, left and right.
+    static let tableCellPadding: CGFloat = 8
+    private static let tableMinimumColumn: CGFloat = 40
+    /// Padding of a table that is wider than the panel; it must stay within the line fragment padding (5) so the grid stays inside.
+    static let tableTightPadding: CGFloat = 4
 
     /// Text indent of a paragraph of `kind`: where its text starts (and wrapped lines hang) so that the drawn
     /// marker (bullet, number, checkbox) has room on the left. Quotes are indented as a block.
@@ -249,14 +259,16 @@ enum NoteBuffer {
 
     /// Paragraph style of `kind`; a numbered item takes the gutter its own number needs (`numberText`, e.g. `10.`).
     static func paragraphStyle(for kind: BlockKind, numberText: String? = nil) -> NSParagraphStyle {
-        func style(_ line: CGFloat, _ spacing: CGFloat, indent: CGFloat = 0) -> NSParagraphStyle {
+        func style(_ line: CGFloat, _ spacing: CGFloat, indent: CGFloat = 0, before: CGFloat = 0) -> NSParagraphStyle {
             let s = NSMutableParagraphStyle()
-            s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing
+            s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing; s.paragraphSpacingBefore = before
             s.firstLineHeadIndent = indent; s.headIndent = indent
             return s
         }
         switch kind {
-        case .paragraph, .divider, .fence, .table: return style(20, 1)
+        case .paragraph, .divider: return style(20, 1)
+        case .fence: return style(20, 8, before: 8)   // room for the background's own padding
+        case .table: return style(26, 8, before: 8)
         case .quote: return style(20, 1, indent: indent(for: kind))
         case .numbered: return style(20, 7, indent: numberText.map(numberIndent(for:)) ?? indent(for: kind))
         case .bullet, .checklist: return style(20, 7, indent: indent(for: kind))   // list rows have air between them
@@ -294,7 +306,9 @@ enum NoteBuffer {
             let kind = Self.kind(fromAttribute: storage.attribute(.noteBlockKind, at: end - 1, effectiveRange: nil))
             storage.addAttributes([.noteBlockKind: attributeValue(kind), .paragraphStyle: paragraphStyle(for: kind),
                                    .foregroundColor: color(for: kind)], range: range)
+            storage.removeAttribute(.baselineOffset, range: range)
             Self.stylePieces(of: storage, in: range, kind: kind)
+            if kind == .table { styleTable(storage, range: range) }
         }
     }
 
@@ -322,5 +336,87 @@ enum NoteBuffer {
                 if style?.link != nil { storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: piece) }
             }
         }
+    }
+
+    // MARK: Table grid
+
+    /// A table is one paragraph: cells of a row are separated by a tab, rows by U+2028. Its columns are tab stops
+    /// that make the cells line up; the grid lines are drawn from the same stops (`NoteTextEngine`). The header row
+    /// (the first line) is semibold, as today.
+    /// Re-fits the tab stops of every table in `storage` to `available` points of text width (a panel narrower than a
+    /// table). Attributes only: derived from the text, so it is not an undo step.
+    static func fitTables(_ storage: NSTextStorage, available: CGFloat) {
+        let ns = storage.string as NSString
+        for para in paragraphRanges(in: ns) where para.location < ns.length {
+            guard kind(fromAttribute: storage.attribute(.noteBlockKind, at: para.location, effectiveRange: nil)) == .table else { continue }
+            let range = NSRange(location: para.location, length: min(para.length + 1, ns.length - para.location))
+            styleTable(storage, range: range, available: available)
+        }
+    }
+
+    private static func styleTable(_ storage: NSTextStorage, range: NSRange, available: CGFloat = .greatestFiniteMagnitude) {
+        let ns = storage.string as NSString
+        var end = NSMaxRange(range)
+        if end > range.location, ns.character(at: end - 1) == 0x0A { end -= 1 }   // the paragraph's own "\n"
+        var rows: [NSRange] = []
+        var start = range.location
+        for i in range.location..<end where ns.character(at: i) == 0x2028 {
+            rows.append(NSRange(location: start, length: i - start)); start = i + 1
+        }
+        rows.append(NSRange(location: start, length: end - start))
+        if let header = rows.first, header.length > 0 {
+            storage.enumerateAttribute(.noteBold, in: header, options: []) { value, sub, _ in
+                if value == nil { storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 15, weight: .semibold), range: sub) }
+            }
+        }
+        var widths: [CGFloat] = []
+        for row in rows {
+            var cellStart = row.location
+            var column = 0
+            for i in row.location...NSMaxRange(row) where i == NSMaxRange(row) || ns.character(at: i) == 0x09 {
+                let cell = NSRange(location: cellStart, length: i - cellStart)
+                var w: CGFloat = 0
+                if cell.length > 0 { w = ceil(storage.attributedSubstring(from: cell).size().width) }
+                if column == widths.count { widths.append(w) } else { widths[column] = max(widths[column], w) }
+                column += 1; cellStart = i + 1
+            }
+        }
+        let style = NSMutableParagraphStyle()
+        style.setParagraphStyle(paragraphStyle(for: .table))
+        let fit = tableFit(columnWidths: widths, available: available)
+        style.tabStops = fit.stops.map { NSTextTab(textAlignment: .left, location: $0) }
+        storage.addAttribute(.noteTablePadding, value: fit.padding, range: range)
+        style.defaultTabInterval = 40
+        storage.addAttribute(.paragraphStyle, value: style, range: range)
+        storage.addAttribute(.baselineOffset, value: 3, range: range)   // text sits in the middle of the taller row
+    }
+
+    /// Where each column's text starts, measured from where the first column's text starts: column `c` is as wide as
+    /// its widest cell plus the padding on both sides. Returns one tab stop per column: the start of the next column,
+    /// so the last stop is the table's right edge plus one padding.
+    static func tableStops(columnWidths: [CGFloat]) -> [CGFloat] { tableFit(columnWidths: columnWidths, available: .greatestFiniteMagnitude).stops }
+
+    /// Tab stops and cell padding for columns of the given text widths in `available` points. A table that does not
+    /// fit first gives up padding (down to `tableTightPadding`), then the widest columns give up width, so that a
+    /// row stays on one line and the grid stays inside the panel.
+    static func tableFit(columnWidths: [CGFloat], available: CGFloat) -> (stops: [CGFloat], padding: CGFloat) {
+        func widths(_ pad: CGFloat) -> [CGFloat] { columnWidths.map { max($0 + 2 * pad, tableMinimumColumn) } }
+        var pad = tableCellPadding
+        var cols = widths(pad)
+        if cols.reduce(0, +) > available {
+            pad = tableTightPadding
+            cols = columnWidths.map { max($0 + 2 * pad, 2 * pad + 8) }
+            // Water-filling: the widest columns are cut to a common level until the table fits.
+            if cols.reduce(0, +) > available, !cols.isEmpty {
+                let floorWidth = 2 * pad + 8
+                var level = cols.max() ?? 0
+                while level > floorWidth, cols.map({ min($0, level) }).reduce(0, +) > available { level -= 1 }
+                cols = cols.map { min($0, level) }
+            }
+        }
+        var stops: [CGFloat] = []
+        var x: CGFloat = 0
+        for w in cols { x += w; stops.append(x) }
+        return (stops, pad)
     }
 }

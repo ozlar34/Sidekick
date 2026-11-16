@@ -58,4 +58,278 @@ final class NewEditorCodeTablesTests: XCTestCase {
         h.type("1")
         XCTAssertEqual(h.savedMarkdown, "a\n| a | b |\n|-|-|\n| x1 | y |\nz\n")
     }
+
+    // MARK: ticket 12: look, grid, Enter, caret at cell starts
+
+    private func font(_ h: NewEditorHost, at location: Int) -> NSFont {
+        h.textView.textStorage!.attribute(.font, at: location, effectiveRange: nil) as! NSFont
+    }
+
+    func testMarkdownInsideACodeBlockIsShownAsWritten() {
+        let source = "```\n# x\n**x**\n```\n"
+        let h = NewEditorHost(markdown: source)
+        XCTAssertEqual(h.string, "# x\u{2028}**x**\n", "fence lines are not shown, the lines are as written")
+        XCTAssertEqual(h.textView.blockKinds, ["code"])
+        XCTAssertEqual(h.markdown, source)
+        for location in 0..<(h.length - 1) {
+            let f = font(h, at: location)
+            XCTAssertTrue(f.isFixedPitch, "code is monospaced at \(location)")
+            XCTAssertFalse(NSFontManager.shared.traits(of: f).contains(.boldFontMask), "no bold at \(location)")
+        }
+    }
+
+    func testCodeBlockHasAFullWidthBackgroundAndNoFenceLines() {
+        let h = NewEditorHost(markdown: "text\n```swift\nlet a = 1\nlet b = 2\n```\nmore\n")
+        XCTAssertFalse(h.string.contains("`"))
+        XCTAssertFalse(h.string.contains("swift"))
+        let boxes = NoteTextEngine.codeBackgrounds(in: h.textView)
+        XCTAssertEqual(boxes.count, 1)
+        guard boxes.count == 1 else { return }
+        let origin = h.textView.textContainerOrigin
+        let width = h.textView.textContainer!.size.width
+        XCTAssertLessThanOrEqual(boxes[0].minX, origin.x + 0.5)
+        XCTAssertGreaterThanOrEqual(boxes[0].maxX, origin.x + width - 0.5, "as wide as the text column, not as wide as the text")
+        XCTAssertGreaterThanOrEqual(boxes[0].height, 40, "covers both code lines")
+        // The background is behind the code block only.
+        let codeTop = NoteTextEngine.caretRect(in: h.textView, at: NSString(string: h.string).range(of: "let a").location).minY
+        let textTop = NoteTextEngine.caretRect(in: h.textView, at: 0).minY
+        XCTAssertGreaterThanOrEqual(boxes[0].minY, textTop + 10)
+        XCTAssertLessThanOrEqual(boxes[0].minY, codeTop + 0.5)
+    }
+
+    func testEnterInsideACodeBlockAddsACodeLine() {
+        for (source, at, expected) in [
+            ("```\nab\n```\n", 1, "```\na\nb\n```\n"),
+            ("```\nab\n```\n", 0, "```\n\nab\n```\n"),
+            ("```\nab\n```\n", 2, "```\nab\n\n```\n"),
+            ("x\n```swift\n# h\nab\n```\ny\n", 7, "x\n```swift\n# h\na\nb\n```\ny\n"),
+        ] {
+            let h = NewEditorHost(markdown: source)
+            h.select(at)
+            h.press(.enter)
+            XCTAssertEqual(h.textView.blockKinds.filter { $0 == "code" }.count, 1, "still one code block: \(source)")
+            XCTAssertEqual(h.savedMarkdown, expected, source)
+            h.type("Z")
+            XCTAssertEqual(h.textView.blockKinds.filter { $0 == "code" }.count, 1)
+            h.textView.undoManager?.undo()
+            h.textView.undoManager?.undo()
+            XCTAssertEqual(h.markdown, source, "undo restores the original bytes")
+        }
+    }
+
+    func testEnterMidLineInACodeBlockKeepsOneFenceAndIsOneUndoStep() {
+        let source = "intro\n```swift\nfirst line\nsecond line\n```\nafter\n"
+        let h = NewEditorHost(markdown: source)
+        h.select(NSString(string: h.string).range(of: "second").location + 3)   // mid-line
+        h.press(.enter)
+        h.type("x")
+        let saved = h.savedMarkdown!
+        XCTAssertEqual(saved, "intro\n```swift\nfirst line\nsec\nxond line\n```\nafter\n")
+        XCTAssertEqual(saved.components(separatedBy: "```").count - 1, 2, "one opening and one closing fence")
+        XCTAssertEqual(h.textView.blockKinds, ["p", "code", "p"])
+        h.textView.undoManager?.undo()   // the typed x
+        h.textView.undoManager?.undo()   // Enter: one step
+        XCTAssertEqual(h.markdown, source, "exact original bytes")
+        XCTAssertEqual(h.textView.blockKinds, ["p", "code", "p"])
+    }
+
+    /// Fixed example of a seed that failed once (generator seed 54): a heading as the last line, no final newline.
+    /// The caret at the end of the note must be where AppKit puts it, not 50 pt past the text.
+    func testCaretAtTheEndOfALastHeadingMatchesAppKit() {
+        let h = NewEditorHost(markdown: "snake_case 42 caf\u{e9}\n\u{65E5}\u{672C} alpha\nsnake_case alpha **alpha x** a*b 42\nbeta beta x\n# 42")
+        h.select(h.length)
+        XCTAssertEqual(h.caret.minX, h.appKitCaretRect.minX, accuracy: 1.5)
+        XCTAssertEqual(h.caret.minY, h.appKitCaretRect.minY, accuracy: 1.5)
+    }
+
+    // MARK: Tab, pipes and paste inside a cell
+
+    /// The cell separator is the tab, so no typed or pasted character may add one (or a row break) to the buffer.
+    private func assertCleanFile(_ saved: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(saved.unicodeScalars.contains("\u{2028}"), "no U+2028 in the file", file: file, line: line)
+        for row in saved.components(separatedBy: "\n") where row.hasPrefix("|") {
+            XCTAssertFalse(row.contains("\t"), "no tab in table row \(row)", file: file, line: line)
+        }
+    }
+
+    func testTabTypedInATableCellInsertsNothingAndKeepsTheColumns() {
+        let source = "intro\n| a | b |\n|---|---|\n| x | y |\nafter\n"
+        let h = NewEditorHost(markdown: source)
+        h.select(NSString(string: h.string).range(of: "x").upperBound)
+        h.press(.tab)
+        XCTAssertEqual(h.markdown, source, "Tab changes nothing")
+        h.type("Z")
+        h.press(.tab)
+        h.type("W")
+        XCTAssertEqual(h.savedMarkdown, "intro\n| a | b |\n|---|---|\n| xZW | y |\nafter\n")
+        assertCleanFile(h.savedMarkdown!)
+        XCTAssertEqual(NewEditorHost(markdown: h.savedMarkdown!).textView.blockKinds, ["p", "table", "p"])
+    }
+
+    func testAPipeTypedInACellIsEscapedAndRoundTrips() {
+        let source = "| a | b |\n|---|---|\n| x | y |\n"
+        let h = NewEditorHost(markdown: source)
+        h.select(NSString(string: h.string).range(of: "x").upperBound)
+        h.type("|q")
+        let saved = h.savedMarkdown!
+        XCTAssertEqual(saved, "| a | b |\n|---|---|\n| x\\|q | y |\n")
+        assertCleanFile(saved)
+        let again = NewEditorHost(markdown: saved)
+        XCTAssertEqual(again.string, h.string, "reopening shows the same cells")
+        XCTAssertEqual(again.markdown, saved)
+    }
+
+    func testPastedTabsAndLineBreaksInACellNeverChangeTheColumnCount() {
+        let source = "| a | b |\n|---|---|\n| x | y |\n"
+        let h = NewEditorHost(markdown: source)
+        h.select(NSString(string: h.string).range(of: "x").upperBound)
+        h.textView.insertText("1\t2\u{2028}3\n4", replacementRange: h.textView.selectedRange())
+        let saved = h.savedMarkdown!
+        assertCleanFile(saved)
+        XCTAssertEqual(saved, "| a | b |\n|---|---|\n| x1 2 3 4 | y |\n")
+        XCTAssertEqual(h.textView.blockKinds, ["table"])
+    }
+
+    // MARK: A table wider than the panel
+
+    func testATableWiderThanThePanelStaysInsideItAndItsCellsLineUp() {
+        let cell = "abcd"
+        let cols = 6
+        let row = { (c: String) in "| " + Array(repeating: c, count: cols).joined(separator: " | ") + " |" }
+        let source = [row("abcd"), "|" + String(repeating: "---|", count: cols), row("abcd"), row("wxyz")].joined(separator: "\n") + "\n"
+        let h = NewEditorHost(markdown: source, size: CGSize(width: 330, height: 400))
+        let tc = h.textView.textContainer!
+        let width = tc.size.width
+        let textWidth = (cell as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 15)]).width
+        XCTAssertGreaterThan(NoteBuffer.tableStops(columnWidths: Array(repeating: ceil(textWidth), count: cols)).last!, width,
+                             "the table is wider than the panel at its natural size")
+        guard let grid = NoteTextEngine.tableGrids(in: h.textView).first else { return XCTFail("no grid") }
+        let origin = h.textView.textContainerOrigin.x
+        XCTAssertEqual(grid.columnEdges.count, cols + 1)
+        XCTAssertGreaterThanOrEqual(grid.columnEdges.first!, origin, "the left edge is inside the container")
+        XCTAssertLessThanOrEqual(grid.columnEdges.last!, origin + width, "the right edge is inside the container")
+        XCTAssertEqual(grid.rows.count, 3)
+        for r in grid.rows { XCTAssertLessThanOrEqual(r.height, 30, "a row is one line, it does not wrap") }
+        let starts = h.tableCellStarts()
+        XCTAssertEqual(starts.count, 3 * cols)
+        for (i, s) in starts.enumerated() {
+            let c = i % cols
+            let x = NoteTextEngine.caretRect(in: h.textView, at: s).minX
+            XCTAssertGreaterThan(x, grid.columnEdges[c], "cell \(i) starts inside column \(c)")
+            XCTAssertLessThan(x, grid.columnEdges[c + 1], "cell \(i) starts inside column \(c)")
+            let end = NoteTextEngine.caretRect(in: h.textView, at: s + 4).minX
+            XCTAssertLessThanOrEqual(end, grid.columnEdges[c + 1], "cell \(i) text ends inside its column")
+        }
+        // Widening the panel gives the columns their natural width back.
+        h.textView.setFrameSize(NSSize(width: 900, height: 400))
+        let wide = NoteTextEngine.tableGrids(in: h.textView)[0]
+        XCTAssertGreaterThan(wide.columnEdges.last! - wide.columnEdges.first!, grid.columnEdges.last! - grid.columnEdges.first!)
+    }
+
+    func testTypedMarkdownInACodeBlockStaysLiteral() {
+        let h = NewEditorHost(markdown: "```\n\n```\n")
+        h.select(0)
+        for text in ["# ", "- ", "> ", "1. ", "- [ ] ", "---", "```", "**x**", "*x*", "`x`", "~~x~~"] {
+            h.type(text)
+            h.press(.enter)
+        }
+        XCTAssertEqual(h.textView.blockKinds, ["code"])
+        let md = h.savedMarkdown!
+        XCTAssertTrue(md.contains("# \n- \n> \n1. \n- [ ] \n---\n"), md)
+        XCTAssertTrue(md.contains("**x**\n*x*\n`x`\n~~x~~\n"), md)
+        XCTAssertEqual(NewEditorHost(markdown: md).textView.blockKinds, ["code"])
+    }
+
+    func testEditingACellChangesOnlyTheTableBlockInTheFile() {
+        let source = "# t\n\ntext\n| a | b |\n|---|---|\n| x | y |\n| p | q |\nafter  \n```\ncode\n```\nend"
+        let h = NewEditorHost(markdown: source)
+        let y = NSString(string: h.string).range(of: "y")
+        h.select(y.upperBound)
+        h.type("Z")
+        let saved = h.savedMarkdown!
+        let lines = source.components(separatedBy: "\n"), now = saved.components(separatedBy: "\n")
+        XCTAssertEqual(Array(now.prefix(3)), Array(lines.prefix(3)))
+        XCTAssertEqual(Array(now.suffix(4)), Array(lines.suffix(4)), "blocks after the table keep their bytes")
+        XCTAssertTrue(saved.contains("| x | yZ |"), saved)
+        XCTAssertEqual(now.count, lines.count)
+        h.textView.undoManager?.undo()
+        XCTAssertEqual(h.markdown, source, "undo restores the original bytes")
+    }
+
+    func testTableIsAGridAndArrowKeysWalkTheCellsInReadingOrder() {
+        let source = "| a | bb | c |\n|---|---|---|\n| d | | f |\n| g | h |\n"
+        let h = NewEditorHost(markdown: source)
+        XCTAssertEqual(h.textView.blockKinds, ["table"])
+        let grids = NoteTextEngine.tableGrids(in: h.textView)
+        XCTAssertEqual(grids.count, 1)
+        guard grids.count == 1, grids[0].rows.count == 3, grids[0].columnEdges.count == 4 else { return XCTFail("no grid") }
+        XCTAssertEqual(grids[0].rows.count, 3, "header and two body rows; the delimiter row is not shown")
+        XCTAssertEqual(grids[0].columnEdges.count, 4, "three columns")
+        XCTAssertEqual(grids[0].columnEdges, grids[0].columnEdges.sorted())
+        for i in 1..<grids[0].rows.count { XCTAssertGreaterThan(grids[0].rows[i].minY, grids[0].rows[i - 1].minY) }
+        // Every cell start is inside its own column, and Right visits them left to right, then the next row.
+        let starts = h.tableCellStarts()
+        XCTAssertEqual(starts.count, 3 + 3 + 2)
+        h.select(0)
+        var visited: [Int] = [0]
+        while h.location < h.length - 1 {
+            h.press(.right)
+            if starts.contains(h.location) { visited.append(h.location) }
+        }
+        XCTAssertEqual(visited, starts, "reading order")
+        let edges = grids[0].columnEdges
+        for (i, s) in starts.enumerated() {
+            let column = [0, 1, 2, 0, 1, 2, 0, 1][i]
+            let x = NoteTextEngine.caretRect(in: h.textView, at: s).minX
+            XCTAssertGreaterThan(x, edges[column], "cell \(i) starts inside its column")
+            XCTAssertLessThan(x, edges[column + 1], "cell \(i) starts inside its column")
+        }
+    }
+
+    func testEnterInATableCellDoesNothing() {
+        let source = "| a | b |\n|---|---|\n| x | y |\n"
+        let h = NewEditorHost(markdown: source)
+        h.select(NSString(string: h.string).range(of: "x").upperBound)
+        h.press(.enter)
+        XCTAssertEqual(h.markdown, source)
+        XCTAssertEqual(h.textView.blockKinds, ["table"])
+    }
+
+    /// The prototype risk: on TextKit 1 the caret rectangle read as zero at the start of table cells while typing
+    /// landed correctly. Every cell start (also empty cells and cells of short rows) must have a drawn caret that
+    /// AppKit agrees with, and typing there must land at it.
+    func testTheCaretIsVisibleAtTheFirstPositionOfEveryTableCell() {
+        var sources = [
+            "| a | bb | c |\n|---|---|---|\n| d | | f |\n| | h |\n",
+            "| |\n|-|\n| x |\n",
+            "para\n| \u{65E5}\u{672C} | caf\u{e9} |\n|---|---|\n| **b** | `c` |\n",
+        ]
+        for seed in 1...UInt64(ProcessInfo.processInfo.environment["SIDEKICK_FUZZ_SEEDS"].flatMap { UInt64($0) } ?? 40) {
+            var gen = NewEditorNoteGenerator(seed: seed)
+            sources.append(gen.markdown())
+        }
+        var cells = 0
+        for (n, source) in sources.enumerated() {
+            let h = NewEditorHost(markdown: source)
+            for s in h.tableCellStarts() {
+                cells += 1
+                h.select(s)
+                let mine = h.caret, theirs = h.appKitCaretRect
+                XCTAssertGreaterThan(mine.height, 0, "source \(n) cell start \(s)")
+                XCTAssertGreaterThan(theirs.height, 0, "source \(n) cell start \(s): AppKit reports no caret rectangle")
+                XCTAssertNotEqual(theirs.origin, .zero, "source \(n) cell start \(s): AppKit reports a zero rectangle")
+                XCTAssertEqual(mine.minX, theirs.minX, accuracy: 1.5, "source \(n) cell start \(s) x")
+                XCTAssertEqual(mine.minY, theirs.minY, accuracy: 1.5, "source \(n) cell start \(s) y")
+                let before = h.caret
+                let original = h.string
+                h.type("Z")
+                let start = NoteTextEngine.caretRect(in: h.textView, at: s)
+                XCTAssertEqual(start.minX, before.minX, accuracy: 4, "source \(n) cell start \(s): typed character not at the caret")
+                XCTAssertEqual(start.minY, before.minY, accuracy: 0.5)
+                h.press(.backspace)
+                XCTAssertEqual(h.string, original)
+            }
+        }
+        XCTAssertGreaterThan(cells, 20, "the property saw table cells")
+    }
 }

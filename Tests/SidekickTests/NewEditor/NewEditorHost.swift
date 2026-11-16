@@ -44,17 +44,17 @@ final class NewEditorHost {
     func select(_ location: Int) { textView.setSelectedRange(NSRange(location: location, length: 0)) }
 
     enum Key {
-        case left, right, up, down, enter, backspace, forwardDelete
+        case left, right, up, down, enter, backspace, forwardDelete, tab
         var code: UInt16 {
             switch self {
             case .left: return 123; case .right: return 124; case .down: return 125; case .up: return 126
-            case .enter: return 36; case .backspace: return 51; case .forwardDelete: return 117
+            case .enter: return 36; case .backspace: return 51; case .forwardDelete: return 117; case .tab: return 48
             }
         }
         var chars: String {
             switch self {
             case .left: return "\u{F702}"; case .right: return "\u{F703}"; case .down: return "\u{F701}"; case .up: return "\u{F700}"
-            case .enter: return "\r"; case .backspace: return "\u{7F}"; case .forwardDelete: return "\u{F728}"
+            case .enter: return "\r"; case .backspace: return "\u{7F}"; case .forwardDelete: return "\u{F728}"; case .tab: return "\t"
             }
         }
     }
@@ -106,11 +106,34 @@ final class NewEditorHost {
     func undo() { endUndoGroup(); textView.undoManager?.undo(); endUndoGroup() }
 
     /// Where AppKit itself reports the insertion point (screen -> view coordinates).
-    var appKitCaretOrigin: NSPoint {
+    var appKitCaretRect: NSRect {
         var actual = NSRange()
         let screen = textView.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: &actual)
         let inWindow = window.convertFromScreen(screen)
-        return textView.convert(inWindow, from: nil).origin
+        return textView.convert(inWindow, from: nil)
+    }
+    var appKitCaretOrigin: NSPoint { appKitCaretRect.origin }
+
+    /// Offset of the first position of every table cell (after a tab or a row break, and at the table start),
+    /// in the text the view shows. Table paragraphs are found through the document's block kinds.
+    func tableCellStarts() -> [Int] {
+        let ns = string as NSString
+        var starts: [Int] = []
+        var blockIndex = 0
+        let kinds = textView.blockKinds
+        var location = 0
+        while location <= ns.length, blockIndex < kinds.count {
+            let end = ns.range(of: "\n", range: NSRange(location: location, length: ns.length - location)).location
+            let stop = end == NSNotFound ? ns.length : end
+            if kinds[blockIndex] == "table" {
+                starts.append(location)
+                for i in location..<stop where ns.character(at: i) == 0x09 || ns.character(at: i) == 0x2028 { starts.append(i + 1) }
+            }
+            blockIndex += 1
+            if end == NSNotFound { break }
+            location = end + 1
+        }
+        return starts
     }
 }
 
@@ -125,6 +148,31 @@ struct NewEditorNoteGenerator {
 
     private mutating func words(_ max: Int) -> String {
         (0..<(1 + int(max))).map { _ in Self.words[int(Self.words.count)] }.joined(separator: " ")
+    }
+
+    /// A fenced code block: markup-looking lines, empty lines, an optional info word.
+    private mutating func code() -> String {
+        let lines = (0..<(1 + int(3))).map { _ -> String in
+            switch int(5) {
+            case 0: return ""
+            case 1: return "# " + words(2)
+            case 2: return "**" + words(1) + "** and `x`"
+            default: return words(3)
+            }
+        }
+        return "```" + (int(3) == 0 ? "swift" : "") + "\n" + lines.joined(separator: "\n") + "\n```"
+    }
+
+    /// A table with a header, a delimiter row and body rows; cells may be empty and rows may be short.
+    private mutating func table() -> String {
+        let columns = 1 + int(3)
+        func row(_ short: Bool) -> String {
+            let n = short ? max(1, columns - 1) : columns
+            return "| " + (0..<n).map { _ in int(4) == 0 ? "" : words(2) }.joined(separator: " | ") + " |"
+        }
+        var rows = [row(false), "| " + Array(repeating: "---", count: columns).joined(separator: " | ") + " |"]
+        for _ in 0..<(1 + int(3)) { rows.append(row(int(4) == 0)) }
+        return rows.joined(separator: "\n")
     }
 
     mutating func markdown() -> String {
@@ -149,6 +197,8 @@ struct NewEditorNoteGenerator {
             case 0: out += String(repeating: "#", count: 1 + int(3)) + " " + words(3)
             case 1: break   // blank line
             case 2: out += words(2) + " **" + words(2) + "** " + words(2)
+            case 3: out += code()
+            case 4: out += table()
             default: out += words(4)
             }
             if i < count - 1 || int(4) != 0 { out += "\n" }
