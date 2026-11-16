@@ -7,8 +7,8 @@ struct NoteEditorView: NSViewRepresentable {
     @ObservedObject var openNote: OpenNote
     @ObservedObject var controller: EditorController
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let tv = NoteTextView.make()
+    /// The scroll view that shows `tv`. It starts with no size; the pane gives it one.
+    static func makeScrollView(for tv: NoteTextView) -> NSScrollView {
         let scrollView = NSScrollView(frame: .zero)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -16,6 +16,16 @@ struct NoteEditorView: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = NSColor.textBackgroundColor
         scrollView.documentView = tv
+        // The text view starts exactly as wide as the visible area. Its width autoresizing adds every later change of
+        // the visible area to this width, so a different starting width stays as a constant error (in the app the
+        // view kept the 100 pt it is made with, and text ran 100 pt under the panel's right edge).
+        tv.setFrameSize(NSSize(width: scrollView.contentSize.width, height: tv.frame.height))
+        return scrollView
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let tv = NoteTextView.make()
+        let scrollView = Self.makeScrollView(for: tv)
 
         tv.attach(openNote.content)
         tv.onShiftTabAtStart = { [weak controller] in controller?.onShiftTabAtBodyStart?() }
