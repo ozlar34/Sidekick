@@ -277,6 +277,22 @@ final class NewEditorClipboardTests: XCTestCase {
         XCTAssertEqual(h.textView.document.blocks[0].runs.map(\.text).joined(), "x\ty\u{2028}ab1\t2")
     }
 
+    func testPasteDisarmsAnArmedTypingStyle() {
+        let h = host("ab\n")
+        h.select(2)
+        let delegate = AppDelegate()
+        _ = NSApplication.shared
+        delegate.installMainMenu()
+        delegate.formatTargetOverride = { [unowned h] in h.textView }
+        let format = NSApp.mainMenu!.items.first { $0.submenu?.title == "Format" }!.submenu!
+        XCTAssertTrue(h.shortcut("b", keyCode: 11, [], in: format))   // Cmd+B: the next typed text is bold
+        pasteText(h, "x")
+        h.type("y")
+        XCTAssertEqual(h.markdown, "abxy\n", "the caret moved with the paste, so the armed style is gone")
+        h.undo(); h.undo()
+        XCTAssertEqual(h.markdown, "ab\n")
+    }
+
     func testEmptyOrUnreadablePasteboardChangesNothing() {
         let h = host("keep\n")
         h.select(2)
