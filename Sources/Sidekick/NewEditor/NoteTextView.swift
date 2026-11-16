@@ -161,10 +161,30 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: Structural key rules
 
-    /// Enter at the end of a heading starts a normal paragraph. Everywhere else Enter is native.
+    /// Kind of the paragraph that holds `location` (the empty tail paragraph has `tailKind`).
+    private func kind(atParagraphWith location: Int) -> BlockKind {
+        let ns = string as NSString
+        guard let storage = textStorage, ns.length > 0 else { return tailKind }
+        let para = ns.paragraphRange(for: NSRange(location: min(location, ns.length), length: 0))
+        if location >= ns.length, para.length == 0 || ns.character(at: ns.length - 1) == 0x0A { return tailKind }
+        return NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: max(0, min(para.location, ns.length - 1)), effectiveRange: nil))
+    }
+
+    /// Enter inside a code block adds a code line (a line break inside its paragraph, so it stays one block);
+    /// inside a table it does nothing (rows are not edited here). At the end of a heading it starts a normal
+    /// paragraph. Everywhere else Enter is native.
     override func insertNewline(_ sender: Any?) {
         let sel = selectedRange()
         let ns = string as NSString
+        switch kind(atParagraphWith: sel.location) {
+        case .fence:
+            let attrs = NoteBuffer.typingAttributes(for: .fence)
+            insertText(NSAttributedString(string: "\u{2028}", attributes: attrs), replacementRange: sel)
+            return
+        case .table:
+            return
+        default: break
+        }
         guard sel.length == 0, let storage = textStorage, ns.length > 0 else { return super.insertNewline(sender) }
         let ranges = NoteBuffer.paragraphRanges(in: ns)
         guard let para = ranges.first(where: { $0.location <= sel.location && sel.location <= NSMaxRange($0) }),

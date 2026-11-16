@@ -19,6 +19,7 @@ final class NewEditorHost {
         textView.frame = NSRect(origin: .zero, size: size)
         window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable],
                           backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = scroll
         textView.load(markdown: markdown)
         textView.onMarkdownChange = { [unowned self] md in self.savedMarkdown = md }
@@ -32,7 +33,7 @@ final class NewEditorHost {
         textView.attach(note.content)
     }
 
-    deinit { MainActor.assumeIsolated { window.orderOut(nil) } }
+    deinit { MainActor.assumeIsolated { window.close() } }
 
     var string: String { textView.string }
     var length: Int { (textView.string as NSString).length }
@@ -81,11 +82,34 @@ final class NewEditorHost {
     }
 
     /// Where AppKit itself reports the insertion point (screen -> view coordinates).
-    var appKitCaretOrigin: NSPoint {
+    var appKitCaretRect: NSRect {
         var actual = NSRange()
         let screen = textView.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: &actual)
         let inWindow = window.convertFromScreen(screen)
-        return textView.convert(inWindow, from: nil).origin
+        return textView.convert(inWindow, from: nil)
+    }
+    var appKitCaretOrigin: NSPoint { appKitCaretRect.origin }
+
+    /// Offset of the first position of every table cell (after a tab or a row break, and at the table start),
+    /// in the text the view shows. Table paragraphs are found through the document's block kinds.
+    func tableCellStarts() -> [Int] {
+        let ns = string as NSString
+        var starts: [Int] = []
+        var blockIndex = 0
+        let kinds = textView.blockKinds
+        var location = 0
+        while location <= ns.length, blockIndex < kinds.count {
+            let end = ns.range(of: "\n", range: NSRange(location: location, length: ns.length - location)).location
+            let stop = end == NSNotFound ? ns.length : end
+            if kinds[blockIndex] == "table" {
+                starts.append(location)
+                for i in location..<stop where ns.character(at: i) == 0x09 || ns.character(at: i) == 0x2028 { starts.append(i + 1) }
+            }
+            blockIndex += 1
+            if end == NSNotFound { break }
+            location = end + 1
+        }
+        return starts
     }
 }
 
@@ -101,14 +125,41 @@ struct NewEditorNoteGenerator {
         (0..<(1 + int(max))).map { _ in Self.words[int(Self.words.count)] }.joined(separator: " ")
     }
 
+    /// A fenced code block: markup-looking lines, empty lines, an optional info word.
+    private mutating func code() -> String {
+        let lines = (0..<(1 + int(3))).map { _ -> String in
+            switch int(5) {
+            case 0: return ""
+            case 1: return "# " + words(2)
+            case 2: return "**" + words(1) + "** and `x`"
+            default: return words(3)
+            }
+        }
+        return "```" + (int(3) == 0 ? "swift" : "") + "\n" + lines.joined(separator: "\n") + "\n```"
+    }
+
+    /// A table with a header, a delimiter row and body rows; cells may be empty and rows may be short.
+    private mutating func table() -> String {
+        let columns = 1 + int(3)
+        func row(_ short: Bool) -> String {
+            let n = short ? max(1, columns - 1) : columns
+            return "| " + (0..<n).map { _ in int(4) == 0 ? "" : words(2) }.joined(separator: " | ") + " |"
+        }
+        var rows = [row(false), "| " + Array(repeating: "---", count: columns).joined(separator: " | ") + " |"]
+        for _ in 0..<(1 + int(3)) { rows.append(row(int(4) == 0)) }
+        return rows.joined(separator: "\n")
+    }
+
     mutating func markdown() -> String {
         var out = ""
         let count = 1 + int(6)
         for i in 0..<count {
-            switch int(5) {
+            switch int(8) {
             case 0: out += String(repeating: "#", count: 1 + int(3)) + " " + words(3)
             case 1: break   // blank line
             case 2: out += words(2) + " **" + words(2) + "** " + words(2)
+            case 3: out += code()
+            case 4: out += table()
             default: out += words(4)
             }
             if i < count - 1 || int(4) != 0 { out += "\n" }

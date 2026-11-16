@@ -190,7 +190,9 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .fence, .table:   // styling of these kinds is tickets 07/08
+        case .fence:   // as today: monospaced 14, and a code block holds no marks
+            return NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .table:   // styling of these kinds is tickets 07/08
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .heading(let level):
             let size: CGFloat = level == 1 ? 28 : level == 2 ? 22 : 18
@@ -198,14 +200,20 @@ enum NoteBuffer {
         }
     }
 
+    /// Space a table cell keeps between its text and the grid line, left and right.
+    static let tableCellPadding: CGFloat = 8
+    private static let tableMinimumColumn: CGFloat = 40
+
     static func paragraphStyle(for kind: BlockKind) -> NSParagraphStyle {
-        func style(_ line: CGFloat, _ spacing: CGFloat) -> NSParagraphStyle {
+        func style(_ line: CGFloat, _ spacing: CGFloat, before: CGFloat = 0) -> NSParagraphStyle {
             let s = NSMutableParagraphStyle()
-            s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing
+            s.minimumLineHeight = line; s.maximumLineHeight = line; s.paragraphSpacing = spacing; s.paragraphSpacingBefore = before
             return s
         }
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .fence, .table: return style(20, 1)
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider: return style(20, 1)
+        case .fence: return style(20, 8, before: 8)   // room for the background's own padding
+        case .table: return style(26, 8, before: 8)
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)
         }
     }
@@ -231,9 +239,64 @@ enum NoteBuffer {
             let kind = Self.kind(fromAttribute: storage.attribute(.noteBlockKind, at: end - 1, effectiveRange: nil))
             storage.addAttributes([.noteBlockKind: attributeValue(kind), .paragraphStyle: paragraphStyle(for: kind),
                                    .foregroundColor: NSColor.textColor], range: range)
+            storage.removeAttribute(.baselineOffset, range: range)
             storage.enumerateAttribute(.noteBold, in: range, options: []) { value, sub, _ in
                 storage.addAttribute(.font, value: font(for: kind, bold: value != nil), range: sub)
             }
+            if kind == .table { styleTable(storage, range: range) }
         }
+    }
+
+    // MARK: Table grid
+
+    /// A table is one paragraph: cells of a row are separated by a tab, rows by U+2028. Its columns are tab stops
+    /// that make the cells line up; the grid lines are drawn from the same stops (`NoteTextEngine`). The header row
+    /// (the first line) is semibold, as today.
+    private static func styleTable(_ storage: NSTextStorage, range: NSRange) {
+        let ns = storage.string as NSString
+        var end = NSMaxRange(range)
+        if end > range.location, ns.character(at: end - 1) == 0x0A { end -= 1 }   // the paragraph's own "\n"
+        var rows: [NSRange] = []
+        var start = range.location
+        for i in range.location..<end where ns.character(at: i) == 0x2028 {
+            rows.append(NSRange(location: start, length: i - start)); start = i + 1
+        }
+        rows.append(NSRange(location: start, length: end - start))
+        if let header = rows.first, header.length > 0 {
+            storage.enumerateAttribute(.noteBold, in: header, options: []) { value, sub, _ in
+                if value == nil { storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 15, weight: .semibold), range: sub) }
+            }
+        }
+        var widths: [CGFloat] = []
+        for row in rows {
+            var cellStart = row.location
+            var column = 0
+            for i in row.location...NSMaxRange(row) where i == NSMaxRange(row) || ns.character(at: i) == 0x09 {
+                let cell = NSRange(location: cellStart, length: i - cellStart)
+                var w: CGFloat = 0
+                if cell.length > 0 { w = ceil(storage.attributedSubstring(from: cell).size().width) }
+                if column == widths.count { widths.append(w) } else { widths[column] = max(widths[column], w) }
+                column += 1; cellStart = i + 1
+            }
+        }
+        let style = NSMutableParagraphStyle()
+        style.setParagraphStyle(paragraphStyle(for: .table))
+        style.tabStops = tableStops(columnWidths: widths).map { NSTextTab(textAlignment: .left, location: $0) }
+        style.defaultTabInterval = 40
+        storage.addAttribute(.paragraphStyle, value: style, range: range)
+        storage.addAttribute(.baselineOffset, value: 3, range: range)   // text sits in the middle of the taller row
+    }
+
+    /// Where each column's text starts, measured from where the first column's text starts: column `c` is as wide as
+    /// its widest cell plus the padding on both sides. Returns one tab stop per column: the start of the next column,
+    /// so the last stop is the table's right edge plus one padding.
+    static func tableStops(columnWidths: [CGFloat]) -> [CGFloat] {
+        var stops: [CGFloat] = []
+        var x: CGFloat = 0
+        for w in columnWidths {
+            x += max(w + 2 * tableCellPadding, tableMinimumColumn)
+            stops.append(x)
+        }
+        return stops
     }
 }
