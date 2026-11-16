@@ -407,6 +407,33 @@ final class NewEditorInlineTests: XCTestCase {
         }
     }
 
+    /// Inputs of generated seeds that once failed, kept as plain examples (seeds 138, 186, 192, 248: type, then undo).
+    func testUndoOfATypedCharacterRestoresTheExactBytesForOnceFailingNotes() {
+        let cases: [(String, Double)] = [
+            ("a*b **42** *42* https://e.co 42\nbeta **gamma** caf\u{e9} gamma", 0.3),
+            ("- [x] snake_case caf\u{e9} x\n---", 1.0),
+            ("gamma gamma https://example.com/alpha 42\n42 beta https://example.com/x a*b snake_case\n---\n\n", 0.6),
+            ("# gamma beta\nx https://example.com/a*b x \u{65e5}\u{672c}\n---\n", 0.6),
+        ]
+        for (source, fraction) in cases {
+            let h = NewEditorHost(markdown: source)
+            h.select(Int(Double(h.length) * fraction))
+            h.type("Z")
+            h.undo()
+            XCTAssertEqual(h.markdown, source, "\(source.debugDescription) at \(fraction)")
+        }
+    }
+
+    /// Seed 217, location 1: Backspace after the first character of a note that opens with a rule, then undo.
+    func testBackspaceThenUndoRestoresTheExactBytesForOnceFailingNote() {
+        let source = "***\n9. caf\u{e9} \u{65e5}\u{672c}\n\u{65e5}\u{672c} \u{65e5}\u{672c} beta 42\n- \n- a*b gamma gamma"
+        let h = NewEditorHost(markdown: source)
+        h.select(1)
+        h.press(.backspace)
+        h.undo()
+        XCTAssertEqual(h.markdown, source)
+    }
+
     /// SIDEKICK_ONLY_SEEDS=138,186 re-runs just those seeds.
     private var seedList: [UInt64] {
         if let only = ProcessInfo.processInfo.environment["SIDEKICK_ONLY_SEEDS"] { return only.split(separator: ",").compactMap { UInt64($0) } }
