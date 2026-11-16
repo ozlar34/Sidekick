@@ -37,7 +37,7 @@ private func isShortcutTakenBySystem(_ shortcut: KeyboardShortcuts.Shortcut) -> 
 
 struct SettingsView: View {
     @AppStorage(Defaults.notesFolder, store: Defaults.store) private var notesFolder: String = ""
-    @AppStorage(Defaults.panelWidth) private var panelWidth: Double = 380
+    @AppStorage(Defaults.panelWidth) private var panelWidth: Double = Double(PanelSizes.defaultPanelWidth)
     @AppStorage(Defaults.showInDock) private var showInDock: Bool = true
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
@@ -70,7 +70,7 @@ struct SettingsView: View {
                     TextField("", value: $panelWidth, format: .number)
                         .frame(width: 60)
                         .onChange(of: panelWidth) { _, newValue in
-                            let clamped = max(260, min(560, newValue))
+                            let clamped = Double(PanelSizes.panelWidth(CGFloat(newValue)))
                             if clamped != newValue { panelWidth = clamped }
                             if let ctrl = (NSApp.delegate as? AppDelegate)?.panelController,
                                ctrl.panel?.isVisible == true {

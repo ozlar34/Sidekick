@@ -5,7 +5,7 @@ struct SidebarView: View {
     @ObservedObject var store: NoteStore
     @ObservedObject var panelState: PanelState
     @AppStorage(Defaults.lastSelectedNoteFilename) private var lastSelectedNoteFilename: String = ""
-    @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = 190
+    @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = Double(PanelSizes.defaultSidebarWidth)
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
 
@@ -18,22 +18,30 @@ struct SidebarView: View {
         return store.notes.first(where: { $0.id == id })
     }
 
-    private var sidebarDividerHandle: some View {
+    private func sidebarDividerHandle(panelWidth: CGFloat) -> some View {
         let handle = ResizeHandleView(
             onDrag: { (newWidth: CGFloat) in
-                sidebarWidth = Double(max(CGFloat(120), min(CGFloat(280), newWidth)))
+                sidebarWidth = Double(PanelSizes.sidebarWidth(wanted: newWidth, panelWidth: panelWidth))
             },
             onDragEnd: {},
-            startWidthProvider: { CGFloat(sidebarWidth) },
+            // The drag starts from the width that is shown, which a narrow panel can make smaller than the saved one.
+            startWidthProvider: { PanelSizes.sidebarWidth(wanted: CGFloat(sidebarWidth), panelWidth: panelWidth) },
             growsRight: true
         )
         return handle.frame(width: 6)
     }
 
     var body: some View {
+        // The sidebar's width depends on the panel's width: a narrow panel takes room from the sidebar, not the editor.
+        GeometryReader { geometry in
+            content(panelWidth: geometry.size.width)
+        }
+    }
+
+    private func content(panelWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             // ResizeHandleView is attached as .overlay(alignment: .leading) below
-            // Sidebar — 140pt, fully opaque windowBackground. Borderless panels
+            // Sidebar — fully opaque windowBackground. Borderless panels
             // can't blend vibrancy against window chrome (there isn't any), so
             // any translucency just bleeds the desktop through. Solid fill it is.
             ZStack {
@@ -88,14 +96,14 @@ struct SidebarView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .frame(width: CGFloat(sidebarWidth))
+            .frame(width: PanelSizes.sidebarWidth(wanted: CGFloat(sidebarWidth), panelWidth: panelWidth))
             .overlay(alignment: .trailing) {
                 Rectangle()
                     .fill(Color(.separatorColor))
                     .frame(width: 1)
             }
             .overlay(alignment: .trailing) {
-                sidebarDividerHandle
+                sidebarDividerHandle(panelWidth: panelWidth)
             }
 
             // Editor — plain opaque background

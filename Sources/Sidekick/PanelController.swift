@@ -25,8 +25,7 @@ final class PanelController {
 
     var panelWidth: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
-        let raw = saved > 0 ? saved : 380
-        return max(260, min(560, raw))
+        return PanelSizes.panelWidth(saved > 0 ? saved : PanelSizes.defaultPanelWidth)
     }()
     private let slideDuration: TimeInterval = 0.20 // CONTEXT.md locks 200ms
 
@@ -131,10 +130,10 @@ final class PanelController {
     // MARK: - Resize API
 
     /// Resizes the panel live, keeping the right edge anchored.
-    /// Width is clamped to [260, 560] per CONTEXT.md P-04.
+    /// Width is clamped to the limits in `PanelSizes`.
     func resizePanel(to newWidth: CGFloat) {
         guard let panel else { return }
-        let clamped = max(260, min(560, newWidth))
+        let clamped = PanelSizes.panelWidth(newWidth)
         var f = panel.frame
         let rightEdge = f.maxX
         f.origin.x = rightEdge - clamped
