@@ -118,12 +118,15 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(run("hello world") { FormattingToolbarView.performInsertThematicBreak(in: $0) }, "hello world\n---")
     }
 
-    func testLinkIsLeftToTicket11AndChangesNothing() {
+    func testLinkAsksForAnAddressAndWritesNothingUntilItIsCommitted() {
         let h = host("hello world")
         select("hello", in: h)
         delegate.formatLink(nil)
+        XCTAssertNotNil(h.textView.linkField)
         XCTAssertEqual(h.markdown, "hello world")
+        h.pressInField(.escape)
         FormattingToolbarView.performWrap(prefix: "[", suffix: "]()", in: h.textView)
+        h.pressInField(.escape)
         XCTAssertEqual(h.markdown, "hello world")
     }
 
