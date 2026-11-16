@@ -96,6 +96,25 @@ extension NoteTextView {
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool { read(pboard) }
     override func readSelection(from pboard: NSPasteboard) -> Bool { read(pboard) }
 
+    /// NSTextView validates Paste against the general pasteboard; this view pastes from `clipboard`, so Paste is
+    /// enabled by what that board holds. Every other item is NSTextView's.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if isPasteAction(item.action) { return canPaste }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if isPasteAction(menuItem.action) { return canPaste }
+        return super.validateMenuItem(menuItem)
+    }
+
+    private func isPasteAction(_ action: Selector?) -> Bool {
+        action == #selector(NSText.paste(_:)) || action == #selector(NSTextView.pasteAsPlainText(_:))
+            || action == #selector(NSTextView.pasteAsRichText(_:))
+    }
+
+    private var canPaste: Bool { isEditable && Self.plainText(from: clipboard) != nil }
+
     private func pasteFromClipboard() { _ = read(clipboard) }
 
     private func read(_ pboard: NSPasteboard) -> Bool {

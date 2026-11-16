@@ -515,6 +515,25 @@ final class NewEditorClipboardTests: XCTestCase {
             XCTAssertEqual(reopened.textView.blockKinds, h.textView.blockKinds, "seed \(seed)")
         }
     }
+
+    /// Paste validation asks the view's own clipboard, not the general pasteboard. Whatever the system clipboard holds, a
+    /// private board with text enables Paste and an empty one disables it (one of the two fails if validation reads
+    /// the general board). The general pasteboard is never touched.
+    func testPasteValidationReadsTheViewsClipboard() {
+        let full = board()
+        full.setString("text", forType: .string)
+        let empty = board()
+        let item = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        for action in [#selector(NSText.paste(_:)), #selector(NSTextView.pasteAsPlainText(_:)), #selector(NSTextView.pasteAsRichText(_:))] {
+            item.action = action
+            let h = host("x", board: full)
+            XCTAssertTrue(h.textView.validateUserInterfaceItem(item), "\(action) with text on the clipboard")
+            XCTAssertTrue(h.textView.validateMenuItem(item), "\(action) menu item with text on the clipboard")
+            h.textView.clipboard = empty
+            XCTAssertFalse(h.textView.validateUserInterfaceItem(item), "\(action) with an empty clipboard")
+            XCTAssertFalse(h.textView.validateMenuItem(item), "\(action) menu item with an empty clipboard")
+        }
+    }
 }
 
 /// A drag as the destination sees it, so that the drag delegate path runs without a real drag session.
