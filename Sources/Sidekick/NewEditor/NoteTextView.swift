@@ -41,19 +41,43 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         }
     }
 
-    /// The literal number of the numbered block at a document index (`7.` -> 7), for drawing the marker.
-    fileprivate func literalNumber(ofBlock index: Int) -> Int? {
+    /// The number of the numbered block at a document index as the file spells it (`7.`, `3)`), for drawing the marker.
+    fileprivate func literalMarker(ofBlock index: Int) -> String? {
         let blocks = document.blocks
         guard blocks.indices.contains(index) else { return nil }
-        let digits = blocks[index].prefix.drop(while: { $0 == " " || $0 == "\t" }).prefix(while: { $0.isASCII && $0.isNumber })
-        return Int(digits)
+        let rest = blocks[index].prefix.drop(while: { $0 == " " || $0 == "\t" })
+        let digits = rest.prefix(while: { $0.isASCII && $0.isNumber })
+        guard !digits.isEmpty, let delimiter = rest.dropFirst(digits.count).first else { return nil }
+        return String(digits) + String(delimiter)
+    }
+
+    /// Gives every numbered paragraph in `range` (all when nil) the text indent its own number needs, so that `10.` and
+    /// `100.` keep the gap of `9.`. Attributes only; derived from the document, so it is not an undo step.
+    private func refreshNumberGutters(in range: NSRange?) {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let ns = storage.string as NSString
+        var changes: [(NSRange, NSParagraphStyle)] = []
+        for (i, para) in NoteBuffer.paragraphRanges(in: ns).enumerated() where para.location < ns.length {
+            if let r = range, NSMaxRange(para) + 1 < r.location - 1 || para.location > NSMaxRange(r) + 1 { continue }
+            guard NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: para.location, effectiveRange: nil)) == .numbered,
+                  let text = literalMarker(ofBlock: i) else { continue }
+            let wanted = NoteBuffer.paragraphStyle(for: .numbered, numberText: text)
+            let current = storage.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle
+            if current?.firstLineHeadIndent != wanted.firstLineHeadIndent {
+                changes.append((NSRange(location: para.location, length: min(para.length + 1, ns.length - para.location)), wanted))
+            }
+        }
+        guard !changes.isEmpty else { return }
+        storage.beginEditing()
+        for (r, style) in changes { storage.addAttribute(.paragraphStyle, value: style, range: r) }
+        storage.endEditing()
     }
 
     static func make() -> NoteTextView {
         let stack = NoteTextEngine.makeStack()
         let tv = NoteTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 0), textContainer: stack.container)
         tv.configure()
-        NoteTextEngine.configure(tv, tailKind: .paragraph) { [weak tv] index in tv?.literalNumber(ofBlock: index) }
+        NoteTextEngine.configure(tv, tailKind: .paragraph) { [weak tv] index in tv?.literalMarker(ofBlock: index) }
         tv.attach(NoteContent())
         return tv
     }
@@ -97,6 +121,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         new.storage.delegate = self
         isEditable = new.isEditable
         NoteTextEngine.setTailKind(new.tailKind, in: self)
+        refreshNumberGutters(in: nil)
         let length = new.storage.length
         let sel = new.savedSelection
         setSelectedRange(NSRange(location: min(sel.location, length), length: min(sel.length, max(0, length - sel.location))))
@@ -107,6 +132,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
     func load(markdown: String) {
         content.reload(markdown: markdown)
         NoteTextEngine.setTailKind(content.tailKind, in: self)
+        refreshNumberGutters(in: nil)
         pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
@@ -147,8 +173,10 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
 
     override func didChangeText() {
         super.didChangeText()
+        let edited = pendingStyleRange
         normalizeStyle()
         content.storageDidChange()
+        refreshNumberGutters(in: edited)
         NoteTextEngine.setTailKind(content.tailKind, in: self)
         refreshTailTypingAttributes()
         onMarkdownChange?(content.markdown)
@@ -162,7 +190,11 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         let sel = selectedRange()
         let ns = string as NSString
         guard sel.length == 0, sel.location == ns.length, sel.location == 0 || ns.character(at: sel.location - 1) == 0x0A else { return }
-        typingAttributes = NoteBuffer.typingAttributes(for: tailKind)
+        var attrs = NoteBuffer.typingAttributes(for: tailKind)
+        if tailKind == .numbered {
+            attrs[.paragraphStyle] = NoteBuffer.paragraphStyle(for: .numbered, numberText: literalMarker(ofBlock: NoteBuffer.paragraphRanges(in: ns).count - 1))
+        }
+        typingAttributes = attrs
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {

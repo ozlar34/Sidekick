@@ -88,6 +88,14 @@ final class NoteDocumentLineBlocksTests: XCTestCase {
 
     // MARK: 2. spellings
 
+    func testInsertedNumberedItemContinuesTheNumberOfTheItemAbove() {
+        var doc = NoteDocument(markdown: "3) x\n  9. y\n- z\n")
+        doc.apply(.insert(at: 1, kind: .numbered, runs: [Run("new")]))
+        doc.apply(.insert(at: 3, kind: .numbered, runs: [Run("after y")]))
+        doc.apply(.insert(at: 5, kind: .numbered, runs: [Run("after bullet")]))
+        XCTAssertEqual(doc.markdown(), "3) x\n4) new\n  9. y\n  10. after y\n- z\n1. after bullet\n")
+    }
+
     func testSpellingsSurviveEditsInTheSameBlockKind() {
         let md = "* star a\n* star b\n1) one\n2) two\n- [X] done\n- [ ] open\n_it_ and __b__\n  - indented\n"
         var doc = NoteDocument(markdown: md)

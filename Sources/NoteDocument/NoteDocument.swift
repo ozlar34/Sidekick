@@ -83,7 +83,7 @@ public struct NoteDocument: Equatable, Sendable {
             commit(i, kind: kind, prefix: NoteDocument.prefix(for: kind, replacing: blocks[i]), runs: NoteDocument.sanitize(runs))
         case .insert(let i, let kind, let runs):
             precondition((0...blocks.count).contains(i), "insert index out of range")
-            insertBlock(at: i, kind: kind, prefix: BlockSyntax.defaultPrefix(kind), runs: NoteDocument.sanitize(runs))
+            insertBlock(at: i, kind: kind, prefix: NoteDocument.insertPrefix(kind, after: i > 0 ? blocks[i - 1] : nil), runs: NoteDocument.sanitize(runs))
         case .remove(let i):
             precondition(blocks.indices.contains(i), "remove index out of range")
             blocks.remove(at: i)
@@ -208,6 +208,19 @@ public struct NoteDocument: Equatable, Sendable {
 
     private static func sanitize(_ runs: [Run]) -> [Run] {
         runs.map { var r = $0; r.text = Run.stripLineBreaks(r.text); return r }
+    }
+
+    /// Prefix of an inserted block: a numbered item after a numbered item takes the next number, with the same indent and
+    /// delimiter (`3)` -> `4)`), as a list continues when the user presses Enter. Every other new block gets the default
+    /// prefix (fidelity rule 2).
+    private static func insertPrefix(_ kind: BlockKind, after previous: Block?) -> String {
+        guard kind == .numbered, let p = previous, p.kind == .numbered else { return BlockSyntax.defaultPrefix(kind) }
+        let s = Array(p.prefix.unicodeScalars)
+        let start = BlockSyntax.skipBlanks(s, 0)
+        var end = start
+        while end < s.count, s[end].isASCII, s[end].properties.numericType == .decimal { end += 1 }
+        guard end > start, let number = Int(scalarsToString(s[start..<end])), number < 999_999_999 else { return BlockSyntax.defaultPrefix(kind) }
+        return scalarsToString(s[0..<start]) + String(number + 1) + scalarsToString(s[end...])
     }
 
     /// Keeps the file's spelling when a block stays in its kind family; otherwise the default prefix, carrying the
