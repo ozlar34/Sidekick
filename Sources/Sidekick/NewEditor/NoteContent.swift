@@ -18,11 +18,24 @@ final class NoteContent {
     private var synced: [NoteBuffer.Paragraph] = []
     /// Index of the last line at the previous sync (see `syncDocument`).
     private var tailLine = 0
-    /// The last few (buffer content, document) pairs. When the buffer comes back to a content it had before (undo, or
-    /// typing and deleting), the document of that time is used again, so the file's exact bytes come back too: the
-    /// paragraph diff alone cannot know which line breaks an earlier state had.
-    private var history: [(paragraphs: [NoteBuffer.Paragraph], document: NoteDocument)] = []
-    private static let historyLimit = 16
+    /// Every (buffer content, document) pair this note has been in, so that when the buffer comes back to a content it
+    /// had before (undo at any depth, redo, or typing and deleting) the document of that time is used again and the file's
+    /// exact bytes come back: the paragraph diff alone cannot know which line breaks or spellings an earlier state had.
+    /// Documents share their unedited blocks between states (copy on write), so a state costs one array of block
+    /// references. The memory is bounded by a budget of block references: past it the oldest states are dropped (the
+    /// loaded state never is), so only a very long session on a big note loses the oldest steps' spellings.
+    private struct Snapshot {
+        var paragraphs: [NoteBuffer.Paragraph]
+        var document: NoteDocument
+        let order: Int
+    }
+    /// Snapshots by a fingerprint of the paragraphs (kinds, text and run count; marks are compared on a hit).
+    private var history: [Int: [Snapshot]] = [:]
+    private var historyOrder: [(key: Int, order: Int)] = []
+    private var historyHead = 0
+    private var historyCost = 0
+    private var nextOrder = 0
+    private static let historyBudget = 1_000_000
 
     /// Blocks that a paste has just read, with their file bytes. A block of the buffer that equals one of them is written
     /// with its literal spellings (rule 1 of the note document), so that paste keeps `*` bullets, numbers and fences.
@@ -44,7 +57,8 @@ final class NoteContent {
         tailKind = tail
         tailLine = text.string.components(separatedBy: "\n").count - 1
         synced = NoteBuffer.paragraphs(of: document)
-        history = [(synced, document)]
+        history = [:]; historyOrder = []; historyHead = 0; historyCost = 0
+        remember(textKey: Self.fingerprint(synced), synced, pinned: true)
         storage.beginEditing()
         storage.setAttributedString(text)
         NoteBuffer.restyle(storage, edited: NSRange(location: 0, length: storage.length))
@@ -75,10 +89,10 @@ final class NoteContent {
         tailLine = lastLine
         let wanted = NoteBuffer.paragraphs(in: storage, tailKind: tailKind)
         if wanted == synced { return }
-        if let earlier = history.last(where: { $0.paragraphs.count == wanted.count && $0.paragraphs == wanted }) {
+        let key = Self.fingerprint(wanted)
+        if let earlier = history[key]?.last(where: { $0.paragraphs == wanted }) {
             document = earlier.document
             synced = wanted
-            remember(wanted)
             return
         }
         var prefix = 0
@@ -110,7 +124,7 @@ final class NoteContent {
             for _ in 0..<(oldCount - newMid.count) { document.apply(.remove(at: prefix + newMid.count)) }
         }
         synced = wanted
-        remember(wanted)
+        remember(textKey: key, wanted)
     }
 
     /// The file bytes of the pasted block that `p` equals, each used once (two equal blocks, such as dividers, may be
@@ -125,7 +139,7 @@ final class NoteContent {
     /// were numbered already: the buffer cannot show a number, so the document is edited directly, after the buffer change).
     func renumber(blocks indices: [Int]) {
         for (n, i) in indices.enumerated() where document.blocks.indices.contains(i) { document.apply(.setNumber(block: i, number: n + 1)) }
-        remember(synced)
+        remember(textKey: Self.fingerprint(synced), synced)
         onEdit?(document.markdown())
     }
 
@@ -134,12 +148,42 @@ final class NoteContent {
     func setNumber(_ number: Int, ofBlock index: Int) {
         guard document.blocks.indices.contains(index) else { return }
         document.apply(.setNumber(block: index, number: number))
-        remember(synced)
+        remember(textKey: Self.fingerprint(synced), synced)
         onEdit?(document.markdown())
     }
 
-    private func remember(_ paragraphs: [NoteBuffer.Paragraph]) {
-        history.append((paragraphs, document))
-        if history.count > Self.historyLimit { history.removeFirst() }
+    /// Records the current document for the buffer content `paragraphs` (fingerprint `textKey`). A content seen
+    /// before gets its document replaced (renumbering changes the file but not the buffer).
+    private static func fingerprint(_ paragraphs: [NoteBuffer.Paragraph]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(paragraphs.count)
+        for p in paragraphs {
+            hasher.combine(String(describing: p.kind))
+            hasher.combine(p.runs.count)
+            for r in p.runs { hasher.combine(r.text) }
+        }
+        return hasher.finalize()
+    }
+
+    private func remember(textKey: Int, _ paragraphs: [NoteBuffer.Paragraph], pinned: Bool = false) {
+        if let i = history[textKey]?.firstIndex(where: { $0.paragraphs == paragraphs }) {
+            history[textKey]![i].document = document
+            return
+        }
+        history[textKey, default: []].append(Snapshot(paragraphs: paragraphs, document: document, order: nextOrder))
+        if !pinned { historyOrder.append((textKey, nextOrder)) }
+        nextOrder += 1
+        historyCost += paragraphs.count + 1
+        // Drop the oldest unpinned states while over budget (always keep the newest).
+        while historyCost > Self.historyBudget, historyHead < historyOrder.count - 1 {
+            let old = historyOrder[historyHead]
+            historyHead += 1
+            if let i = history[old.key]?.firstIndex(where: { $0.order == old.order }) {
+                historyCost -= history[old.key]![i].paragraphs.count + 1
+                history[old.key]!.remove(at: i)
+                if history[old.key]!.isEmpty { history[old.key] = nil }
+            }
+        }
+        if historyHead > 4096 { historyOrder.removeFirst(historyHead); historyHead = 0 }
     }
 }

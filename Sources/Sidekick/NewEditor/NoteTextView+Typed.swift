@@ -98,7 +98,7 @@ extension NoteTextView {
         }
         attrs.removeValue(forKey: .attachment)
         typingAttributes = attrs
-        plainAfterConversion = (selectedRange().location, attrs)
+        armedTyping = (selectedRange().location, attrs)
         publishFormatState()
     }
 }

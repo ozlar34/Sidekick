@@ -209,4 +209,40 @@ final class NewEditorTests: XCTestCase {
             }
         }
     }
+
+    /// Document history (07): undo back to ANY earlier state gives that state's exact bytes, however many steps.
+    func testUndoOfManyEditsRestoresTheOriginalSpellingsAndRedoComesBack() {
+        let source = "intro\r\n___\r\n* one\r\n* two\r\n1) a\r\n2) b\r\nend\r\n"
+        let h = NewEditorHost(markdown: source)
+        XCTAssertEqual(h.markdown, source)
+        var states = [source]
+        // The first edits rewrite the very blocks whose spellings (`___`, `* `, `1)`, CRLF) the file has.
+        func start(of line: String) -> Int { NSString(string: h.string).range(of: line).location }
+        let rewrite: [() -> Void] = [
+            { h.select(start(of: "one")); h.press(.backspace) },        // the bullet becomes a plain line
+            { h.select(start(of: "a\n")); h.press(.backspace) },         // the numbered item becomes a plain line
+            { h.select(start(of: "two") + 3); h.type("!") },                 // the second bullet is edited
+            { h.select(start(of: "b\n") + 1); h.type("?") },                  // the second number is edited
+            { h.select(start(of: "intro") + 5); h.press(.forwardDelete) },    // the line break after intro goes
+        ]
+        for i in 0..<40 {
+            if i < rewrite.count { rewrite[i]() } else {
+                h.select(NSString(string: h.string).range(of: i % 2 == 0 ? "intro" : "end").upperBound)
+                h.type(String(UnicodeScalar(UInt8(97 + i % 26))))
+            }
+            h.endUndoGroup()
+            states.append(h.markdown)
+        }
+        XCTAssertNotEqual(h.markdown, source)
+        for i in stride(from: 39, through: 0, by: -1) {
+            h.undo()
+            XCTAssertEqual(h.markdown, states[i], "undo to state \(i)")
+        }
+        XCTAssertEqual(h.markdown, source)
+        for i in 1...40 {
+            h.textView.undoManager?.redo()
+            h.endUndoGroup()
+            XCTAssertEqual(h.markdown, states[i], "redo to state \(i)")
+        }
+    }
 }

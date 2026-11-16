@@ -112,6 +112,7 @@ extension NoteTextView {
             r = toggled(r, mark, on: !has(mark, r), bold: bold, italic: italic)
             write(r, into: &attrs)
             typingAttributes = attrs
+            armedTyping = (sel.location, attrs)
             publishFormatState()
             return
         }

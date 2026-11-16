@@ -234,6 +234,59 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(run.text, "hi"); XCTAssertTrue(run.underline); XCTAssertTrue(run.strikethrough)
     }
 
+    /// An armed style (09) wins over the style the characters before the caret would give (08's edge inheritance).
+    func testArmedStyleWinsAtTheEdgeOfAMark() {
+        // Italic switched OFF at the end of italic text: the next text is plain.
+        var h = host("go *it*\n")
+        h.select(5)
+        press(Self.italic, in: h)
+        h.type("z")
+        XCTAssertEqual(h.markdown, "go *it*z\n")
+        h.type("y")
+        XCTAssertEqual(h.markdown, "go *it*zy\n", "it stays off while typing goes on")
+        // Underline armed at the end of italic text: typed text keeps the italic and gets the underline.
+        h = host("go *it*\n")
+        h.select(5)
+        press(Self.underline, in: h)
+        h.type("z")
+        var run = NoteDocument(markdown: h.markdown).blocks[0].runs.last!
+        XCTAssertEqual(run.text, "z"); XCTAssertTrue(run.underline); XCTAssertNotNil(run.italic)
+        h.type("y")
+        run = NoteDocument(markdown: h.markdown).blocks[0].runs.last!
+        XCTAssertEqual(run.text, "zy"); XCTAssertTrue(run.underline)
+        // Bold switched off at the end of bold text, and armed bold after bold text that was switched to italic.
+        h = host("go **it**\n")
+        h.select(5)
+        press(Self.bold, in: h)
+        h.type("z")
+        XCTAssertEqual(h.markdown, "go **it**z\n")
+        h = host("go **it**\n")
+        h.select(5)
+        press(Self.italic, in: h)
+        h.type("z")
+        XCTAssertEqual(h.markdown, "go **it***z*\n", "italic replaces bold in the arm")
+        // Armed bold in front of italic text, at a plain/italic edge.
+        h = host("go *it*\n")
+        h.select(3)
+        press(Self.bold, in: h)
+        h.type("z")
+        XCTAssertEqual(h.markdown, "go **z***it*\n")
+        // Nothing armed: the style of the character before the caret still carries on.
+        h = host("go *it*\n")
+        h.select(5)
+        h.type("z")
+        XCTAssertEqual(h.markdown, "go *itz*\n")
+    }
+
+    func testArmedStyleStillStaysOutsideAPillAndALink() {
+        let h = host("go [a](https://y.co/z)\n")
+        h.select(4)
+        press(Self.bold, in: h)
+        h.type("z")
+        let runs = NoteDocument(markdown: h.markdown).blocks[0].runs
+        XCTAssertEqual(runs.last?.text, "z"); XCTAssertNil(runs.last?.link); XCTAssertNotNil(runs.last?.bold)
+    }
+
     func testArmedStyleIsDroppedWhenTheCaretMoves() {
         let h = host("ab")
         h.select(1)

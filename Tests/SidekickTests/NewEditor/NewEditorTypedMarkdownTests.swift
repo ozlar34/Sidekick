@@ -169,6 +169,20 @@ final class NewEditorTypedMarkdownTests: XCTestCase {
         XCTAssertEqual(p.string, "see \u{FFFC}. ")
     }
 
+    func testUndoRightAfterABareURLConversionRestoresTheLiteralURL() {
+        let h = NewEditorHost(markdown: "")
+        h.type("go https://example.com/a?b=1")
+        h.type(" ")
+        XCTAssertEqual(h.string, "go \u{FFFC} ")
+        h.undo()
+        XCTAssertEqual(h.string, "go https://example.com/a?b=1 ")
+        XCTAssertTrue(runs(h).allSatisfy { $0.pill == nil }, "the literal characters, no pill")
+        XCTAssertEqual(h.markdown, "go https\\://example.com/a?b=1 \n", "saved with the escaped colon")
+        let reloaded = NewEditorHost(markdown: h.markdown)
+        XCTAssertEqual(reloaded.string, "go https://example.com/a?b=1 \n", "the file ends with a line break: an empty last line shows")
+        XCTAssertTrue(runs(reloaded).allSatisfy { $0.pill == nil }, "reads back as plain text")
+    }
+
     func testBareURLCompletedByEnter() {
         let h = NewEditorHost(markdown: "")
         h.type("https://example.com/a")
