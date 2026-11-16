@@ -429,7 +429,7 @@ final class NewEditorLinkTests: XCTestCase {
             let h = host(source)
             guard h.length > 0 else { continue }
             let location = pick.int(h.length)
-            let length = pick.int(3) == 0 ? min(h.length - location, 1 + pick.int(9)) : 0
+            let length = pick.int(2) == 0 ? min(h.length - location, 1 + pick.int(9)) : 0
             h.textView.setSelectedRange(NSRange(location: location, length: length))
             h.endUndoGroup()
             let textBefore = h.textView.document.blocks.map(\.text)
