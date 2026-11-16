@@ -203,6 +203,11 @@ extension NoteTextView {
         if out.length > 0 { replace(NSRange(location: first.location, length: end2 - first.location), with: out, caret: sel.location) }
         // The empty last line has no character to carry a kind.
         if lastPara.length == 0 && !hasTerminator(lastPara), let j = touched.indices.last, new[j] != kinds[j] { changeTailKind(new[j]) }
+        // A numbered list over lines that were numbered already is numbered from 1 again (decided by Oguz, as the old editor).
+        if command == .numbered, changeable.contains(where: { new[$0] == .numbered }) {
+            content.renumber(blocks: changeable.filter { new[$0] == .numbered }.map { touched[$0] })
+            onMarkdownChange?(content.markdown)
+        }
         setSelectedRange(sel)
     }
 

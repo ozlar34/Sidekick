@@ -153,6 +153,14 @@ final class NoteDocumentTests: XCTestCase {
         XCTAssertEqual(first.markdown(), "1. a\n2. b\n")
     }
 
+    func testSetNumberKeepsIndentAndDelimiter() {
+        var doc = NoteDocument(markdown: "  7) a\n9. b\nc\n")
+        doc.apply(.setNumber(block: 0, number: 1)); doc.apply(.setNumber(block: 1, number: 2)); doc.apply(.setNumber(block: 2, number: 3))
+        XCTAssertEqual(doc.markdown(), "  1) a\n2. b\nc\n")
+        doc.apply(.setNumber(block: 0, number: 7))
+        XCTAssertEqual(doc.markdown(), "  7) a\n2. b\nc\n")
+    }
+
     /// Ticket 09: `Run.applying` is the document's own mark rule (code excludes the others).
     func testRunApplyingFollowsTheDocumentsMarkRules() {
         let r = Run("x", bold: .underscores, underline: true)

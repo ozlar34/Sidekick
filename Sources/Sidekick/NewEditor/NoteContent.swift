@@ -102,6 +102,14 @@ final class NoteContent {
         remember(wanted)
     }
 
+    /// Numbers the numbered items at these block indices 1, 2, 3 ... (the "numbered list" command over lines of which some
+    /// were numbered already: the buffer cannot show a number, so the document is edited directly, after the buffer change).
+    func renumber(blocks indices: [Int]) {
+        for (n, i) in indices.enumerated() where document.blocks.indices.contains(i) { document.apply(.setNumber(block: i, number: n + 1)) }
+        remember(synced)
+        onEdit?(document.markdown())
+    }
+
     private func remember(_ paragraphs: [NoteBuffer.Paragraph]) {
         history.append((paragraphs, document))
         if history.count > Self.historyLimit { history.removeFirst() }

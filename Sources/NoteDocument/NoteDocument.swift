@@ -18,6 +18,8 @@ public enum Edit: Equatable, Sendable {
     case setKind(block: Int, kind: BlockKind)
     /// Flip a checklist item; only the character between the brackets changes. No-op on other kinds.
     case toggleCheckbox(block: Int)
+    /// Give a numbered item the number `number`, keeping its indent and delimiter. No-op on other kinds.
+    case setNumber(block: Int, number: Int)
     /// Break a block in two at an offset (Enter). The second block continues a list item or quote, is an unchecked
     /// item for a checklist, and is a paragraph after a heading.
     case split(block: Int, offset: Int)
@@ -142,6 +144,16 @@ public struct NoteDocument: Equatable, Sendable {
             }
             commit(i, kind: .checklist(checked: !checked),
                    prefix: Block.settingCheckbox(b.prefix, checked: !checked, character: remembered), runs: b.runs)
+        case .setNumber(let i, let number):
+            precondition(blocks.indices.contains(i), "block index out of range")
+            let b = blocks[i]
+            guard b.kind == .numbered else { break }
+            let s = Array(b.prefix.unicodeScalars)
+            let start = BlockSyntax.skipBlanks(s, 0)
+            var end = start
+            while end < s.count, s[end].isASCII, s[end].properties.numericType == .decimal { end += 1 }
+            guard end > start else { break }
+            commit(i, kind: b.kind, prefix: scalarsToString(s[0..<start]) + String(max(0, number)) + scalarsToString(s[end...]), runs: b.runs)
         case .split(let i, let offset):
             precondition(blocks.indices.contains(i), "block index out of range")
             let b = blocks[i]

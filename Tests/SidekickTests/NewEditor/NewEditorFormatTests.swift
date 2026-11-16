@@ -309,6 +309,27 @@ final class NewEditorFormatTests: XCTestCase {
         XCTAssertEqual(k.markdown, "1. a\n2. b", "another list kind is replaced, not stacked")
     }
 
+    /// Decided by Oguz: a selection with some lines already numbered is renumbered from 1, as in the old editor.
+    func testNumberedListOnAMixedSelectionRenumbersFromOne() {
+        for (source, expected) in [("3. a\nb", "1. a\n2. b"), ("x\n7) a\n9) b\ny\nz", "1. x\n2) a\n3) b\n4) y\n5) z"), ("a\n5. b\nc", "1. a\n2. b\n3. c")] {
+            let h = host(source)
+            h.textView.selectAll(nil)
+            h.endUndoGroup()
+            press(Self.numbered, in: h)
+            XCTAssertEqual(h.markdown, expected, source)
+            h.undo()
+            XCTAssertEqual(h.markdown, source, "one undo step, exact bytes")
+            XCTAssertEqual(h.textView.undoManager?.canUndo, false)
+            h.endUndoGroup()
+            h.textView.undoManager?.redo()
+            XCTAssertEqual(h.markdown, expected, "redo")
+        }
+        let all = host("3. a\n9. b")
+        all.textView.selectAll(nil)
+        press(Self.numbered, in: all)
+        XCTAssertEqual(all.markdown, "a\nb", "every line already numbered: off")
+    }
+
     func testHeadingLevelsSwapAndThePickedActiveLevelReturnsToBody() {
         let h = host("# hello")
         press(Self.h2, in: h)
