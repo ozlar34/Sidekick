@@ -26,9 +26,10 @@ actor IOActor {
     /// Creates an empty `<base>.md`, or `<base> 2.md`, ... and returns its filename. The check and the
     /// create are one kernel call, so a file made by another tool a moment earlier is never replaced.
     func createNote(base: String) throws -> String {
+        let safeBase = TitleRules.fileBase(forTitle: base)
         var n = 1
         while true {
-            let name = TitleRules.candidate(base: base, number: n) + ".md"
+            let name = TitleRules.candidate(base: safeBase, number: n) + ".md"
             do {
                 try FileOps.createExclusive(folder.appendingPathComponent(name))
                 return name
@@ -100,7 +101,7 @@ actor IOActor {
     enum OrderLoad {
         case missing
         case loaded(OrderFile)
-        /// The file was not a valid order file; it was moved aside to `.sidekick-order.json.damaged`.
+        /// The file was not a valid order file; it was moved aside to the first free `.sidekick-order.json.damaged`, `... 2`, ....
         case damaged
     }
 
@@ -109,9 +110,13 @@ actor IOActor {
         guard FileOps.exists(url) else { return .missing }
         if let data = try? Data(contentsOf: url), let order = OrderFile.decode(data) { return .loaded(order) }
         NSLog("[Sidekick] IOActor: damaged \(OrderFile.filename), moving it aside — order and pins reset")
-        let aside = folder.appendingPathComponent(OrderFile.filename + ".damaged")
-        try? FileManager.default.removeItem(at: aside)
-        try? FileManager.default.moveItem(at: url, to: aside)
+        // Never delete or replace a file this run did not create: take the first free ".damaged", ".damaged 2", ...
+        var n = 1
+        while n < 1000 {
+            let aside = folder.appendingPathComponent(OrderFile.filename + ".damaged" + (n == 1 ? "" : " \(n)"))
+            if !FileOps.exists(aside), (try? FileOps.moveNoClobber(url, to: aside)) != nil { break }
+            n += 1
+        }
         return .damaged
     }
 

@@ -157,6 +157,20 @@ final class FilesAreTruthTests: XCTestCase {
         }
     }
 
+    func testADamagedOrderFileIsMovedAsideWithoutDeletingAnEarlierDamagedFile() async throws {
+        let folder = TempFolder()
+        let damaged = OrderFile.filename + ".damaged"
+        try write(damaged, "older damage", in: folder)
+        try write(OrderFile.filename, "newer damage", in: folder)
+        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0) })
+        guard case .damaged = await io.loadOrder() else { return XCTFail("expected damaged") }
+        XCTAssertEqual(try bytes(damaged, in: folder), Data("older damage".utf8), "an earlier file is never deleted or replaced")
+        let aside = try listing(folder).filter { $0.hasPrefix(damaged) && $0 != damaged }
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertEqual(try bytes(try XCTUnwrap(aside.first), in: folder), Data("newer damage".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.url.appendingPathComponent(OrderFile.filename).path))
+    }
+
     func testAnOrderFileNamingUnknownFilesIsIgnoredAndHarmless() async throws {
         let folder = TempFolder()
         try write("Alpha.md", "alpha\n", in: folder)
@@ -196,11 +210,41 @@ final class FilesAreTruthTests: XCTestCase {
         XCTAssertEqual(try FolderTree.snapshot(folder.url), beforeSecond, "a second commit changes nothing")
     }
 
+    func testRenamingToATitleWithCharactersObsidianRejectsNamesTheFileWithoutThem() async throws {
+        let forbidden = Array("?*\"<>|\\/:")
+        let folder = TempFolder()
+        try write("Draft.md", "text\n", in: folder)
+        let store = try makeStore(folder)
+        await store.reload()
+        let note = try XCTUnwrap(store.notes.first)
+        let open = try XCTUnwrap(store.openNote(note.id, scheduler: ManualScheduler()))
+        for c in forbidden {
+            open.setTitle("Q\(c)x")
+            await open.commitTitle()
+            let mds = try listing(folder).filter { $0.hasSuffix(".md") }
+            XCTAssertEqual(mds.count, 1)
+            let name = try XCTUnwrap(mds.first)
+            XCTAssertNil(name.dropLast(3).firstIndex(where: { forbidden.contains($0) }), "\(name) after \(c)")
+            XCTAssertEqual(try bytes(name, in: folder), Data("text\n".utf8))
+        }
+    }
+
+    func testCreatingANoteNeverMakesANameWithCharactersObsidianRejects() async throws {
+        let folder = TempFolder()
+        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0) })
+        let first = try await io.createNote(base: "N?*\"<>|\\:x")
+        let second = try await io.createNote(base: "N?*\"<>|\\:x")
+        XCTAssertEqual([first, second], ["N--------x.md", "N--------x 2.md"])
+        XCTAssertEqual(try listing(folder).filter { $0.hasSuffix(".md") }, ["N--------x 2.md", "N--------x.md"])
+    }
+
     func testFilenameRulesTable() {
         func base(_ t: String) -> String { TitleRules.fileBase(forTitle: t) }
         XCTAssertEqual(base("Plain title"), "Plain title")
         XCTAssertEqual(base("A/B"), "A-B")
         XCTAssertEqual(base("Time: 12:30"), "Time- 12-30")
+        XCTAssertEqual(base("a?b*c\"d<e>f|g\\h"), "a-b-c-d-e-f-g-h", "characters Obsidian rejects")
+        XCTAssertEqual(base("C# [x] ^y"), "C# [x] ^y", "link-breaking characters stay: the file is still listed in Obsidian")
         XCTAssertEqual(base("...hidden"), "hidden", "a leading dot would hide the file")
         XCTAssertEqual(base(".md"), "md")
         XCTAssertEqual(base("."), "Untitled")
