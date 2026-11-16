@@ -46,6 +46,9 @@ final class NoteStore: ObservableObject {
     private var migratedFolder: URL?
     /// Set when the one-time migration failed; the folder is then used as it is and tried again next launch.
     @Published private(set) var migrationError: String?
+    @Published private(set) var migrationFailure: MigrationFailure?
+    /// One line for the editor pane while the last migration attempt failed; nil otherwise.
+    var migrationNotice: String? { migrationFailure?.noticeText }
     private var watcher: FolderWatcher
     private var watcherTask: Task<Void, Never>?
     private var changesContinuation: AsyncStream<ChangeEvent>.Continuation!
@@ -349,9 +352,12 @@ final class NoteStore: ObservableObject {
                 NSLog("[Sidekick] migrated \(renamed) note files; backup: \(backup)")
             }
             migrationError = nil
+            migrationFailure = nil
         } catch {
             NSLog("[Sidekick] migration failed, notes used as they are: \(error)")
-            migrationError = error.localizedDescription
+            let failure = error as? MigrationFailure ?? MigrationFailure(reason: error.localizedDescription, backup: nil)
+            migrationFailure = failure
+            migrationError = failure.reason
         }
     }
 
@@ -515,13 +521,19 @@ final class NoteStore: ObservableObject {
     /// `emptyIsReal`: the folder was just recreated, so an empty scan is the truth.
     private func applyDisk(changedFiles: Set<String>? = nil, emptyIsReal: Bool = false) async {
         // Scan failure = transient folder-access blip: keep the current notes.
-        guard let entries = try? await io.scan() else {
+        guard var entries = try? await io.scan() else {
             NSLog("[Sidekick] reload: io.scan() failed — preserving current notes")
             return
         }
-        // RC1 guard: an empty folder against a populated list almost always means a transient
-        // folder-access blip, not that the user deleted every note. Keep the list rather than drop it all.
-        if entries.isEmpty, !notes.isEmpty, !emptyIsReal { return }
+        // RC1 guard: one empty listing against a populated list may be a transient folder-access blip,
+        // not that the user deleted every note. Keep the list unless a second look agrees.
+        // A second listing after the debounce that is also empty, with the folder still there, is the truth:
+        // the user (or another tool) really removed the last note.
+        if entries.isEmpty, !notes.isEmpty, !emptyIsReal {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard FileManager.default.fileExists(atPath: folder.path), let again = try? await io.scan(), again.isEmpty else { return }
+            entries = again
+        }
         let byName = Dictionary(entries.map { ($0.filename, $0) }, uniquingKeysWith: { first, _ in first })
         let arranged = await orderFile().arrange(entries)
         var materialized: [Note] = []

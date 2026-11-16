@@ -72,6 +72,7 @@ struct EditorPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let notice = store.migrationNotice { MigrationNoticeStrip(text: notice) }
             // External-edit conflict banner (STORE-07) — top of editor. Only
             // shown when the on-disk file changed AND there are unsaved local
             // edits (reloading would discard them). The safe case auto-reloads

@@ -33,6 +33,24 @@ struct LegacyEntry: Codable, Equatable {
 ///  7. Record completion: write `.sidekick-migrated.json`, then remove the journal.
 ///
 /// A folder with neither `.index.json` nor a journal is new format and is left untouched.
+/// The migration did not finish and could not be completed by itself. It is tried again next launch.
+struct MigrationFailure: Error {
+    let reason: String
+    /// Name of a complete backup folder beside the notes folder, when one was made.
+    let backup: String?
+    /// True when some files were already renamed before it failed (the next launch finishes the job).
+    var partlyDone = false
+
+    /// One line for the editor pane.
+    var noticeText: String {
+        var text = "Your notes could not be converted to the new format (\(reason)). "
+        text += partlyDone ? "Some files were already renamed; no note text was changed. " : "Nothing was changed; the notes are shown as they are. "
+        text += "Sidekick tries again next launch."
+        if let backup { text += " A backup of the folder is beside it: \(backup)." }
+        return text
+    }
+}
+
 enum Migration {
     static let markerName = ".sidekick-migrated.json"
     static let journalName = ".sidekick-migration.json"
@@ -70,7 +88,25 @@ enum Migration {
     }
 
     /// `checkpoint` is called after each step with its name; tests throw from it to simulate a crash.
+    /// Any failure is reported as a `MigrationFailure`; the next call picks up where this one stopped.
+    /// The folder is resolved first: a notes folder that is a symlink is backed up as the real directory it points to.
     static func run(folder: URL, now: Date = Date(), checkpoint: ((String) throws -> Void)? = nil) throws -> Outcome {
+        var progress = Progress()
+        do {
+            return try runResolved(folder: folder.resolvingSymlinksInPath(), now: now, checkpoint: checkpoint, progress: &progress)
+        } catch let failure as MigrationFailure {
+            throw failure
+        } catch {
+            throw MigrationFailure(reason: error.localizedDescription, backup: progress.backup, partlyDone: progress.renaming)
+        }
+    }
+
+    private struct Progress {
+        var backup: String?
+        var renaming = false
+    }
+
+    private static func runResolved(folder: URL, now: Date, checkpoint: ((String) throws -> Void)?, progress: inout Progress) throws -> Outcome {
         func hit(_ name: String) throws { try checkpoint?(name) }
         let marker = folder.appendingPathComponent(markerName)
         let journalURL = folder.appendingPathComponent(journalName)
@@ -86,11 +122,20 @@ enum Migration {
         var journal: Journal
         if let data = try? Data(contentsOf: journalURL), let existing = try? JSONDecoder().decode(Journal.self, from: data) {
             journal = existing
+            progress.backup = existing.backup
+            progress.renaming = true
         } else {
+            // An index that cannot be read is a failure, not an empty index: dropping it would drop every
+            // title, pin and the order for good. Nothing is touched; the next launch tries again.
+            guard let data = try? Data(contentsOf: indexURL), let index = try? JSONDecoder().decode(LegacyIndex.self, from: data) else {
+                throw MigrationFailure(reason: "the old index file \(indexName) cannot be read", backup: nil)
+            }
             let backupName = try makeBackup(of: folder, now: now, hit: hit)
-            let entries = plan(in: folder)
+            progress.backup = backupName
+            let entries = plan(index: index, in: folder)
             journal = Journal(backup: backupName, entries: entries)
             try write(journal, to: journalURL)
+            progress.renaming = true
             try hit("journal-written")
         }
 
@@ -154,9 +199,7 @@ enum Migration {
 
     // MARK: Plan
 
-    private static func plan(in folder: URL) -> [Journal.Entry] {
-        guard let data = try? Data(contentsOf: folder.appendingPathComponent(indexName)),
-              let index = try? JSONDecoder().decode(LegacyIndex.self, from: data) else { return [] }
+    private static func plan(index: LegacyIndex, in folder: URL) -> [Journal.Entry] {
         let present = Set(listing(folder).keys)
         let indexed = index.notes.enumerated()
             .filter { present.contains(key($0.element.filename)) }
@@ -223,13 +266,19 @@ enum Migration {
             }
             let partial = parent.appendingPathComponent(name + ".partial")
             if FileOps.exists(partial) { try fm.removeItem(at: partial) }   // our own unfinished copy
-            try fm.copyItem(at: folder, to: partial)
-            try hit("backup-copied")
-            guard try treesEqual(partial, folder) else {
+            // This run made the `.partial` (a stale one was removed above): any failure takes it away again,
+            // so a failed attempt leaves no half copy in the parent.
+            do {
+                try fm.copyItem(at: folder, to: partial)
+                try hit("backup-copied")
+                guard try treesEqual(partial, folder) else {
+                    throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "the backup of \(folder.lastPathComponent) does not match the original"])
+                }
+                try FileOps.moveNoClobber(partial, to: dest)
+            } catch {
                 try? fm.removeItem(at: partial)
-                throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "backup of \(folder.lastPathComponent) does not match the original"])
+                throw error
             }
-            try FileOps.moveNoClobber(partial, to: dest)
             try hit("backup-verified")
             return name
         }
@@ -237,6 +286,10 @@ enum Migration {
 
     /// Same relative paths and the same bytes in every file, hidden files included.
     private static func treesEqual(_ a: URL, _ b: URL) throws -> Bool {
+        // A tree compared with itself proves nothing (a backup that is a link to the folder).
+        if FileOps.isSameDirectory(a, b) {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: "the backup is the same directory as the notes folder"])
+        }
         func entries(_ root: URL) throws -> [String: Bool] {
             var result: [String: Bool] = [:]
             guard let walker = FileManager.default.enumerator(atPath: root.path) else { return result }

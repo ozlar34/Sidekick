@@ -207,27 +207,38 @@ final class NoteStoreIntegrationTests: XCTestCase {
         XCTAssertEqual(store.notes.first?.id, keep.id)
     }
 
-    // RC1 guard (Fix 1a): externally deleting the LAST note is intentionally
-    // NOT honored. An empty disk snapshot against a populated index is
-    // indistinguishable from a transient folder blip, so it is preserved rather
-    // than mass-dropped — the deliberate trade-off that prevents the
-    // "all notes vanished" data-loss incident.
-    func testExternalDeleteOfLastNoteIsPreserved() async throws {
+    // RC1 guard: a single empty listing is not believed (transient folder blip), but an external delete of
+    // the LAST note is real when the folder is still there and a second listing, after the debounce,
+    // is empty too.
+    func testExternalDeleteOfLastNoteIsAppliedAfterASecondEmptyListing() async throws {
         let tmp = TempFolder()
         let store = try NoteStore(folder: tmp.url)
         let note = try await store.create()
         XCTAssertEqual(store.notes.count, 1)
+        // Let the watcher see the created file first: create + delete inside one debounce window is no change at all.
+        try await Task.sleep(nanoseconds: 400_000_000)
 
-        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+        try FileManager.default.removeItem(at: tmp.url.appendingPathComponent(note.filename))
 
-        let fileURL = tmp.url.appendingPathComponent(note.filename)
-        try FileManager.default.removeItem(at: fileURL)
+        // The real watcher reports it; no explicit reload.
+        let deadline = Date().addingTimeInterval(10)
+        while !store.notes.isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertTrue(store.notes.isEmpty, "the removal shows without a restart")
+    }
 
-        // Drive a reconcile against the now-empty folder; the guard must no-op.
-        try await Task.sleep(nanoseconds: 300_000_000) // 300ms
+    func testATransientEmptyListingIsNotBelieved() async throws {
+        let tmp = TempFolder()
+        let store = try NoteStore(folder: tmp.url, startWatcherImmediately: false)
+        let note = try await store.create()
+        let url = tmp.url.appendingPathComponent(note.filename)
+        let moved = tmp.url.deletingLastPathComponent().appendingPathComponent("held-\(UUID().uuidString).md")
+        try FileManager.default.moveItem(at: url, to: moved)
+        // The file comes back while the second look is pending.
+        Task { try? await Task.sleep(nanoseconds: 100_000_000); try? FileManager.default.moveItem(at: moved, to: url) }
+
         await store.reload()
 
-        XCTAssertEqual(store.notes.count, 1, "RC1 guard preserves the last note on an empty snapshot")
+        XCTAssertEqual(store.notes.count, 1, "a listing that is empty only for a moment keeps the note")
         XCTAssertEqual(store.notes.first?.id, note.id)
     }
 

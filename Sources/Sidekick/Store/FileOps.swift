@@ -24,6 +24,13 @@ enum FileOps {
         return x.st_dev == y.st_dev && x.st_ino == y.st_ino
     }
 
+    /// True when both paths lead to the same directory (links followed).
+    static func isSameDirectory(_ a: URL, _ b: URL) -> Bool {
+        var x = stat(), y = stat()
+        guard stat(a.path, &x) == 0, stat(b.path, &y) == 0 else { return false }
+        return x.st_dev == y.st_dev && x.st_ino == y.st_ino
+    }
+
     /// Moves `from` to `to`. A destination that is already taken by another file throws `.exists` and
     /// nothing changes. The one allowed "taken" destination is the file's own name written with other
     /// letter case (case-insensitive volume), which is a rename of the same file.

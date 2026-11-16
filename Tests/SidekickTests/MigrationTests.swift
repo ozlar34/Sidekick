@@ -230,21 +230,86 @@ final class MigrationTests: XCTestCase {
 
     // MARK: damaged old data
 
-    func testACorruptOldIndexRenamesNothingAndStillMakesABackup() throws {
+    func testACorruptOrUnreadableIndexIsAFailureNotAMigration() throws {
+        let variants: [(String, Data)] = [
+            ("garbage", Data("{ not json".utf8)),
+            ("truncated", Data("{\"version\":1,\"notes\":[{\"id\":\"".utf8)),
+            ("wrong types", Data("{\"version\":\"one\",\"notes\":{\"a\":1}}".utf8)),
+            ("empty file", Data()),
+            ("binary", Data([0xFF, 0xFE, 0x00, 0x80])),
+        ]
+        for (label, index) in variants {
+            let (parent, notes) = try makeParent()
+            try Data("a\n".utf8).write(to: notes.appendingPathComponent("some-slug.md"))
+            try index.write(to: notes.appendingPathComponent(".index.json"))
+            let before = try FolderTree.snapshot(parent)
+
+            XCTAssertThrowsError(try Migration.run(folder: notes, now: today), label) { error in
+                XCTAssertTrue(error is MigrationFailure, "\(label): \(error)")
+            }
+            XCTAssertEqual(try FolderTree.snapshot(parent), before,
+                           "\(label): nothing changed: index kept, no marker, no order file, no backup, no renames")
+            // Still pending: a repaired index migrates on the next run.
+            XCTAssertThrowsError(try Migration.run(folder: notes, now: today), "\(label): retried")
+        }
+    }
+
+    func testAFailedMigrationShowsANoticeAndChangesNothing() async throws {
         let (parent, notes) = try makeParent()
         try Data("a\n".utf8).write(to: notes.appendingPathComponent("some-slug.md"))
         try Data("{ not json".utf8).write(to: notes.appendingPathComponent(".index.json"))
+        let before = try FolderTree.snapshot(parent)
+        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+                                  persistFolder: { _ in })
+        XCTAssertNil(store.migrationNotice)
+
+        await store.reload()
+
+        XCTAssertNotNil(store.migrationError)
+        let notice = try XCTUnwrap(store.migrationNotice)
+        XCTAssertTrue(notice.contains("could not be converted"), notice)
+        XCTAssertTrue(notice.contains("Nothing was changed"), notice)
+        XCTAssertEqual(store.notes.map(\.title), ["some-slug"], "the notes are still shown under their slug names")
+        XCTAssertEqual(try FolderTree.snapshot(parent), before)
+    }
+
+    func testTheNoticeNamesTheBackupWhenOneExists() {
+        let text = MigrationFailure(reason: "disk full", backup: "Notes-backup-2026-11-16").noticeText
+        XCTAssertTrue(text.contains("Notes-backup-2026-11-16"), text)
+        XCTAssertTrue(text.contains("could not be converted"), text)
+    }
+
+    func testAFailureBeforeTheRenamesRemovesTheHalfCopyItMade() throws {
+        let (parent, notes) = try makeParent()
+        try OldFormatFixture.write(into: notes)
         let before = try FolderTree.snapshot(notes)
+        struct Boom: Error {}
+        XCTAssertThrowsError(try Migration.run(folder: notes, now: today) { if $0 == "backup-copied" { throw Boom() } })
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: parent.path).contains { $0.hasSuffix(".partial") },
+                       "no half copy is left in the parent")
+        XCTAssertEqual(try FolderTree.snapshot(notes), before)
+    }
 
-        let outcome = try Migration.run(folder: notes, now: today)
+    func testASymlinkedNotesFolderIsBackedUpAsTheRealFolder() throws {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent("MigrationTests-\(UUID().uuidString)")
+        let real = parent.appendingPathComponent("elsewhere/Notes")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: parent) }
+        try OldFormatFixture.write(into: real)
+        let original = try FolderTree.snapshot(real)
+        let link = parent.appendingPathComponent("Notes")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
-        guard case .migrated(let renamed, _) = outcome else { return XCTFail("expected migrated, got \(outcome)") }
-        XCTAssertEqual(renamed, 0)
-        let after = try FolderTree.snapshot(notes)
-        XCTAssertEqual(after["some-slug.md"], before["some-slug.md"])
-        XCTAssertEqual(after[Migration.retiredIndexName], before[".index.json"])
-        XCTAssertNotNil(after[Migration.markerName])
-        XCTAssertEqual(try FolderTree.snapshot(try XCTUnwrap(try backups(parent).first)), before)
+        let outcome = try Migration.run(folder: link, now: today)
+
+        guard case .migrated(_, let backupName) = outcome else { return XCTFail("expected migrated, got \(outcome)") }
+        let realParent = real.deletingLastPathComponent().resolvingSymlinksInPath()
+        let backup = realParent.appendingPathComponent(backupName)
+        let attrs = try FileManager.default.attributesOfItem(atPath: backup.path)
+        XCTAssertEqual(attrs[.type] as? FileAttributeType, .typeDirectory, "the backup is a real directory, not a link")
+        XCTAssertEqual(try FolderTree.snapshot(backup), original, "with the original bytes")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parent.appendingPathComponent(backupName).path), "not beside the link")
+        XCTAssertTrue(try FolderTree.snapshot(real).keys.contains(nfc("Meeting notes.md")), "the real folder was migrated")
     }
 
     func testIndexEntriesForMissingFilesAreSkippedAndExtraFilesKeepTheirNames() throws {
