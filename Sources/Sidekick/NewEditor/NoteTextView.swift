@@ -122,6 +122,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         NoteTextEngine.show(new.storage, in: self)
         new.storage.delegate = self
         isEditable = new.isEditable
+        refreshTableFit()
         NoteTextEngine.setTailKind(new.tailKind, in: self)
         refreshNumberGutters(in: nil)
         let length = new.storage.length
@@ -135,6 +136,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         content.reload(markdown: markdown)
         NoteTextEngine.setTailKind(content.tailKind, in: self)
         refreshNumberGutters(in: nil)
+        refreshTableFit()
         pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
@@ -169,6 +171,44 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         storage.beginEditing()
         NoteBuffer.restyle(storage, edited: range)
         storage.endEditing()
+        refreshTableFit()
+    }
+
+    /// Fits the tables to the panel (attributes only, not an undo step).
+    private func refreshTableFit() {
+        guard let storage = textStorage, let tc = textContainer, storage.length > 0, tc.size.width > 0, tc.size.width < 100_000 else { return }
+        storage.beginEditing()
+        NoteBuffer.fitTables(storage, available: tc.size.width - 2 * tc.lineFragmentPadding)
+        storage.endEditing()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let old = frame.width
+        super.setFrameSize(newSize)
+        if newSize.width != old { refreshTableFit() }
+    }
+
+    /// Tab is the column separator of a table row, so it is not a character a cell can hold: it does nothing there.
+    override func insertTab(_ sender: Any?) {
+        if let (_, para) = paragraph(at: selectedRange().location), kind(of: para) == .table { return }
+        super.insertTab(sender)
+    }
+
+    /// A cell holds no tab and no row break: typed or pasted ones become blanks.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let at = replacementRange.location == NSNotFound ? selectedRange().location : replacementRange.location
+        if let (_, para) = paragraph(at: at), kind(of: para) == .table {
+            func clean(_ s: String) -> String {
+                String(s.unicodeScalars.map { $0 == "\t" || $0 == "\u{2028}" || $0 == "\n" || $0 == "\r" ? " " : Character($0) })
+            }
+            if let a = string as? NSAttributedString {
+                let m = NSMutableAttributedString(attributedString: a)
+                m.mutableString.setString(clean(a.string))
+                return super.insertText(m, replacementRange: replacementRange)
+            }
+            if let t = string as? String { return super.insertText(clean(t), replacementRange: replacementRange) }
+        }
+        super.insertText(string, replacementRange: replacementRange)
     }
 
     // MARK: Buffer -> document

@@ -326,7 +326,7 @@ extension NoteLayoutManager {
             guard let r = usedRect(of: NSRange(location: start, length: i + 1 - start)) else { return nil }
             rows.append(r); start = i + 1
         }
-        let pad = NoteBuffer.tableCellPadding
+        let pad = (storage.attribute(.noteTablePadding, at: para.location, effectiveRange: nil) as? NSNumber).map { CGFloat($0.doubleValue) } ?? NoteBuffer.tableCellPadding
         let textStart = tc.lineFragmentPadding
         let stops = style.tabStops.map(\.location)
         let columnEdges = ([0] + stops).map { textStart + $0 - pad }
