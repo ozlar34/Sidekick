@@ -71,10 +71,17 @@ final class NoteDocumentTests: XCTestCase {
             var doc = NoteDocument(markdown: md)
             guard !doc.blocks.isEmpty else { return true }
             let i = gen.int(doc.blocks.count)
-            doc.apply(.replace(at: i, kind: gen.kind(), runs: gen.runs()))
-            let before = segments(md), after = segments(doc.markdown())
-            var ok = before.count == after.count
-            if ok { for j in before.indices where j != i && before[j] != after[j] { ok = false } }
+            let count = doc.blocks.count
+            let kind = gen.kind()
+            // A new code block or table can pair with a text line that only looks like a fence or a row (an unclosed
+            // fence, a row without delimiter row); that line is then written escaped, see testLookalikeLinesAreEscapedWhenAFenceArrives.
+            let lookalike = doc.blocks.contains { $0.kind == .paragraph && "`~|".contains($0.text.first ?? " ") }
+            doc.apply(.replace(at: i, kind: kind, runs: gen.runs()))
+            guard doc.blocks.count == count, !(kind.isMultiline && lookalike) else { return true }   // adjacent tables become one block
+            // A block spans one or more lines: compare the file without block `i`, before and after.
+            var before = NoteDocument(markdown: md), after = doc
+            before.apply(.remove(at: i)); after.apply(.remove(at: i))
+            let ok = bytes(before.markdown()) == bytes(after.markdown())
             XCTAssertTrue(ok, "seed \(seed) edit block \(i) of \(md.debugDescription) -> \(doc.markdown().debugDescription)")
             return ok
         }
@@ -156,11 +163,12 @@ final class NoteDocumentTests: XCTestCase {
         }
     }
 
-    func testCodeFenceContentIsNotInterpretedAsHeadingYet() {
-        // Documented limitation of this slice: fences are literal lines, so a "# comment" line
-        // inside one is read as a heading. It still round-trips byte for byte; the fence ticket fixes the kind.
+    func testCodeFenceContentIsNotInterpretedAsHeading() {
         let md = "```\n# comment\n```\n"
-        XCTAssertEqual(NoteDocument(markdown: md).markdown(), md)
+        let doc = NoteDocument(markdown: md)
+        XCTAssertEqual(doc.blocks.map(\.kind), [.fence])
+        XCTAssertEqual(doc.blocks[0].text, "# comment")
+        XCTAssertEqual(doc.markdown(), md)
     }
 
     func testBlankLinesAreEmptyParagraphs() {

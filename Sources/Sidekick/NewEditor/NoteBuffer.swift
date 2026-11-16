@@ -75,6 +75,8 @@ enum NoteBuffer {
         case .checklist(let checked): return checked ? 13 : 12
         case .quote: return 14
         case .divider: return 15
+        case .fence: return 16
+        case .table: return 17
         }
     }
 
@@ -87,9 +89,16 @@ enum NoteBuffer {
         case 13: return .checklist(checked: true)
         case 14: return .quote
         case 15: return .divider
+        case 16: return .fence
+        case 17: return .table
         default: return .heading(level: min(6, n))
         }
     }
+
+    /// A code block is one paragraph: its lines are separated by U+2028 (a line break inside a paragraph), so that
+    /// "\n" stays the paragraph separator. A table's text already uses U+2028 between rows. Styling as a code
+    /// block or grid is ticket 12.
+    private static let lineSeparator = "\u{2028}"
 
     // MARK: Document -> buffer
 
@@ -106,7 +115,8 @@ enum NoteBuffer {
                 var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
                 if let d = run.bold { attrs[.noteBold] = d.rawValue }
                 if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
-                out.append(NSAttributedString(string: run.text, attributes: attrs))
+                let text = block.kind == .fence ? run.text.replacingOccurrences(of: "\n", with: lineSeparator, options: .literal) : run.text
+                out.append(NSAttributedString(string: text, attributes: attrs))
             }
             let isLast = i == blocks.count - 1
             if !(isLast && block.terminator.isEmpty) {
@@ -168,6 +178,9 @@ enum NoteBuffer {
                     }
                 }
             }
+            if kind == .fence {
+                for k in runs.indices { runs[k].text = runs[k].text.replacingOccurrences(of: lineSeparator, with: "\n", options: .literal) }
+            }
             out.append(Paragraph(kind: kind, runs: runs))
         }
         return out
@@ -177,7 +190,7 @@ enum NoteBuffer {
 
     private static func font(for kind: BlockKind, bold: Bool) -> NSFont {
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider:   // styling of these kinds is tickets 07/08
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .fence, .table:   // styling of these kinds is tickets 07/08
             return NSFont.systemFont(ofSize: 15, weight: bold ? .bold : .regular)
         case .heading(let level):
             let size: CGFloat = level == 1 ? 28 : level == 2 ? 22 : 18
@@ -192,7 +205,7 @@ enum NoteBuffer {
             return s
         }
         switch kind {
-        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider: return style(20, 1)
+        case .paragraph, .bullet, .numbered, .checklist, .quote, .divider, .fence, .table: return style(20, 1)
         case .heading(let level): return level == 1 ? style(32, 4) : level == 2 ? style(26, 3) : style(22, 2)
         }
     }

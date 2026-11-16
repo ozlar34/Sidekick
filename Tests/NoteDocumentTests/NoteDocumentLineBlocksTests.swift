@@ -47,6 +47,8 @@ final class NoteDocumentLineBlocksTests: XCTestCase {
                 case .checklist(let c): kinds.insert(c ? 5 : 4)
                 case .quote: kinds.insert(6)
                 case .divider: kinds.insert(7)
+                case .fence: kinds.insert(8)
+                case .table: kinds.insert(9)
                 }
                 for r in b.runs {
                     if r.bold != nil { marks.insert("bold") }
@@ -61,11 +63,11 @@ final class NoteDocumentLineBlocksTests: XCTestCase {
             }
         }
         for e in Corpus.all { note(NoteDocument(markdown: e.text)) }
-        XCTAssertEqual(kinds, Set(0...7), "corpus kinds")
+        XCTAssertEqual(kinds, Set(0...9), "corpus kinds")
         XCTAssertEqual(marks, ["bold", "italic", "underline", "strike", "code", "link", "bare", "pilllink"], "corpus marks")
         kinds = []; marks = []
         for seed in 1...200 { var g = DocumentGenerator(seed: UInt64(seed)); note(NoteDocument(markdown: g.markdown())) }
-        XCTAssertEqual(kinds, Set(0...7), "generator kinds")
+        XCTAssertEqual(kinds, Set(0...9), "generator kinds")
         XCTAssertEqual(marks, ["bold", "italic", "underline", "strike", "code", "link", "bare", "pilllink"], "generator marks")
     }
 
@@ -141,8 +143,12 @@ final class NoteDocumentLineBlocksTests: XCTestCase {
                 let e = gen.edit(in: doc)
                 var index: Int?
                 switch e {
-                case .setMark(let b, _, _), .clearMark(let b, _, _), .toggleCheckbox(let b): index = b
-                case .setKind(let b, let k) where k != .divider && doc.blocks[b].kind != .divider: index = b
+                // (A table cell loses blanks at its edges when a mark moves them out of the mark: the reader trims cells.)
+                case .setMark(let b, _, _) where doc.blocks[b].kind != .table, .clearMark(let b, _, _) where doc.blocks[b].kind != .table,
+                     .toggleCheckbox(let b): index = b
+                // A code block drops marks and line breaks, a table trims its cells: kind changes there change the text.
+                case .setKind(let b, let k) where k != .divider && doc.blocks[b].kind != .divider
+                    && !k.isMultiline && !doc.blocks[b].kind.isMultiline: index = b
                 default: break
                 }
                 let before = index.map { doc.blocks[$0].text }

@@ -2,11 +2,11 @@ import Foundation
 
 /// Reads the inline marks of one line: bold, italic (`*` or `_`), underline (`<u>`), strikethrough (`~~`),
 /// inline code, links, and URL pills (a bare URL, or a link whose label equals its address).
-/// Backslash escapes `* _ \ ` ~ < [ ] : !`. Inside a link label there are no links and no bare URLs. Everything else is literal text.
+/// Backslash escapes `* _ \ ` ~ < [ ] : ! |`. Inside a link label there are no links and no bare URLs. Everything else is literal text.
 enum InlineReader {
     static func isEscapable(_ c: Unicode.Scalar) -> Bool {
         switch c {
-        case "*", "_", "\\", "`", "~", "<", "[", "]", ":", "!": return true
+        case "*", "_", "\\", "`", "~", "<", "[", "]", ":", "!", "|": return true
         default: return false
         }
     }
@@ -231,7 +231,9 @@ enum InlineWriter {
         let s = Array(w.unicodeScalars)
         switch kind {
         case .paragraph:
-            if let first = s.first, first == "\\", s.count > 1, !InlineReader.isEscapable(s[1]),
+            if s.first == "|" {
+                w = "\\" + w          // a line starting with `|` could join a table
+            } else if let first = s.first, first == "\\", s.count > 1, !InlineReader.isEscapable(s[1]),
                BlockSyntax.looksLikeBlock(Array(s.dropFirst())) {
                 w = "\\" + w
             } else if BlockSyntax.looksLikeBlock(s) {

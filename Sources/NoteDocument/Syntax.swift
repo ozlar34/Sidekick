@@ -55,6 +55,61 @@ enum BlockSyntax {
 
     static func looksLikeBlock(_ s: [Unicode.Scalar]) -> Bool { parse(s) != nil }
 
+    // MARK: multi-line blocks
+
+    /// A code fence: at column 0, three or more of one fence character (`` ` `` or `~`), then an info string
+    /// (a backtick fence's info holds no backtick). The whole line is the literal opening.
+    struct Fence { let char: Unicode.Scalar; let count: Int }
+
+    static func fenceOpen(_ s: [Unicode.Scalar]) -> Fence? {
+        guard let c = s.first, c == "`" || c == "~" else { return nil }
+        var n = 0
+        while n < s.count, s[n] == c { n += 1 }
+        guard n >= 3 else { return nil }
+        if c == "`", s[n...].contains("`") { return nil }
+        return Fence(char: c, count: n)
+    }
+
+    /// A closing fence: column 0, a run of the opening character at least as long, then only blanks.
+    static func isFenceClose(_ s: [Unicode.Scalar], _ f: Fence) -> Bool {
+        var n = 0
+        while n < s.count, s[n] == f.char { n += 1 }
+        return n >= f.count && s[n...].allSatisfy(isBlank)
+    }
+
+    /// Cells of a table row (a line starting with `|`), pipes decoded, not trimmed. `\|` is a pipe in the text;
+    /// a last cell that is only blanks after a pipe is the row's closing pipe.
+    static func rowCells(_ s: [Unicode.Scalar]) -> [[Unicode.Scalar]]? {
+        guard s.first == "|" else { return nil }
+        var cells: [[Unicode.Scalar]] = [[]]
+        var i = 1
+        while i < s.count {
+            if s[i] == "\\", i + 1 < s.count, s[i + 1] == "|" { cells[cells.count - 1].append("|"); i += 2; continue }
+            if s[i] == "|" { cells.append([]) } else { cells[cells.count - 1].append(s[i]) }
+            i += 1
+        }
+        if cells.count > 1, cells[cells.count - 1].allSatisfy(isBlank) { cells.removeLast() }
+        return cells
+    }
+
+    /// Number of columns of a delimiter row (every cell `:?-+:?`), or nil.
+    static func separatorCount(_ s: [Unicode.Scalar]) -> Int? {
+        guard let cells = rowCells(s) else { return nil }
+        for cell in cells {
+            var c = cell[...]
+            while let f = c.first, isBlank(f) { c = c.dropFirst() }
+            while let l = c.last, isBlank(l) { c = c.dropLast() }
+            if c.first == ":" { c = c.dropFirst() }
+            if c.last == ":" { c = c.dropLast() }
+            guard !c.isEmpty, c.allSatisfy({ $0 == "-" }) else { return nil }
+        }
+        return cells.count
+    }
+
+    static func defaultSeparator(columns n: Int) -> String {
+        "|" + String(repeating: " --- |", count: max(1, n))
+    }
+
     /// Prefix of a new block of `kind`. `indent` and `bullet` carry the spelling of a block it replaces.
     static func defaultPrefix(_ kind: BlockKind, indent: String = "", bullet: Character = "-") -> String {
         switch kind {
@@ -65,6 +120,8 @@ enum BlockSyntax {
         case .checklist(let checked): return indent + String(bullet) + (checked ? " [x] " : " [ ] ")
         case .quote: return "> "
         case .divider: return "---"
+        case .fence: return "```"
+        case .table: return ""
         }
     }
 }
@@ -80,7 +137,11 @@ extension BlockKind {
         case .checklist: return 4
         case .quote: return 5
         case .divider: return 6
+        case .fence: return 7
+        case .table: return 8
         }
     }
+    /// Kinds that span several file lines.
+    public var isMultiline: Bool { self == .fence || self == .table }
     var isListItem: Bool { family >= 2 && family <= 4 }
 }

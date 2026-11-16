@@ -63,7 +63,7 @@ public enum Mark: Equatable, Sendable {
     case link(String)
 }
 
-/// What a block is. Later tickets add fence and table.
+/// What a block is. A fence (code block) and a table span several file lines.
 public enum BlockKind: Equatable, Sendable {
     case paragraph
     case heading(level: Int)
@@ -72,9 +72,15 @@ public enum BlockKind: Equatable, Sendable {
     case checklist(checked: Bool)
     case quote
     case divider
+    /// Fenced code block. `runs` is one plain run: the content lines joined by "\n" (none for an empty block).
+    /// `prefix` is the opening fence line (with its info string), `trailer` the closing line.
+    case fence
+    /// Table. `runs` is the flattened grid: cells of a row joined by "\t", rows by U+2028, header row first.
+    /// `trailer` is the delimiter row.
+    case table
 }
 
-/// One line of the note. Blank lines are paragraphs with no runs.
+/// One line of the note, or one code block / table (several lines). Blank lines are paragraphs with no runs.
 public struct Block: Equatable, Sendable {
     /// Identity inside one document. An edited block gets a new id.
     public internal(set) var id: Int
@@ -85,6 +91,10 @@ public struct Block: Equatable, Sendable {
     public let prefix: String
     /// Literal line ending: "\n", "\r\n", or "" for a final line without one.
     public internal(set) var terminator: String
+    /// Fence: the literal closing fence line. Table: the literal delimiter row. Empty for other kinds.
+    public let trailer: String
+    /// Line ending between the lines inside a fence or table; empty for other kinds.
+    public let inner: String
     /// Load-time snapshot of a block that came from a file: its original bytes (without terminator) and
     /// the model they read as. While the block equals that model it is written from those bytes (rule 1).
     struct Origin {
@@ -95,24 +105,66 @@ public struct Block: Equatable, Sendable {
         /// The prefix as the reader cut it from `source`. `prefix` can be longer: blanks that the reader found
         /// inside a mark at the start of the text are moved into it.
         let rawPrefix: String
+        let trailer: String
     }
     var origin: Origin?
 
     /// Visible text of the block: the run texts joined (a pill counts as its address).
     public var text: String { runs.map(\.text).joined() }
 
+    /// The info string of a code block (its language word), not part of the visible content.
+    public var fenceInfo: String {
+        guard kind == .fence else { return "" }
+        let s = prefix.unicodeScalars
+        let c = s.first
+        return String(s.drop(while: { $0 == c })).trimmingCharacters(in: .whitespaces)
+    }
+
     /// Equality of content and literal forms. Ignores `id` and `origin`.
     public static func == (a: Block, b: Block) -> Bool {
         a.kind == b.kind && a.runs == b.runs
             && a.prefix.utf8.elementsEqual(b.prefix.utf8)
             && a.terminator == b.terminator
+            && a.trailer.utf8.elementsEqual(b.trailer.utf8) && a.inner == b.inner
     }
 
-    init(id: Int, kind: BlockKind, runs: [Run], prefix: String, terminator: String, origin: Origin?) {
+    init(id: Int, kind: BlockKind, runs input: [Run], prefix: String, terminator: String,
+         trailer: String = "", inner: String = "", origin: Origin?) {
         var kind = kind
         var prefix = prefix
-        var runs = Block.normalize(runs)
+        var trailer = trailer
+        var inner = inner
+        var runs: [Run]
         switch kind {
+        case .fence: runs = Block.normalizeFence(input)
+        case .table: runs = Table.normalize(input)
+        default: runs = Block.normalize(input)
+        }
+        switch kind {
+        case .fence:
+            inner = inner.isEmpty ? "\n" : inner
+            var open = BlockSyntax.fenceOpen(Array(prefix.unicodeScalars))
+            if open == nil { prefix = "```"; open = BlockSyntax.Fence(char: "`", count: 3) }
+            var fence = open!
+            // Content that would close the fence makes the fence longer.
+            let lines = Block.codeLines(runs.first?.text ?? "").map { Array($0.unicodeScalars) }
+            while !runs.isEmpty, lines.contains(where: { BlockSyntax.isFenceClose($0, fence) }) {
+                fence = BlockSyntax.Fence(char: fence.char, count: fence.count + 1)
+                prefix = String(repeating: String(fence.char), count: fence.count) + String(prefix.unicodeScalars.drop(while: { $0 == fence.char }))
+                trailer = ""
+            }
+            let t = Array(trailer.unicodeScalars)
+            if !BlockSyntax.isFenceClose(t, fence) || t.first != fence.char { trailer = String(repeating: String(fence.char), count: fence.count) }
+        case .table:
+            inner = inner.isEmpty ? "\n" : inner
+            prefix = ""
+            let columns = Table.rows(from: runs).first?.count ?? 1
+            if BlockSyntax.separatorCount(Array(trailer.unicodeScalars)) != columns { trailer = BlockSyntax.defaultSeparator(columns: columns) }
+        default:
+            trailer = ""; inner = ""
+        }
+        switch kind {
+        case .fence, .table: break
         case .paragraph:
             prefix = ""
         case .divider:
@@ -132,6 +184,8 @@ public struct Block: Equatable, Sendable {
         self.runs = runs
         self.prefix = prefix
         self.terminator = terminator
+        self.trailer = trailer
+        self.inner = inner
         self.origin = origin
     }
 
@@ -165,10 +219,10 @@ public struct Block: Equatable, Sendable {
     /// Line bytes without terminator.
     var body: String {
         if let o = origin, o.runs == runs {
-            if o.kind == kind, o.prefix.utf8.elementsEqual(prefix.utf8) { return o.source }
+            if o.kind == kind, o.prefix.utf8.elementsEqual(prefix.utf8), o.trailer.utf8.elementsEqual(trailer.utf8) { return o.source }
             // Only the prefix changed inside one family (heading level, checkbox): the inline bytes stay.
             let extra = o.prefix.utf8.count - o.rawPrefix.utf8.count
-            if o.kind.family == kind.family, kind != .paragraph, extra >= 0, prefix.utf8.count >= extra,
+            if o.kind.family == kind.family, kind != .paragraph, !kind.isMultiline, extra >= 0, prefix.utf8.count >= extra,
                o.source.utf8.starts(with: o.rawPrefix.utf8) {
                 return String(decoding: prefix.utf8.dropLast(extra), as: UTF8.self)
                     + String(decoding: o.source.utf8.dropFirst(o.rawPrefix.utf8.count), as: UTF8.self)
@@ -179,7 +233,33 @@ public struct Block: Equatable, Sendable {
 
     /// Line bytes written from the model alone, ignoring the load snapshot.
     var generated: String {
-        kind == .divider ? prefix : prefix + InlineWriter.write(runs, kind: kind)
+        switch kind {
+        case .divider: return prefix
+        case .fence:
+            let text = runs.first?.text ?? ""
+            let lines = text.isEmpty ? [] : Block.codeLines(text)
+            return prefix + inner + lines.map { $0 + inner }.joined() + trailer
+        case .table:
+            let rows = Table.rows(from: runs)
+            func line(_ cells: [[Run]]) -> String {
+                "|" + cells.map { " " + Table.cellText($0) + " |" }.joined()
+            }
+            var lines = [line(rows[0]), trailer]
+            lines += rows.dropFirst().map(line)
+            return lines.joined(separator: inner)
+        default: return prefix + InlineWriter.write(runs, kind: kind)
+        }
+    }
+
+    /// Lines of code content, split by scalar (a "\n" before a combining mark is still a line break).
+    static func codeLines(_ text: String) -> [String] {
+        text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
+    }
+
+    /// Code content: one plain run, no CR (a line ending is not content), U+2028 (the buffer's line separator) as a blank.
+    static func normalizeFence(_ input: [Run]) -> [Run] {
+        let text = input.map(\.text).joined().unicodeScalars.filter { $0 != "\r" }.map { $0 == "\u{2028}" ? " " : String($0) }.joined()
+        return text.isEmpty ? [] : [Run(text)]
     }
 
     /// Merge, trim and drop runs so that equal content has one representation.

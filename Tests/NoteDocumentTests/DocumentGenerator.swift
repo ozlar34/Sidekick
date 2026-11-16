@@ -2,13 +2,15 @@ import Foundation
 import NoteDocument
 
 /// Random markdown and random edits. Extend by adding a case to `LineShape` and handling it in
-/// `line(_:)`; later tickets add one shape per new block kind / mark.
+/// `line(_:)`; later tickets add one shape per new block kind / mark. A shape may span several lines
+/// (code block, table): they are joined with `eol`, which `markdown()` sets per document.
 struct DocumentGenerator {
     var rng: SeededRNG
+    var eol = "\n"
     init(seed: UInt64) { rng = SeededRNG(seed: seed) }
 
     enum LineShape: CaseIterable {
-        case blank, paragraph, heading, bullet, numbered, checklist, quote, divider, literalOther, nasty
+        case blank, paragraph, heading, bullet, numbered, checklist, quote, divider, literalOther, nasty, fence, table
     }
 
     mutating func int(_ n: Int) -> Int { Int(rng.next() % UInt64(n)) }
@@ -16,7 +18,8 @@ struct DocumentGenerator {
 
     static let words = ["alpha", "beta", "gamma", "x", "snake_case", "a*b", "_", "*", "\\", "#", "##", "caf\u{e9}", "e\u{301}",
                         "\u{1F600}", "\u{4E2D}", "- item", "> q", "1.", "[l](u)", "https://a.b/c_d", "__", "**", "\\*", "\\#", "\t", " ",
-                        "~", "~~", "`", "<u>", "</u>", "[", "]", "](", "http://x.y", "https://", "[ ] t", "---", "\\:", "!"]
+                        "~", "~~", "`", "<u>", "</u>", "[", "]", "](", "http://x.y", "https://", "[ ] t", "---", "\\:", "!",
+                        "|", "\\|", "||", "|---|", "\n", "\u{2028}", "```", "~~~", "# c"]
 
     mutating func plainText() -> String {
         (0..<(1 + int(4))).map { _ in pick(Self.words) }.joined(separator: pick(["", " ", "  "]))
@@ -67,6 +70,21 @@ struct DocumentGenerator {
             return ">" + pick([" ", " ", "\t"]) + inline()
         case .divider:
             return pick(["", "", " "]) + pick(["---", "***", "___", "-----", "*****", "____"]) + pick(["", "", " "])
+        case .fence:
+            let ch = pick(["`", "~"]), n = 3 + int(2)
+            let open = String(repeating: ch, count: n) + pick(["", "", "swift", " py ", "c++", "js {x}"])
+            let close = String(repeating: ch, count: n + int(2)) + pick(["", "", " ", "\t"])
+            let content = (0..<int(5)).map { _ in
+                pick(["# comment", "**x**", "- item", "| a | b |", "", "  indent", "__y__ `z`", "> q", "---", "[l](u)", "<u>x</u>", "\\", "\\#", "~~~", "``", plainText()])
+            }
+            return ([open] + content + [close]).joined(separator: eol)
+        case .table:
+            func row(_ cells: Int) -> String {
+                return "|" + (0..<cells).map { _ in pick([" ", "", "  "]) + (int(6) == 0 ? "" : inline().replacingOccurrences(of: "|", with: "\\|")) + pick([" ", "", "  "]) + "|" }.joined()
+            }
+            let n = 1 + int(3)
+            let sep = "|" + (0..<n).map { _ in pick([" --- ", "---", ":--", "--:", " :-: ", "----"]) + "|" }.joined()
+            return ([row(n), sep] + (0..<int(4)).map { _ in row(1 + int(4)) }).joined(separator: eol)
         case .literalOther:
             return pick(["```", "| a | b |", "![i](x)", "    indented", "  # indented", "+ plus", "-x", "1.x", ">x", "- [ ]x", "- []", "* * *", "- - -", "--", "<div>", "[^1]: n"])
         case .nasty:
@@ -78,6 +96,7 @@ struct DocumentGenerator {
     mutating func markdown() -> String {
         let count = int(12)
         let style = int(3)   // 0 LF, 1 CRLF, 2 mixed
+        eol = style == 1 ? "\r\n" : "\n"
         let finalNewline = int(4) != 0
         var out = ""
         for i in 0..<count {
@@ -104,7 +123,9 @@ struct DocumentGenerator {
     mutating func runs() -> [Run] { (0..<int(5)).map { _ in run() } }
 
     mutating func kind() -> BlockKind {
-        switch int(10) {
+        switch int(12) {
+        case 10: return .fence
+        case 11: return .table
         case 0: return .heading(level: 1 + int(6))
         case 1: return .bullet
         case 2: return .numbered

@@ -36,6 +36,8 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
             case .checklist(let checked): return checked ? "checked" : "todo"
             case .quote: return "quote"
             case .divider: return "divider"
+            case .fence: return "code"
+            case .table: return "table"
             }
         }
     }
