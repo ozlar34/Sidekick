@@ -10,8 +10,12 @@ enum NewEditorSwitch {
     static let offLaunchArgument = "--old-editor"
     static let defaultsKey = "newEditorEnabled"
 
+    /// Tests of the old editor's mount path set this to false (and put it back to nil); the app never sets it.
+    nonisolated(unsafe) static var testOverride: Bool?
+
     static var isOn: Bool {
-        isOn(arguments: ProcessInfo.processInfo.arguments, defaults: Defaults.store)
+        if let testOverride { return testOverride }
+        return isOn(arguments: ProcessInfo.processInfo.arguments, defaults: Defaults.store)
     }
 
     static func isOn(arguments: [String], defaults: UserDefaults) -> Bool {

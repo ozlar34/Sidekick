@@ -23,6 +23,9 @@ import SwiftUI
 final class EditorMountSeedsBodyTests: XCTestCase {
 
     func test_freshMount_seedsEditorWithNoteBody() throws {
+        // This pins the OLD editor's mount path (raw markdown in the buffer); the new editor is the default since ticket 17.
+        NewEditorSwitch.testOverride = false
+        defer { NewEditorSwitch.testOverride = nil }
         let body = "# Heading one\nSome body text that must be visible on first mount."
         let note = Note(id: UUID(), filename: "a.md", title: "Heading one", body: body,
                         pinned: false, order: 0, modified: Date(), createdAt: Date())
