@@ -7,7 +7,7 @@ import NoteDocument
 /// Key handling is native except the structural rules: Enter (continue or end a list, a heading or quote
 /// ends in a paragraph), Backspace at the start of a marked block (clears the kind, then joins the line above),
 /// and a click on a drawn checkbox. Arrow keys, selection, word and line jumps and other clicks are not overridden.
-final class NoteTextView: NSTextView, NSTextStorageDelegate {
+final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner {
     /// The note shown now: its storage, undo history and document. `attach` switches it.
     private(set) var content = NoteContent()
     private var tailKind: BlockKind {
@@ -19,6 +19,9 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
     var onMarkdownChange: ((String) -> Void)?
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
+    /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
+    /// (every scheme passes, as in the old editor).
+    var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     var markdown: String { content.markdown }
     var document: NoteDocument { content.document }
@@ -101,6 +104,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         let sel = new.savedSelection
         setSelectedRange(NSRange(location: min(sel.location, length), length: min(sel.length, max(0, length - sel.location))))
         refreshTailTypingAttributes()
+        refreshHover()
     }
 
     /// Replaces the whole note from markdown (reload). Not an undo step: history is cleared.
@@ -110,6 +114,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
+        refreshHover()
     }
 
     /// Replaces the whole note from markdown through the user edit path (one undo step).
@@ -151,7 +156,13 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         content.storageDidChange()
         NoteTextEngine.setTailKind(content.tailKind, in: self)
         refreshTailTypingAttributes()
+        refreshHover()
         onMarkdownChange?(content.markdown)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshHover()
     }
 
     // MARK: Tail paragraph
@@ -238,6 +249,10 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         let sel = selectedRange()
         if sel.length == 0, let (_, para) = paragraph(at: sel.location) {
             let k = kind(of: para)
+            if k == .divider, hasTerminator(para) {   // on the rule's own line: a new plain line above it
+                replace(NSRange(location: para.location, length: 0), with: lineBreak(.paragraph), caret: para.location + 1)
+                return
+            }
             if let next = continuation(of: k) {
                 if para.length == 0 {   // empty item: end the list
                     if hasTerminator(para) {
@@ -295,6 +310,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
             return super.deleteBackward(sender)
         }
         let k = kind(of: para)
+        if k == .divider, hasTerminator(para) { return removeDivider(para, caret: para.location) }   // caret on the rule's line
         if isMarked(k) {
             if hasTerminator(para) {
                 let whole = NSRange(location: para.location, length: para.length + 1)
@@ -312,8 +328,20 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
     /// Delete at the end of a line joins the next one into it, keeping the kind of this line.
     override func deleteForward(_ sender: Any?) {
         let sel = selectedRange()
+        if sel.length == 0, let (index, para) = paragraph(at: sel.location) {
+            // Before a divider (end of the line above it, or on its own line) Delete removes the whole rule.
+            if kind(of: para) == .divider, sel.location == para.location, hasTerminator(para) { return removeDivider(para, caret: para.location) }
+            let ranges = NoteBuffer.paragraphRanges(in: string as NSString)
+            if sel.location == NSMaxRange(para), hasTerminator(para), ranges.indices.contains(index + 1),
+               kind(of: ranges[index + 1]) == .divider, hasTerminator(ranges[index + 1]) { return removeDivider(ranges[index + 1], caret: sel.location) }
+        }
         guard sel.length == 0, let (index, para) = paragraph(at: sel.location), sel.location == NSMaxRange(para), hasTerminator(para),
               join(paragraphsEndingAt: index) else { return super.deleteForward(sender) }
+    }
+
+    /// A divider is one object: its line (an empty paragraph with its line break) goes as a unit, one undo step.
+    private func removeDivider(_ para: NSRange, caret: Int) {
+        replace(NSRange(location: para.location, length: 1), with: NSAttributedString(), caret: caret)
     }
 
     /// Joins paragraph `left` with the one below it; the result keeps the kind of `left` (as `NoteDocument` does).
@@ -332,10 +360,45 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
         return true
     }
 
+    // MARK: Links and pills: hover
+
+    typealias HoverTarget = NoteTextEngine.HoverTarget
+
+    /// Every link and pill with the rects it is drawn in. The cursor rects and tooltips come from this.
+    var hoverTargets: [HoverTarget] { NoteTextEngine.hoverTargets(in: self) }
+
+    /// The full address shown when the pointer rests on a link or pill at `point` (view coordinates).
+    func toolTip(at point: NSPoint) -> String? { NoteTextEngine.address(in: self, at: point) }
+
+    /// Pointing hand over a link or pill, the text cursor's default everywhere else (nil).
+    func cursor(at point: NSPoint) -> NSCursor? { toolTip(at: point) == nil ? nil : .pointingHand }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        removeAllToolTips()
+        for target in NoteTextEngine.hoverTargets(in: self, visibleOnly: true) {
+            for rect in target.rects {
+                addCursorRect(rect, cursor: .pointingHand)
+                addToolTip(rect, owner: self, userData: nil)
+            }
+        }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        toolTip(at: point) ?? ""
+    }
+
+    private func refreshHover() { window?.invalidateCursorRects(for: self) }
+
     // MARK: Checkbox
 
     /// A click on a drawn checkbox toggles it (and does nothing else). Every other click is native.
     override func mouseDown(with event: NSEvent) {
+        // Cmd+click opens a link or pill and leaves the caret alone; a plain click is native (it places the caret).
+        if event.modifierFlags.contains(.command), let address = NoteTextEngine.address(in: self, at: convert(event.locationInWindow, from: nil)) {
+            if let url = URL(string: address) { openURL(url) }
+            return
+        }
         if isEditable, let hit = NoteTextEngine.checkbox(in: self, at: convert(event.locationInWindow, from: nil)) {
             toggleCheckbox(at: hit.start, checked: hit.checked)
             return
@@ -356,6 +419,53 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate {
     override func insertBacktab(_ sender: Any?) {
         if selectedRange() == NSRange(location: 0, length: 0), let cb = onShiftTabAtStart { cb(); return }
         super.insertBacktab(sender)
+    }
+
+    // MARK: Typing next to objects, `/hr`
+
+    /// Text typed on a divider's line replaces the rule: the line becomes a plain paragraph holding the text (undo brings the rule back).
+    /// Text typed at the edge of a pill or a link is plain text: it never joins the address or the link.
+    /// `/hr` or `/divider` alone on a plain line becomes a divider with a new line below.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let typed = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
+        let isPlainText = string is String
+        let sel = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+        if !typed.contains("\n"), sel.length == 0, let (_, para) = paragraph(at: sel.location), para.length == 0, kind(of: para) == .divider {
+            replace(NSRange(location: para.location, length: 1), with: lineBreak(.paragraph), caret: para.location)
+        }
+        if isPlainText, sel.length == 0 { typingAttributes = typingAttributesAtEdge(of: sel.location) }
+        super.insertText(string, replacementRange: replacementRange)
+        guard !hasMarkedText() else { return }
+        convertSlashDividerIfTyped()
+    }
+
+    /// The typing attributes at `location` without the pill or the link of the character before it, unless the
+    /// caret is inside that link (the character after carries the same one).
+    private func typingAttributesAtEdge(of location: Int) -> [NSAttributedString.Key: Any] {
+        var attrs = typingAttributes
+        guard location > 0, location <= (string as NSString).length, let storage = textStorage,
+              let before = storage.attribute(.noteStyle, at: location - 1, effectiveRange: nil) as? NoteRunStyle else { return attrs }
+        let after = location < storage.length ? storage.attribute(.noteStyle, at: location, effectiveRange: nil) as? NoteRunStyle : nil
+        let insideLink = before.link != nil && after?.link == before.link
+        let rest = before.removing(pill: before.pill != nil, link: before.link != nil && !insideLink)
+        if before.pill != nil { attrs.removeValue(forKey: .attachment) }
+        if let rest { attrs[.noteStyle] = rest } else { attrs.removeValue(forKey: .noteStyle) }
+        return attrs
+    }
+
+    private func convertSlashDividerIfTyped() {
+        let sel = selectedRange()
+        guard sel.length == 0, let (_, para) = paragraph(at: sel.location), sel.location == NSMaxRange(para), para.length > 0, kind(of: para) == .paragraph
+        else { return }
+        let text = (string as NSString).substring(with: para)
+        guard text == "/hr" || text == "/divider" else { return }
+        // The typed characters are their own undo step, so that Cmd+Z brings the literal text back.
+        if let um = undoManager, um.groupingLevel > 0 { um.endUndoGrouping(); um.beginUndoGrouping() }
+        let whole = NSRange(location: para.location, length: para.length + (hasTerminator(para) ? 1 : 0))
+        let out = NSMutableAttributedString()
+        out.append(lineBreak(.divider))
+        if hasTerminator(para) { out.append(lineBreak(.paragraph)) }
+        replace(whole, with: out, caret: para.location + 1)
     }
 
     // MARK: Paste

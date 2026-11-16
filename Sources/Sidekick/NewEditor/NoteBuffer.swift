@@ -11,9 +11,9 @@ extension NSAttributedString.Key {
 }
 
 /// The marks of a run other than bold, as one attribute value, so that the buffer carries a note document
-/// losslessly. Styling them is left to later tickets. A pill carries its address and a number that makes it a
-/// separate object even next to another pill; characters typed next to it that inherit the value no longer match
-/// the address, and are read back as plain text.
+/// losslessly. A pill is one attachment character in the buffer; its address lives here (`pillText`), with a
+/// number that makes it a separate object even next to another pill. Characters typed next to a pill never carry
+/// the pill (`withoutPill`): the text is plain text again.
 final class NoteRunStyle: NSObject {
     let italic: ItalicDelimiter?
     let underline: Bool
@@ -32,6 +32,14 @@ final class NoteRunStyle: NSObject {
         self.pillID = run.pill == nil ? 0 : pillID
     }
 
+    private init(copying o: NoteRunStyle, link: String?, dropPill: Bool) {
+        italic = o.italic; underline = o.underline; strikethrough = o.strikethrough; code = o.code
+        self.link = link
+        pill = dropPill ? nil : o.pill
+        pillText = dropPill ? nil : o.pillText
+        pillID = dropPill ? 0 : o.pillID
+    }
+
     override func isEqual(_ object: Any?) -> Bool {
         guard let o = object as? NoteRunStyle else { return false }
         return italic == o.italic && underline == o.underline && strikethrough == o.strikethrough && code == o.code
@@ -39,17 +47,26 @@ final class NoteRunStyle: NSObject {
     }
     override var hash: Int { pillID &* 31 &+ (link?.hashValue ?? 0) }
 
-    /// The runs for `text` carrying these marks (bold is added by the caller). Text typed next to a pill inherits the
-    /// attribute; the part that is not the address is plain text again.
+    /// The same marks without the pill (and, if asked, without the link); nil when no mark is left.
+    func removing(pill dropPill: Bool, link dropLink: Bool) -> NoteRunStyle? {
+        let s = NoteRunStyle(copying: self, link: dropLink ? nil : link, dropPill: dropPill)
+        return s.italic == nil && !s.underline && !s.strikethrough && !s.code && s.link == nil && s.pill == nil ? nil : s
+    }
+
+    /// The runs for `text` carrying these marks (bold is added by the caller). The pill character becomes the pill run
+    /// with its address; any other character is plain text, whatever it inherited.
     func runs(_ text: String) -> [Run] {
         let base = Run(text, italic: italic, underline: underline, strikethrough: strikethrough, code: code, link: link)
-        guard let form = pill, let address = pillText, text != address else {
-            var r = base; r.pill = pill; return [r]
+        guard let form = pill, let address = pillText else { return [base] }
+        var out: [Run] = []
+        var plain = ""
+        func flush() { if !plain.isEmpty { var r = base; r.text = plain; r.pill = nil; out.append(r); plain = "" } }
+        for ch in text {
+            if ch == NotePillAttachment.objectCharacter { flush(); var r = base; r.text = address; r.pill = form; out.append(r) }
+            else { plain.append(ch) }
         }
-        func piece(_ s: String, pill: Bool) -> Run { var r = base; r.text = s; r.pill = pill ? form : nil; return r }
-        if text.hasPrefix(address) { return [piece(address, pill: true), piece(String(text.dropFirst(address.count)), pill: false)] }
-        if text.hasSuffix(address) { return [piece(String(text.dropLast(address.count)), pill: false), piece(address, pill: true)] }
-        return [piece(text, pill: false)]
+        flush()
+        return out
     }
 }
 
@@ -106,10 +123,17 @@ enum NoteBuffer {
                 var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
                 if let d = run.bold { attrs[.noteBold] = d.rawValue }
                 if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
-                out.append(NSAttributedString(string: run.text, attributes: attrs))
+                var text = run.text
+                if run.pill != nil {   // one object: the character stands for the whole address
+                    text = String(NotePillAttachment.objectCharacter)
+                    attrs[.attachment] = NotePillAttachment(address: run.text)
+                }
+                out.append(NSAttributedString(string: text, attributes: attrs))
             }
             let isLast = i == blocks.count - 1
-            if !(isLast && block.terminator.isEmpty) {
+            // A divider at the end of a note always has a normal line below it, so the line below exists in the buffer
+            // even when the file ends right after the rule (the document keeps its bytes until an edit).
+            if !(isLast && block.terminator.isEmpty) || block.kind == .divider {
                 out.append(NSAttributedString(string: "\n", attributes: [.noteBlockKind: kindAttr]))
             } else if block.runs.isEmpty {
                 tailKind = block.kind
@@ -244,11 +268,45 @@ enum NoteBuffer {
             let kind = Self.kind(fromAttribute: storage.attribute(.noteBlockKind, at: end - 1, effectiveRange: nil))
             storage.addAttributes([.noteBlockKind: attributeValue(kind), .paragraphStyle: paragraphStyle(for: kind),
                                    .foregroundColor: color(for: kind)], range: range)
-            // Checked items are struck through. (Ticket 08 styles the strikethrough mark: it must make this per run.)
-            if case .checklist(checked: true) = kind { storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
-            else { storage.removeAttribute(.strikethroughStyle, range: range) }
-            storage.enumerateAttribute(.noteBold, in: range, options: []) { value, sub, _ in
-                storage.addAttribute(.font, value: font(for: kind, bold: value != nil), range: sub)
+            Self.stylePieces(of: storage, in: range, kind: kind)
+        }
+    }
+
+    // MARK: Marks
+
+    /// Font and decoration of every piece of `range` (a paragraph) from its marks: bold, italic, underline,
+    /// strikethrough, inline code, link. Strikethrough is per piece: the mark, or a checked item. A pill character
+    /// that lost its object (text typed next to it inherited the attribute) is plain text again.
+    private static func stylePieces(of storage: NSTextStorage, in range: NSRange, kind: BlockKind) {
+        let ns = storage.string as NSString
+        for key in [NSAttributedString.Key.underlineStyle, .strikethroughStyle, .backgroundColor] { storage.removeAttribute(key, range: range) }
+        var strayPills: [NSRange] = []
+        storage.enumerateAttribute(.noteStyle, in: range, options: []) { value, sub, _ in
+            guard let style = value as? NoteRunStyle, style.pill != nil else { return }
+            for i in sub.location..<NSMaxRange(sub) where ns.character(at: i) != 0xFFFC { strayPills.append(NSRange(location: i, length: 1)) }
+        }
+        for r in strayPills {
+            let style = storage.attribute(.noteStyle, at: r.location, effectiveRange: nil) as? NoteRunStyle
+            if let rest = style?.removing(pill: true, link: false) { storage.addAttribute(.noteStyle, value: rest, range: r) }
+            else { storage.removeAttribute(.noteStyle, range: r) }
+            storage.removeAttribute(.attachment, range: r)
+        }
+        let checked: Bool
+        if case .checklist(checked: true) = kind { checked = true } else { checked = false }
+        let single = NSUnderlineStyle.single.rawValue
+        storage.enumerateAttribute(.noteBold, in: range, options: []) { bold, boldRange, _ in
+            storage.enumerateAttribute(.noteStyle, in: boldRange, options: []) { value, piece, _ in
+                let style = value as? NoteRunStyle
+                var font = Self.font(for: kind, bold: bold != nil)
+                if style?.italic != nil { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
+                if style?.code == true {
+                    font = NSFont.monospacedSystemFont(ofSize: 15 * 0.9, weight: .regular)
+                    storage.addAttribute(.backgroundColor, value: NSColor.quaternaryLabelColor, range: piece)
+                }
+                storage.addAttribute(.font, value: font, range: piece)
+                if style?.underline == true || style?.link != nil { storage.addAttribute(.underlineStyle, value: single, range: piece) }
+                if style?.strikethrough == true || checked { storage.addAttribute(.strikethroughStyle, value: single, range: piece) }
+                if style?.link != nil { storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: piece) }
             }
         }
     }

@@ -44,7 +44,7 @@ final class NewEditorMarksTests: XCTestCase {
 
     func testTypingNextToAPillDoesNotSwallowTheTextIntoIt() {
         let h = NewEditorHost(markdown: "go [https://x.y](https://x.y)\nrest\n")
-        h.select(NSString(string: h.string).range(of: "https://x.y").upperBound)
+        h.select(NSString(string: h.string).range(of: "\u{FFFC}").upperBound)   // a pill is one object in the buffer
         h.type("abc")
         XCTAssertEqual(h.savedMarkdown, "go [https://x.y](https://x.y)abc\nrest\n")
     }

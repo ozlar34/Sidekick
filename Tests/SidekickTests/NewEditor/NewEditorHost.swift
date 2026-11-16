@@ -83,12 +83,12 @@ final class NewEditorHost {
     /// A real left click at `point` (view coordinates): a mouse-down event delivered to the view, the mouse-up queued
     /// first because NSTextView tracks a click until it sees it (same trick as `HostedEditorRunner.click`).
     /// A synthetic mouse event sent through `NSWindow.sendEvent` does not reach the view in a test run.
-    func click(at point: NSPoint) {
+    func click(at point: NSPoint, modifiers: NSEvent.ModifierFlags = []) {
         window.makeKeyAndOrderFront(nil)
         let inWindow = textView.convert(point, to: nil)
         let ts = ProcessInfo.processInfo.systemUptime
         func event(_ type: NSEvent.EventType, _ t: TimeInterval) -> NSEvent {
-            NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: [], timestamp: t, windowNumber: window.windowNumber,
+            NSEvent.mouseEvent(with: type, location: inWindow, modifierFlags: modifiers, timestamp: t, windowNumber: window.windowNumber,
                                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
         }
         window.postEvent(event(.leftMouseUp, ts + 0.05), atStart: false)
@@ -113,7 +113,8 @@ final class NewEditorHost {
     }
 }
 
-/// Small seeded generator of markdown inside the scope of this slice (paragraphs, headings, bold, lists, checklists, quotes).
+/// Small seeded generator of markdown inside the scope of this slice (paragraphs, headings, every mark, URL pills,
+/// links, dividers, lists, checklists, quotes).
 struct NewEditorNoteGenerator {
     private var state: UInt64
     init(seed: UInt64) { state = seed == 0 ? 0x9E37_79B9 : seed }
@@ -129,7 +130,15 @@ struct NewEditorNoteGenerator {
         var out = ""
         let count = 1 + int(6)
         for i in 0..<count {
-            switch int(11) {
+            switch int(19) {
+            case 11: out += words(2) + " https://example.com/" + words(1).replacingOccurrences(of: " ", with: "") + " " + words(2)   // bare pill
+            case 12: out += "[https://x.y/" + String(1 + int(9)) + "](https://x.y/" + String(1 + int(9)) + ") " + words(1)   // link pill (or link)
+            case 13: out += ["---", "***", "___"][int(3)]   // divider
+            case 14: out += words(1) + " [" + words(2) + "](http://x.y/z) " + words(2)   // styled link
+            case 15: let d = ["*", "_"][int(2)]; out += d + words(2) + d + " " + words(1)   // italic at the line start
+            case 16: out += "<u>" + words(2) + "</u> ~~" + words(2) + "~~ `" + words(1) + "` " + words(1)   // underline, strike, code
+            case 17: out += words(1) + " **" + words(1) + "** *" + words(1) + "* https://e.co " + words(1)   // bold, italic, bare pill
+            case 18: out += "> *" + words(2) + "* [" + words(1) + "](u)"
             case 5: out += "- " + words(3)
             case 6: out += "\(1 + int(9)). " + words(3)
             case 7: out += "- [" + (int(2) == 0 ? " " : "x") + "] " + (int(5) == 0 ? "" : words(3))

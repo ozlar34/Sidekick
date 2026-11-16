@@ -72,13 +72,73 @@ enum NoteTextEngine {
         return n
     }
 
+    // MARK: Links and pills
+
+    /// A link or a pill that answers to Cmd+click and hover: where it is drawn (one rect per line it spans)
+    /// and the address it opens.
+    struct HoverTarget: Equatable {
+        var range: NSRange
+        var address: String
+        var rects: [NSRect]
+    }
+
+    /// Address of the link or pill character `index` stands for, if it is one.
+    static func address(ofCharacterAt index: Int, in storage: NSTextStorage) -> String? {
+        guard index >= 0, index < storage.length, let style = storage.attribute(.noteStyle, at: index, effectiveRange: nil) as? NoteRunStyle else { return nil }
+        if style.pill != nil, (storage.string as NSString).character(at: index) == 0xFFFC { return style.pillText }
+        return style.link
+    }
+
+    /// The link or pill drawn at `point` (view coordinates): its address. Nil for anything else, also for the empty
+    /// space after a line.
+    static func address(in tv: NSTextView, at point: NSPoint) -> String? {
+        guard let lm = tv.layoutManager, let tc = tv.textContainer, let storage = tv.textStorage, storage.length > 0 else { return nil }
+        let origin = tv.textContainerOrigin
+        let p = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        var fraction: CGFloat = 0
+        let glyph = lm.glyphIndex(for: p, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+        guard glyph < lm.numberOfGlyphs, lm.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: tc).contains(p) else { return nil }
+        return address(ofCharacterAt: lm.characterIndexForGlyph(at: glyph), in: storage)
+    }
+
+    /// Every link and pill (`visible` limits them to what is on screen), in document order.
+    static func hoverTargets(in tv: NSTextView, visibleOnly visible: Bool = false) -> [HoverTarget] {
+        guard let lm = tv.layoutManager, let tc = tv.textContainer, let storage = tv.textStorage, storage.length > 0 else { return [] }
+        let origin = tv.textContainerOrigin
+        var chars = NSRange(location: 0, length: storage.length)
+        if visible {
+            let area = tv.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+            chars = lm.characterRange(forGlyphRange: lm.glyphRange(forBoundingRect: area, in: tc), actualGlyphRange: nil)
+        } else {
+            lm.ensureLayout(for: tc)
+        }
+        var out: [HoverTarget] = []
+        storage.enumerateAttribute(.noteStyle, in: chars, options: []) { value, range, _ in
+            guard let style = value as? NoteRunStyle, style.link != nil || style.pill != nil else { return }
+            var pieces = [range]
+            if style.pill != nil { pieces = (range.location..<NSMaxRange(range)).filter { address(ofCharacterAt: $0, in: storage) != nil }.map { NSRange(location: $0, length: 1) } }
+            for piece in pieces {
+                guard let address = address(ofCharacterAt: piece.location, in: storage) else { continue }
+                var rects: [NSRect] = []
+                let glyphs = lm.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
+                lm.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, lineGlyphs, _ in
+                    let part = NSIntersectionRange(lineGlyphs, glyphs)
+                    guard part.length > 0 else { return }
+                    rects.append(lm.boundingRect(forGlyphRange: part, in: tc).offsetBy(dx: origin.x, dy: origin.y))
+                }
+                if !rects.isEmpty { out.append(HoverTarget(range: piece, address: address, rects: rects)) }
+            }
+        }
+        return out
+    }
+
     // MARK: Block markers
 
     /// One drawn block marker: bullet, number or checkbox of the paragraph that starts at `start`
     /// (`start == string length` for the empty last paragraph). `rect` is the marker's frame in view coordinates;
     /// for a checkbox it is also the click target.
     struct Marker: Equatable {
-        enum Shape: Equatable { case bullet, number(String), checkbox(checked: Bool) }
+        enum Shape: Equatable { case bullet, number(String), checkbox(checked: Bool), divider }
         var start: Int
         var shape: Shape
         var rect: NSRect
@@ -155,6 +215,9 @@ final class NoteLayoutManager: NSLayoutManager {
                 let side = Self.squareSide
                 out.append(.init(start: start, shape: .checkbox(checked: checked),
                                  rect: NSRect(x: x, y: base - Self.markerFont.capHeight / 2 - side / 2, width: side, height: side)))
+            case .divider:   // a hairline across the text width, centred on its (empty) line
+                out.append(.init(start: start, shape: .divider,
+                                 rect: NSRect(x: x, y: frag.midY - 0.5, width: max(0, tc.size.width - padding * 2), height: 1)))
             default: break
             }
         }
@@ -214,6 +277,9 @@ final class NoteLayoutManager: NSLayoutManager {
                 ("\u{2022}" as NSString).draw(at: rect.origin, withAttributes: [.font: Self.markerFont, .foregroundColor: NSColor.textColor])
             case .number(let text):
                 (text as NSString).draw(at: rect.origin, withAttributes: [.font: Self.numberFont, .foregroundColor: NSColor.secondaryLabelColor])
+            case .divider:
+                NSColor.tertiaryLabelColor.setFill()
+                rect.fill()
             case .checkbox(let checked):
                 NSGraphicsContext.current?.saveGraphicsState()
                 let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
