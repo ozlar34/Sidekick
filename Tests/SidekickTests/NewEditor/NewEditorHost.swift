@@ -12,6 +12,7 @@ final class NewEditorHost {
     private(set) var savedMarkdown: String?
 
     init(markdown: String, size: CGSize = CGSize(width: 900, height: 600)) {
+        TestWatchdog.installOnce()
         textView = NoteTextView.make()
         let scroll = NSScrollView(frame: NSRect(origin: .zero, size: size))
         scroll.hasVerticalScroller = true
