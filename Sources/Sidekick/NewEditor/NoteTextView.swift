@@ -21,6 +21,8 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     var onFormatStateChange: ((NoteFormatState) -> Void)?
     /// True while `attach` switches notes: SwiftUI is updating then, so the state is published right after.
     var formatStateSuspended = false
+    /// Typing attributes for the next typed text, valid while the caret stays at `location` (set by a typed-markdown conversion).
+    var plainAfterConversion: (location: Int, attributes: [NSAttributedString.Key: Any])?
     /// Called on Shift-Tab at offset 0.
     var onShiftTabAtStart: (() -> Void)?
     /// Opens the address of a link or pill on Cmd+click. Tests replace it; the app hands it to the system
@@ -62,7 +64,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     /// Gives every numbered paragraph in `range` (all when nil) the text indent its own number needs, so that `10.` and
     /// `100.` keep the gap of `9.`. Attributes only; derived from the document, so it is not an undo step.
-    private func refreshNumberGutters(in range: NSRange?) {
+    func refreshNumberGutters(in range: NSRange?) {
         guard let storage = textStorage, storage.length > 0 else { return }
         let ns = storage.string as NSString
         var changes: [(NSRange, NSParagraphStyle)] = []
@@ -128,6 +130,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
             DispatchQueue.main.async { [weak self] in self?.publishFormatState() }
         }
         content.savedSelection = selectedRange()
+        plainAfterConversion = nil
         content.storage.delegate = nil
         content = new
         pendingStyleRange = nil
@@ -316,6 +319,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     /// (a line break inside its paragraph, so it stays one block); inside a table it does nothing (rows are not
     /// edited here). Everywhere else Enter is native.
     override func insertNewline(_ sender: Any?) {
+        completeURLBeforeEnter()
         let sel = selectedRange()
         if let (_, para) = paragraph(at: sel.location) {
             switch kind(of: para) {
@@ -526,10 +530,18 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         if !typed.contains("\n"), sel.length == 0, let (_, para) = paragraph(at: sel.location), para.length == 0, kind(of: para) == .divider {
             replace(NSRange(location: para.location, length: 1), with: lineBreak(.paragraph), caret: para.location)
         }
-        if isPlainText, sel.length == 0 { typingAttributes = typingAttributesAtEdge(of: sel.location) }
+        if isPlainText, sel.length == 0 {
+            // Right after a typed-markdown conversion the next text is plain: the mark that was just made does not run on.
+            if let after = plainAfterConversion, after.location == sel.location { typingAttributes = after.attributes }
+            else { typingAttributes = typingAttributesAtEdge(of: sel.location) }
+        }
+        plainAfterConversion = nil
+        let typedAttributes = typingAttributes
         super.insertText(string, replacementRange: replacementRange)
         guard !hasMarkedText() else { return }
-        convertSlashDividerIfTyped()
+        if convertSlashDividerIfTyped() { return }
+        // One typed character can complete a typed-markdown trigger (`- `, `**x**`, a bare URL, ...).
+        if isPlainText, sel.length == 0, typed.count == 1, let ch = typed.first { applyTypedMarkdown(typed: ch, typedAttributes: typedAttributes) }
     }
 
     /// The typing attributes at `location` without the pill or the link of the character before it, unless the
@@ -546,14 +558,26 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         return attrs
     }
 
-    private func convertSlashDividerIfTyped() {
+    /// The typed characters are their own undo step, so that Cmd+Z brings the literal text back.
+    func splitUndoGroup() {
+        if let um = undoManager, um.groupingLevel > 0 { um.endUndoGrouping(); um.beginUndoGrouping() }
+    }
+
+    /// True when it converted.
+    private func convertSlashDividerIfTyped() -> Bool {
         let sel = selectedRange()
         guard sel.length == 0, let (_, para) = paragraph(at: sel.location), sel.location == NSMaxRange(para), para.length > 0, kind(of: para) == .paragraph
-        else { return }
+        else { return false }
         let text = (string as NSString).substring(with: para)
-        guard text == "/hr" || text == "/divider" else { return }
-        // The typed characters are their own undo step, so that Cmd+Z brings the literal text back.
-        if let um = undoManager, um.groupingLevel > 0 { um.endUndoGrouping(); um.beginUndoGrouping() }
+        guard text == "/hr" || text == "/divider" else { return false }
+        splitUndoGroup()
+        registerCaretForUndo(at: sel.location)
+        makeDivider(of: para)
+        return true
+    }
+
+    /// The line becomes a divider with an empty plain line below it, where the caret goes.
+    func makeDivider(of para: NSRange) {
         let whole = NSRange(location: para.location, length: para.length + (hasTerminator(para) ? 1 : 0))
         let out = NSMutableAttributedString()
         out.append(lineBreak(.divider))
@@ -563,6 +587,10 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     // MARK: Paste
 
-    /// Pasted rich text is reduced to plain text, as in the old editor.
-    override func paste(_ sender: Any?) { pasteAsPlainText(sender) }
+    /// Pasted rich text is reduced to plain text, as in the old editor. A bare URL in the pasted text becomes a pill.
+    override func paste(_ sender: Any?) {
+        let start = selectedRange().location
+        pasteAsPlainText(sender)
+        convertPastedURLs(from: start, to: selectedRange().location)
+    }
 }

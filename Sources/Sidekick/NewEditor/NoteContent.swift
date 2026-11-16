@@ -110,6 +110,15 @@ final class NoteContent {
         onEdit?(document.markdown())
     }
 
+    /// Gives the numbered item at block `index` the number the user typed (`7. `): the buffer cannot show a number, so the
+    /// document is edited directly, after the buffer change.
+    func setNumber(_ number: Int, ofBlock index: Int) {
+        guard document.blocks.indices.contains(index) else { return }
+        document.apply(.setNumber(block: index, number: number))
+        remember(synced)
+        onEdit?(document.markdown())
+    }
+
     private func remember(_ paragraphs: [NoteBuffer.Paragraph]) {
         history.append((paragraphs, document))
         if history.count > Self.historyLimit { history.removeFirst() }

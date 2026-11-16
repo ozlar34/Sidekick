@@ -130,17 +130,7 @@ enum NoteBuffer {
         let blocks = document.blocks
         for (i, block) in blocks.enumerated() {
             let kindAttr = attributeValue(block.kind)
-            for run in block.runs {
-                var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
-                if let d = run.bold { attrs[.noteBold] = d.rawValue }
-                if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
-                var text = block.kind == .fence ? run.text.replacingOccurrences(of: "\n", with: lineSeparator, options: .literal) : run.text
-                if run.pill != nil {   // one object: the character stands for the whole address
-                    text = String(NotePillAttachment.objectCharacter)
-                    attrs[.attachment] = NotePillAttachment(address: run.text)
-                }
-                out.append(NSAttributedString(string: text, attributes: attrs))
-            }
+            out.append(attributedRuns(block.runs, kind: block.kind, pillID: &pillID))
             let isLast = i == blocks.count - 1
             // A divider at the end of a note always has a normal line below it, so the line below exists in the buffer
             // even when the file ends right after the rule (the document keeps its bytes until an edit).
@@ -151,6 +141,24 @@ enum NoteBuffer {
             }
         }
         return (out, tailKind)
+    }
+
+    /// The text of one block's runs with its kind and marks as attributes (no line break).
+    static func attributedRuns(_ runs: [Run], kind: BlockKind, pillID: inout Int) -> NSMutableAttributedString {
+        let out = NSMutableAttributedString()
+        let kindAttr = attributeValue(kind)
+        for run in runs {
+            var attrs: [NSAttributedString.Key: Any] = [.noteBlockKind: kindAttr]
+            if let d = run.bold { attrs[.noteBold] = d.rawValue }
+            if let style = NoteRunStyle(run, pillID: pillID) { attrs[.noteStyle] = style; pillID += 1 }
+            var text = kind == .fence ? run.text.replacingOccurrences(of: "\n", with: lineSeparator, options: .literal) : run.text
+            if run.pill != nil {   // one object: the character stands for the whole address
+                text = String(NotePillAttachment.objectCharacter)
+                attrs[.attachment] = NotePillAttachment(address: run.text)
+            }
+            out.append(NSAttributedString(string: text, attributes: attrs))
+        }
+        return out
     }
 
     static func paragraphs(of document: NoteDocument) -> [Paragraph] {
