@@ -203,8 +203,16 @@ public struct NoteDocument: Equatable, Sendable {
         let lookalikes = blocks.indices.filter { isLookalike(blocks[$0]) }
         guard !lookalikes.isEmpty, lookalikes.count > 1 || blocks.contains(where: { $0.kind.isMultiline }) else { return }
         if NoteDocument(markdown: markdown()) == self { return }
+        // One line at a time, until the document reads back as itself.
         for k in lookalikes {
+            if NoteDocument(markdown: markdown()) == self { return }
             var b = blocks[k]
+            // An unedited line keeps its bytes except the escapes: its marks and their spellings stay as the file has them.
+            if let o = b.origin, o.source.utf8.elementsEqual(b.body.utf8), let source = NoteDocument.escapedSource(o.source, as: b) {
+                b.origin = Block.Origin(source: source, kind: o.kind, runs: o.runs, prefix: o.prefix, rawPrefix: o.rawPrefix, trailer: o.trailer)
+                blocks[k] = b
+                continue
+            }
             b.origin = nil
             b.escapesPipes = true
             var settled = NoteDocument.settle(b)
@@ -212,6 +220,26 @@ public struct NoteDocument: Equatable, Sendable {
             settled.id = nextID; nextID += 1
             blocks[k] = settled
         }
+    }
+
+    /// The source line of a text paragraph with its cell-splitting pipes escaped (and a backslash before a fence-like
+    /// start), when that reads back as the same paragraph; nil when it does not.
+    private static func escapedSource(_ source: String, as block: Block) -> String? {
+        var out: [Unicode.Scalar] = []
+        let s = Array(source.unicodeScalars)
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "\\", i + 1 < s.count, InlineReader.isEscapable(s[i + 1]) { out += [c, s[i + 1]]; i += 2; continue }
+            if c == "`", let k = (i + 1..<s.count).first(where: { s[$0] == "`" }), k > i + 1 { out += s[i...k]; i = k + 1; continue }
+            if c == "|" { out.append("\\") }
+            out.append(c); i += 1
+        }
+        if BlockSyntax.fenceOpen(out) != nil { out.insert("\\", at: 0) }
+        let text = scalarsToString(out)
+        guard text != source, !BlockSyntax.hasStructuralPipe(out), BlockSyntax.fenceOpen(out) == nil else { return nil }
+        let read = parseLine(text, id: block.id, terminator: block.terminator)
+        return read.kind == block.kind && read.runs == block.runs ? text : nil
     }
 
     /// Replaces block `i` with the edited form; a result equal to the old block changes nothing.

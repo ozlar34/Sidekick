@@ -223,15 +223,11 @@ enum InlineReader {
 }
 
 enum InlineWriter {
-    /// Set by `write` for the duration of one call: plain `|` is written escaped.
-    nonisolated(unsafe) private static var pipesEscaped = false
     /// Generates inline text such that `InlineReader.read` gives the same runs back (fidelity rule 3), as far as the
     /// forms allow; `NoteDocument.settle` repairs the model where they do not.
     /// Marks nest in a fixed order: link, underline, strikethrough, bold, italic, then the leaf (code, pill, text).
     static func write(_ runs: [Run], kind: BlockKind, escapePipes: Bool = false) -> String {
-        pipesEscaped = escapePipes
-        defer { pipesEscaped = false }
-        var w = emit(runs, 0..<runs.count, layer: 0)
+        var w = emit(runs, 0..<runs.count, layer: 0, pipes: escapePipes)
         let s = Array(w.unicodeScalars)
         switch kind {
         case .paragraph:
@@ -261,15 +257,15 @@ enum InlineWriter {
         }
     }
 
-    private static func emit(_ runs: [Run], _ range: Range<Int>, layer: Int) -> String {
-        if layer == 5 { return range.map { leaf(runs, $0) }.joined() }
+    private static func emit(_ runs: [Run], _ range: Range<Int>, layer: Int, pipes: Bool) -> String {
+        if layer == 5 { return range.map { leaf(runs, $0, pipes: pipes) }.joined() }
         var out = ""
         var i = range.lowerBound
         while i < range.upperBound {
             let key = layerKey(runs[i], layer)
             var j = i + 1
             while j < range.upperBound, layerKey(runs[j], layer) == key { j += 1 }
-            let inner = emit(runs, i..<j, layer: layer + 1)
+            let inner = emit(runs, i..<j, layer: layer + 1, pipes: pipes)
             if key == nil { out += inner } else {
                 switch layer {
                 case 0: out += "[" + inner + "](" + (runs[i].link ?? "") + ")"
@@ -284,14 +280,14 @@ enum InlineWriter {
         return out
     }
 
-    private static func leaf(_ runs: [Run], _ idx: Int) -> String {
+    private static func leaf(_ runs: [Run], _ idx: Int, pipes: Bool) -> String {
         let run = runs[idx]
         if let form = run.pill { return form == .bare ? run.text : "[" + run.text + "](" + run.text + ")" }
         if run.code { return "`" + run.text + "`" }
-        return escaped(runs, idx)
+        return escaped(runs, idx, pipes: pipes)
     }
 
-    private static func escaped(_ runs: [Run], _ idx: Int) -> String {
+    private static func escaped(_ runs: [Run], _ idx: Int, pipes: Bool) -> String {
         let run = runs[idx]
         let s = Array(run.text.unicodeScalars)
         let hasPrev = idx > 0, hasNext = idx + 1 < runs.count
@@ -317,7 +313,7 @@ enum InlineWriter {
             case "\\":
                 if let nx = next { escape = InlineReader.isEscapable(nx) } else { escape = hasNext || marked }
             case "`": escape = true
-            case "|": escape = pipesEscaped
+            case "|": escape = pipes
             case "~":
                 escape = run.strikethrough || prev == "~" || next == "~" || ((prev == nil || next == nil) && (hasPrev || hasNext || marked))
             case "<":

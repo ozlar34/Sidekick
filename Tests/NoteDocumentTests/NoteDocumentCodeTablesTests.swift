@@ -299,6 +299,16 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
         XCTAssertEqual(two.blocks.map(\.kind), [.paragraph, .paragraph])
     }
 
+    func testRewrittenLookalikeLineKeepsItsMarkDelimiters() {
+        var doc = NoteDocument(markdown: "a | _x ___b__ y_\n```swift **b**\n")
+        doc.apply(.insert(at: 1, kind: .paragraph, runs: [Run("-|-")]))
+        XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc)
+        XCTAssertEqual(doc.markdown(), "a \\| _x ___b__ y_\n-|-\n```swift **b**\n")   // one line is enough
+        doc.apply(.insert(at: 3, kind: .fence, runs: [Run("c")]))      // a code block below an unclosed fence line
+        XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc)
+        XCTAssertEqual(lines(doc.markdown())[2], "\\```swift **b**")
+    }
+
     // MARK: unclosed fence, corner cases
 
     func testUnclosedFenceIsText() {
@@ -316,7 +326,7 @@ final class NoteDocumentCodeTablesTests: XCTestCase {
         XCTAssertEqual(doc.blocks.map(\.kind), [.paragraph, .paragraph])
         doc.apply(.insert(at: 2, kind: .fence, runs: [Run("code")]))
         XCTAssertEqual(doc.blocks.map(\.kind), [.paragraph, .paragraph, .fence])
-        XCTAssertEqual(doc.markdown(), "\\`\\`\\`\nnote\n```\ncode\n```\n")
+        XCTAssertEqual(doc.markdown(), "\\```\nnote\n```\ncode\n```\n")
         XCTAssertEqual(NoteDocument(markdown: doc.markdown()), doc)
         // Lines of text start with `|` but are not a table; a table next to them must not swallow them.
         var rows = NoteDocument(markdown: "|a|\n\n|-|\n")
