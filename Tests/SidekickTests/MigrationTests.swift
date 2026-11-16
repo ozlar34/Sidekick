@@ -287,6 +287,58 @@ final class MigrationTests: XCTestCase {
         XCTAssertEqual(Set(names).count, OldFormatFixture.items.count)
     }
 
+    func testAPreExistingPartialNamedDirectoryIsNeverTouched() throws {
+        let (parent, notes) = try makeParent()
+        try OldFormatFixture.write(into: notes)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let theirs = parent.appendingPathComponent("Notes-backup-\(formatter.string(from: today)).partial")
+        try FileManager.default.createDirectory(at: theirs, withIntermediateDirectories: true)
+        try Data("not yours\n".utf8).write(to: theirs.appendingPathComponent("keep.txt"))
+        let before = try FolderTree.snapshot(theirs)
+
+        let outcome = try Migration.run(folder: notes, now: today)
+
+        guard case .migrated = outcome else { return XCTFail("expected migrated, got \(outcome)") }
+        XCTAssertEqual(try FolderTree.snapshot(theirs), before, "a directory this run did not create survives byte-identical")
+        XCTAssertEqual(try backups(parent).count, 1)
+    }
+
+    private func failure(at checkpoint: String) throws -> MigrationFailure {
+        let (_, notes) = try makeParent()
+        try OldFormatFixture.write(into: notes)
+        struct Boom: Error {}
+        do { _ = try Migration.run(folder: notes, now: today) { if $0 == checkpoint { throw Boom() } } }
+        catch let f as MigrationFailure { return f }
+        XCTFail("expected a failure at \(checkpoint)")
+        throw Boom()
+    }
+
+    func testTheNoticeSaysNothingWasRenamedWhenNoRenameHappened() throws {
+        for point in ["start", "backup-copied", "backup-verified", "journal-written"] {
+            let text = try failure(at: point).noticeText
+            XCTAssertTrue(text.contains("Nothing was changed"), "\(point): \(text)")
+            XCTAssertFalse(text.contains("renamed"), "\(point): \(text)")
+            XCTAssertFalse(text.contains("missing"), "\(point): \(text)")
+        }
+    }
+
+    func testTheNoticeSaysNotesAreTemporarilyMissingWhileFilesSitUnderTemporaryNames() throws {
+        for point in ["rename-a-2", "renames-staged", "rename-b-3"] {
+            let text = try failure(at: point).noticeText
+            XCTAssertTrue(text.contains("temporarily missing from the list"), "\(point): \(text)")
+            XCTAssertTrue(text.contains("reappear when Sidekick finishes the conversion on next launch"), "\(point): \(text)")
+            XCTAssertTrue(text.contains("No note text was changed"), "\(point): \(text)")
+        }
+    }
+
+    func testTheNoticeSaysFilesWereRenamedButNothingIsMissingOnceAllAreInPlace() throws {
+        let text = try failure(at: "rename-b-12").noticeText      // the last of the 13 final moves
+        XCTAssertTrue(text.contains("already renamed"), text)
+        XCTAssertFalse(text.contains("missing"), text)
+    }
+
     func testAFailedMigrationShowsANoticeAndChangesNothing() async throws {
         let (parent, notes) = try makeParent()
         try Data("a\n".utf8).write(to: notes.appendingPathComponent("some-slug.md"))

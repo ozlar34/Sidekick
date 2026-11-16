@@ -40,12 +40,19 @@ struct MigrationFailure: Error {
     let backup: String?
     /// True when some files were already renamed before it failed (the next launch finishes the job).
     var partlyDone = false
+    /// True while some note files sit under their temporary names, so they are not in the list.
+    var temporarilyMissing = false
 
     /// One line for the editor pane.
     var noticeText: String {
         var text = "Your notes could not be converted to the new format (\(reason)). "
-        text += partlyDone ? "Some files were already renamed; no note text was changed. " : "Nothing was changed; the notes are shown as they are. "
-        text += "Sidekick tries again next launch."
+        if temporarilyMissing {
+            text += "Some notes are temporarily missing from the list; they will reappear when Sidekick finishes the conversion on next launch. No note text was changed."
+        } else if partlyDone {
+            text += "Some files were already renamed; no note text was changed. Sidekick tries again next launch."
+        } else {
+            text += "Nothing was changed; the notes are shown as they are. Sidekick tries again next launch."
+        }
         if let backup { text += " A backup of the folder is beside it: \(backup)." }
         return text
     }
@@ -100,13 +107,17 @@ enum Migration {
         } catch let failure as MigrationFailure {
             throw failure
         } catch {
-            throw MigrationFailure(reason: error.localizedDescription, backup: progress.backup, partlyDone: progress.renaming)
+            let hidden = ((try? FileManager.default.contentsOfDirectory(atPath: folder.resolvingSymlinksInPath().path)) ?? [])
+                .contains { $0.hasPrefix(".sidekick-migrating-") }
+            throw MigrationFailure(reason: error.localizedDescription, backup: progress.backup,
+                                   partlyDone: progress.renamed || hidden, temporarilyMissing: hidden)
         }
     }
 
     private struct Progress {
         var backup: String?
-        var renaming = false
+        /// A file has actually been moved (in this run or an earlier one).
+        var renamed = false
     }
 
     private static func runResolved(folder: URL, now: Date, checkpoint: ((String) throws -> Void)?, progress: inout Progress) throws -> Outcome {
@@ -126,7 +137,7 @@ enum Migration {
         if let data = try? Data(contentsOf: journalURL), let existing = try? JSONDecoder().decode(Journal.self, from: data) {
             journal = existing
             progress.backup = existing.backup
-            progress.renaming = true
+            progress.renamed = existing.staged
         } else {
             // An index that cannot be read is a failure, not an empty index: dropping it would drop every
             // title, pin and the order for good. Nothing is touched; the next launch tries again.
@@ -139,7 +150,6 @@ enum Migration {
             let prior = (try? Data(contentsOf: folder.appendingPathComponent(OrderFile.filename))).flatMap(OrderFile.decode)
             journal = Journal(backup: backupName, priorOrder: prior, entries: entries)
             try write(journal, to: journalURL)
-            progress.renaming = true
             try hit("journal-written")
         }
 
@@ -150,6 +160,7 @@ enum Migration {
                 let names = listing(folder).keys
                 if names.contains(key(e.old)), !names.contains(key(e.temp!)) {
                     try FileOps.moveNoClobber(folder.appendingPathComponent(e.old), to: folder.appendingPathComponent(e.temp!))
+                    progress.renamed = true
                 }
                 try hit("rename-a-\(n)")
             }
@@ -165,6 +176,7 @@ enum Migration {
                     do {
                         try FileOps.moveNoClobber(folder.appendingPathComponent(temp),
                                                   to: folder.appendingPathComponent(journal.entries[i].new))
+                        progress.renamed = true
                         break
                     } catch FileOpsError.exists {
                         // A file that is not ours took the name while we worked: never replace it.
@@ -283,10 +295,12 @@ enum Migration {
                 n += 1
                 continue
             }
-            let partial = parent.appendingPathComponent(name + ".partial")
-            if FileOps.exists(partial) { try fm.removeItem(at: partial) }   // our own unfinished copy
-            // This run made the `.partial` (a stale one was removed above): any failure takes it away again,
-            // so a failed attempt leaves no half copy in the parent.
+            // Never touch a path this run did not create: take the first `.partial` name that is free.
+            var k = 1
+            var partial = parent.appendingPathComponent(name + ".partial")
+            while FileOps.exists(partial) { k += 1; partial = parent.appendingPathComponent("\(name)-\(k).partial") }
+            // This run made `partial`: any failure takes exactly that directory away again, so a failed
+            // attempt leaves no half copy in the parent.
             do {
                 try fm.copyItem(at: folder, to: partial)
                 try hit("backup-copied")
