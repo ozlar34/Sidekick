@@ -150,6 +150,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         let sel = new.savedSelection
         setSelectedRange(NSRange(location: min(sel.location, length), length: min(sel.length, max(0, length - sel.location))))
         refreshTailTypingAttributes()
+        refreshFoundLinks()
         refreshHover()
     }
 
@@ -162,6 +163,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         pendingStyleRange = nil
         setSelectedRange(NSRange(location: 0, length: 0))
         refreshTailTypingAttributes()
+        refreshFoundLinks()
         refreshHover()
     }
 
@@ -221,6 +223,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
         refreshNumberGutters(in: edited)
         NoteTextEngine.setTailKind(content.tailKind, in: self)
         refreshTailTypingAttributes()
+        refreshFoundLinks()
         refreshHover()
         onMarkdownChange?(content.markdown)
         publishFormatState()
@@ -455,11 +458,38 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     typealias HoverTarget = NoteTextEngine.HoverTarget
 
-    /// Every link and pill with the rects it is drawn in. The cursor rects and tooltips come from this.
-    var hoverTargets: [HoverTarget] { NoteTextEngine.hoverTargets(in: self) }
+    /// Every link, pill and found address with the rects it is drawn in. The cursor rects and tooltips come from this.
+    var hoverTargets: [HoverTarget] {
+        (NoteTextEngine.hoverTargets(in: self) + foundLinkTargets).sorted { $0.range.location < $1.range.location }
+    }
 
-    /// The full address shown when the pointer rests on a link or pill at `point` (view coordinates).
-    func toolTip(at point: NSPoint) -> String? { NoteTextEngine.address(in: self, at: point) }
+    /// Addresses written as plain text (see `NoteFoundLinks`). Kept current with the buffer.
+    private(set) var foundLinks: [NoteFoundLinks.Found] = []
+
+    private var foundLinkTargets: [HoverTarget] {
+        foundLinks.compactMap { f in
+            let rects = NoteTextEngine.rects(of: f.range, in: self)
+            return rects.isEmpty ? nil : HoverTarget(range: f.range, address: f.address, rects: rects)
+        }
+    }
+
+    /// Finds the plain-text addresses again and draws them like links. Temporary attributes are drawing only: the
+    /// buffer, the undo history and the file never see them.
+    private func refreshFoundLinks() {
+        guard let storage = textStorage else { return }
+        foundLinks = NoteFoundLinks.find(in: storage)
+        NoteTextEngine.drawAsLinks(foundLinks.map(\.range), in: self)
+    }
+
+    /// The address of the link, pill or found address at `point` (view coordinates).
+    func address(at point: NSPoint) -> String? {
+        if let a = NoteTextEngine.address(in: self, at: point) { return a }
+        guard let i = NoteTextEngine.characterIndex(in: self, at: point) else { return nil }
+        return foundLinks.first { NSLocationInRange(i, $0.range) }?.address
+    }
+
+    /// The full address shown when the pointer rests on a link, pill or found address at `point` (view coordinates).
+    func toolTip(at point: NSPoint) -> String? { address(at: point) }
 
     /// Pointing hand over a link or pill, the text cursor's default everywhere else (nil).
     func cursor(at point: NSPoint) -> NSCursor? { toolTip(at: point) == nil ? nil : .pointingHand }
@@ -467,7 +497,7 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
     override func resetCursorRects() {
         super.resetCursorRects()
         removeAllToolTips()
-        for target in NoteTextEngine.hoverTargets(in: self, visibleOnly: true) {
+        for target in NoteTextEngine.hoverTargets(in: self, visibleOnly: true) + foundLinkTargets {
             for rect in target.rects {
                 addCursorRect(rect, cursor: .pointingHand)
                 addToolTip(rect, owner: self, userData: nil)
@@ -485,11 +515,9 @@ final class NoteTextView: NSTextView, NSTextStorageDelegate, NSViewToolTipOwner 
 
     /// A click on a drawn checkbox toggles it (and does nothing else). Every other click is native.
     override func mouseDown(with event: NSEvent) {
-        // Cmd+click opens a link, a pill or a plain `www.` address and leaves the caret alone; a plain click is native
+        // Cmd+click opens a link, a pill or a found address and leaves the caret alone; a plain click is native
         // (it places the caret).
-        let point = convert(event.locationInWindow, from: nil)
-        if event.modifierFlags.contains(.command),
-           let address = NoteTextEngine.address(in: self, at: point) ?? NoteTextEngine.wwwAddress(in: self, at: point) {
+        if event.modifierFlags.contains(.command), let address = address(at: convert(event.locationInWindow, from: nil)) {
             if let url = URL(string: address) { openURL(url) }
             return
         }

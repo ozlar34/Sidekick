@@ -99,7 +99,7 @@ enum NoteTextEngine {
     }
 
     /// The character drawn at `point` (view coordinates). Nil for the empty space after a line.
-    private static func characterIndex(in tv: NSTextView, at point: NSPoint) -> Int? {
+    static func characterIndex(in tv: NSTextView, at point: NSPoint) -> Int? {
         guard let lm = tv.layoutManager, let tc = tv.textContainer, let storage = tv.textStorage, storage.length > 0 else { return nil }
         let origin = tv.textContainerOrigin
         let p = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
@@ -109,22 +109,30 @@ enum NoteTextEngine {
         return lm.characterIndexForGlyph(at: glyph)
     }
 
-    /// A plain-text `www.` address drawn at `point`, as an `https://` address to open. The note's markdown has no link
-    /// there (only `http://` and `https://` make one), so this is for Cmd+click only: the text stays plain.
-    /// The address starts after a blank (or at the line start), ends at a blank, and drops trailing punctuation.
-    static func wwwAddress(in tv: NSTextView, at point: NSPoint) -> String? {
-        guard let index = characterIndex(in: tv, at: point) else { return nil }
-        let s = (tv.string as NSString)
-        func blank(_ i: Int) -> Bool { CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(s.character(at: i)) ?? " ") }
-        guard !blank(index) else { return nil }
-        var lo = index, hi = index + 1
-        while lo > 0, !blank(lo - 1) { lo -= 1 }
-        while hi < s.length, !blank(hi) { hi += 1 }
-        var word = s.substring(with: NSRange(location: lo, length: hi - lo))
-        guard word.lowercased().hasPrefix("www."), word.count > 4 else { return nil }
-        while let last = word.last, ".,;:!?'\")".contains(last) { word.removeLast() }
-        guard index < lo + (word as NSString).length, word.dropFirst(4).contains(".") else { return nil }
-        return "https://" + word
+    /// The rects (view coordinates) the characters in `range` are drawn in, one per line they cover.
+    static func rects(of range: NSRange, in tv: NSTextView) -> [NSRect] {
+        guard let lm = tv.layoutManager, let tc = tv.textContainer else { return [] }
+        let origin = tv.textContainerOrigin
+        var rects: [NSRect] = []
+        let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        lm.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, lineGlyphs, _ in
+            let part = NSIntersectionRange(lineGlyphs, glyphs)
+            guard part.length > 0 else { return }
+            rects.append(lm.boundingRect(forGlyphRange: part, in: tc).offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return rects
+    }
+
+    /// Draws `ranges` like links (link color, underline) and nothing else, as temporary attributes: drawing only, never
+    /// part of the buffer, the undo history or the file.
+    static func drawAsLinks(_ ranges: [NSRange], in tv: NSTextView) {
+        guard let lm = tv.layoutManager, let storage = tv.textStorage else { return }
+        let all = NSRange(location: 0, length: storage.length)
+        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: all)
+        lm.removeTemporaryAttribute(.underlineStyle, forCharacterRange: all)
+        for r in ranges {
+            lm.addTemporaryAttributes([.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue], forCharacterRange: r)
+        }
     }
 
     /// Every link and pill (`visible` limits them to what is on screen), in document order.
@@ -145,13 +153,7 @@ enum NoteTextEngine {
             if style.pill != nil { pieces = (range.location..<NSMaxRange(range)).filter { address(ofCharacterAt: $0, in: storage) != nil }.map { NSRange(location: $0, length: 1) } }
             for piece in pieces {
                 guard let address = address(ofCharacterAt: piece.location, in: storage) else { continue }
-                var rects: [NSRect] = []
-                let glyphs = lm.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
-                lm.enumerateLineFragments(forGlyphRange: glyphs) { _, _, _, lineGlyphs, _ in
-                    let part = NSIntersectionRange(lineGlyphs, glyphs)
-                    guard part.length > 0 else { return }
-                    rects.append(lm.boundingRect(forGlyphRange: part, in: tc).offsetBy(dx: origin.x, dy: origin.y))
-                }
+                let rects = self.rects(of: piece, in: tv)
                 if !rects.isEmpty { out.append(HoverTarget(range: piece, address: address, rects: rects)) }
             }
         }

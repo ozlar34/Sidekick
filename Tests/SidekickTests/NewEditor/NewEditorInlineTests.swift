@@ -342,6 +342,39 @@ final class NewEditorInlineTests: XCTestCase {
         XCTAssertEqual(opened.count, 1, "www inside a word is not an address")
     }
 
+    func testPlainTextAddressesAreFoundDrawnAsLinksAndLeaveTheFileAlone() {
+        let md = "a google.com b xyz.org c abc.com.tr d melati.ge, e mail a@b.co\n"
+            + "not README.md main.py e.g. v1.2.3 `code.com` [label](https://x.y) nor xgoogle\n"
+        let h = NewEditorHost(markdown: md)
+        let tv = h.textView
+        XCTAssertEqual(tv.markdown, md, "the file is unchanged")
+        let text = tv.string as NSString
+        XCTAssertEqual(tv.foundLinks.map { text.substring(with: $0.range) },
+                       ["google.com", "xyz.org", "abc.com.tr", "melati.ge", "a@b.co"])
+        XCTAssertEqual(tv.foundLinks.map(\.address),
+                       ["https://google.com", "https://xyz.org", "https://abc.com.tr", "https://melati.ge", "mailto:a@b.co"])
+
+        let lm = tv.layoutManager!
+        let g = text.range(of: "google.com")
+        XCTAssertEqual(lm.temporaryAttribute(.foregroundColor, atCharacterIndex: g.location, effectiveRange: nil) as? NSColor, .linkColor)
+        XCTAssertNotNil(lm.temporaryAttribute(.underlineStyle, atCharacterIndex: g.location, effectiveRange: nil))
+        XCTAssertNil(lm.temporaryAttribute(.foregroundColor, atCharacterIndex: text.range(of: "README").location, effectiveRange: nil))
+
+        let target = tv.hoverTargets.first { $0.address == "https://melati.ge" }
+        XCTAssertNotNil(target, "found addresses get a pointing hand and tooltip like links")
+        if let r = target?.rects.first {
+            let p = NSPoint(x: r.midX, y: r.midY)
+            XCTAssertEqual(tv.toolTip(at: p), "https://melati.ge")
+            XCTAssertEqual(tv.cursor(at: p), NSCursor.pointingHand)
+        }
+
+        // Typing breaks the address; the drawing follows the text.
+        h.select(g.location + 6)
+        tv.insertText(" ", replacementRange: tv.selectedRange())
+        XCTAssertFalse(tv.foundLinks.contains { $0.address == "https://google.com" })
+        XCTAssertNil(lm.temporaryAttribute(.foregroundColor, atCharacterIndex: g.location, effectiveRange: nil))
+    }
+
     func testHoverShowsTheFullAddressAndAPointingHand() {
         let h = NewEditorHost(markdown: "see https://www.e.co/some/long/path/ and [label](mailto:a@b.c) here\nplain\n")
         let targets = h.textView.hoverTargets
