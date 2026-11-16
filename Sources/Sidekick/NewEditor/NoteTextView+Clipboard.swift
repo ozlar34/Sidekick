@@ -45,6 +45,7 @@ extension NoteTextView {
         let end = NSMaxRange(range)
         let blocks = document.blocks
         var out = ""
+        let ending = document.lineEnding
         var whole: Range<Int>?
         func flush() { if let r = whole { out += document.markdown(blocks: r); whole = nil } }
         var lastHadTerminator = false
@@ -67,13 +68,16 @@ extension NoteTextView {
                 let kept = range.location <= para.location ? kind : .paragraph
                 out += NoteDocument.markdown(kind: kept, runs: markRuns(in: part))
             }
-            if terminated { out += "\n" }
+            if terminated { out += ending }
         }
         flush()
         // A block held whole always brings its own line ending: keep it only when the selection took the line break.
-        let hasLineEnding = out.hasSuffix("\n")
-        if hasLineEnding, !lastHadTerminator { out.removeLast(); if out.hasSuffix("\r") { out.removeLast() } }
-        else if !hasLineEnding, lastHadTerminator { out += "\n" }
+        // "\r\n" is one Character in Swift, so the ends are read as scalars.
+        let hasLineEnding = out.unicodeScalars.last == "\n"
+        if hasLineEnding, !lastHadTerminator {
+            out.unicodeScalars.removeLast()
+            if out.unicodeScalars.last == "\r" { out.unicodeScalars.removeLast() }
+        } else if !hasLineEnding, lastHadTerminator { out += ending }
         return out
     }
 
