@@ -11,10 +11,28 @@ final class NewEditorTests: XCTestCase {
 
     // MARK: switch
 
-    func testSwitchIsOffByDefault() {
-        XCTAssertFalse(ProcessInfo.processInfo.arguments.contains(NewEditorSwitch.launchArgument))
-        XCTAssertFalse(Defaults.store.bool(forKey: NewEditorSwitch.defaultsKey))
-        XCTAssertFalse(NewEditorSwitch.isOn)
+    /// Ticket 17 flips the default: the new editor is what the app shows unless the switch is turned
+    /// off. Before 17 this test pinned "off by default" (the new editor was unverified, spec story 48).
+    func testSwitchIsOnByDefault() {
+        let scratch = UserDefaults(suiteName: "SidekickTests.switch.\(UUID().uuidString)")!
+        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [], defaults: scratch), "nothing set: the new editor")
+        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.launchArgument], defaults: scratch))
+        XCTAssertFalse(ProcessInfo.processInfo.arguments.contains(NewEditorSwitch.offLaunchArgument))
+        XCTAssertTrue(NewEditorSwitch.isOn)
+    }
+
+    /// Spec story 49: the old editor stays reachable until it is removed (ticket 18). Turning the
+    /// switch off, by the launch argument or by the hidden default, restores it.
+    func testTurningTheSwitchOffRestoresTheOldEditor() {
+        let scratch = UserDefaults(suiteName: "SidekickTests.switch.\(UUID().uuidString)")!
+        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.offLaunchArgument], defaults: scratch))
+        scratch.set(false, forKey: NewEditorSwitch.defaultsKey)
+        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [], defaults: scratch), "hidden default off")
+        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.launchArgument], defaults: scratch),
+                      "the launch argument for on wins over a stored off")
+        scratch.set(true, forKey: NewEditorSwitch.defaultsKey)
+        XCTAssertTrue(NewEditorSwitch.isOn(arguments: [], defaults: scratch))
+        XCTAssertFalse(NewEditorSwitch.isOn(arguments: [NewEditorSwitch.offLaunchArgument], defaults: scratch), "off argument beats a stored on")
     }
 
     // MARK: open, show, type, save

@@ -393,7 +393,6 @@ final class NewEditorLinkTests: XCTestCase {
     // MARK: with the switch off the old editor is unchanged
 
     func testTheOldEditorsCmdKIsUnchanged() {
-        XCTAssertFalse(NewEditorSwitch.isOn)
         let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         tv.string = "hello world"
         tv.setSelectedRange(NSRange(location: 0, length: 5))

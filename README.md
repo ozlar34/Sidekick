@@ -55,8 +55,8 @@ curl -X POST localhost:4567/click -d '{"x":120,"y":10}'
 curl -X POST localhost:4567/screenshot -d '{"path":"/tmp/panel.png","region":"editor"}'
 ```
 
-Add `--new-editor` to run with the new editor view (off by default; or set the hidden
-default `newEditorEnabled` in the `com.oguzoral.Sidekick.shared` suite). With it on, `/state`
+The new editor view is the default. `--old-editor` (or the hidden default `newEditorEnabled` = false in the
+`com.oguzoral.Sidekick.shared` suite) brings back the old one. With the new editor, `/state`
 also reports `blocks` (block kinds), `markdown` and `lineCount`, and `/set` takes markdown.
 
 Endpoints are listed at the top of `Sources/Sidekick/Debug/DebugHarness.swift`.

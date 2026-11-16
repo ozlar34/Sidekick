@@ -616,7 +616,6 @@ final class NewEditorFormatTests: XCTestCase {
     // MARK: with the switch off the old editor is unchanged
 
     func testTheOldEditorsCommandsAreUnchanged() {
-        XCTAssertFalse(NewEditorSwitch.isOn)
         func old(_ body: String, _ run: (NSTextView) -> Void) -> NSTextView {
             let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
             tv.string = body
