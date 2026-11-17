@@ -91,6 +91,11 @@ struct NoteRowView: View {
 
     @State private var isHovered = false
 
+    // The row's selection and hover fill: one rounded shape, accent for the selected row, faint primary on hover.
+    private static let highlightCornerRadius: CGFloat = 6
+    private static let highlightOpacity: Double = 0.15
+    private static let hoverOpacity: Double = 0.06
+
     private var isSelected: Bool { note.id == selectedID }
 
     /// The line under the title: the search snippet while searching, else the note's first line of text.
@@ -141,9 +146,9 @@ struct NoteRowView: View {
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.15)
-                      : isHovered ? Color.primary.opacity(0.06) : Color.clear)
+            RoundedRectangle(cornerRadius: Self.highlightCornerRadius)
+                .fill(isSelected ? Color.accentColor.opacity(Self.highlightOpacity)
+                      : isHovered ? Color.primary.opacity(Self.hoverOpacity) : Color.clear)
         )
         .onHover { isHovered = $0 }
         .help(note.title.isEmpty ? "Untitled" : note.title)
