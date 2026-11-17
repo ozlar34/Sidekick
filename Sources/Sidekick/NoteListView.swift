@@ -26,9 +26,8 @@ struct NoteListView: View {
         .scrollContentBackground(.hidden)
         .overlay {
             if matches.isEmpty {
-                Text("No Matches")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                EmptyStateView(symbol: "magnifyingglass", title: "No Matches",
+                               message: "No note holds every word you typed.", compact: true)
             }
         }
     }

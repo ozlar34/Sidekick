@@ -90,17 +90,7 @@ struct SidebarView: View {
                             .foregroundStyle(.primary)
                         Spacer()
                         SettingsButton()
-                        Button {
-                            Task { @MainActor in
-                                do {
-                                    let note = try await store.create()
-                                    panelState.selectedNoteID = note.id
-                                } catch {
-                                    NSLog("[Sidekick] create failed: \(error.localizedDescription)")
-                                    createError = true
-                                }
-                            }
-                        } label: {
+                        Button(action: createNote) {
                             Image(systemName: "plus")
                                 .font(.system(size: 14, weight: .medium))
                         }
@@ -134,29 +124,18 @@ struct SidebarView: View {
             Group {
                 if store.notes.isEmpty {
                     // True empty-state — no notes exist.
-                    VStack(spacing: 24) {
-                        Text("No Notes Yet")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Press + to create your first note.")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.textBackgroundColor))
+                    EmptyStateView(symbol: "note.text", title: "No Notes Yet",
+                                   message: "Your notes are plain Markdown files in one folder.",
+                                   action: (label: "New Note (⌘N)", perform: createNote))
+                        .background(Color(.textBackgroundColor))
                 } else if let note = selectedNote {
                     EditorPaneView(store: store, panelState: panelState, note: note, selectedID: $panelState.selectedNoteID)
                 } else {
                     // Notes exist but none selected (stale UUID mid-reassignment, or
                     // transient between delete → onChange reassign).
-                    VStack(spacing: 12) {
-                        Text("No Note Selected")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Pick a note from the sidebar.")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.textBackgroundColor))
+                    EmptyStateView(symbol: "sidebar.left", title: "No Note Selected",
+                                   message: "Pick a note from the sidebar.")
+                        .background(Color(.textBackgroundColor))
                 }
             }
         }
@@ -240,6 +219,18 @@ struct SidebarView: View {
             }
             .padding(24)
             .frame(width: 360)
+        }
+    }
+
+    private func createNote() {
+        Task { @MainActor in
+            do {
+                let note = try await store.create()
+                panelState.selectedNoteID = note.id
+            } catch {
+                NSLog("[Sidekick] create failed: \(error.localizedDescription)")
+                createError = true
+            }
         }
     }
 

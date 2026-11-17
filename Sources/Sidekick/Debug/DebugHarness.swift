@@ -295,6 +295,10 @@ final class DebugHarness {
 
     private func open(_ json: [String: Any]) throws -> [String: Any] {
         guard let store = app.store else { throw fail("no store") }
+        if json["none"] as? Bool == true {   // no note selected
+            app.panelController.panelState.selectedNoteID = nil
+            return ["selectedNoteID": NSNull()]
+        }
         var target: Note?
         if let s = json["id"] as? String, let id = UUID(uuidString: s) {
             target = store.notes.first { $0.id == id }
