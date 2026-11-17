@@ -315,7 +315,7 @@ final class NoteLayoutManager: NSLayoutManager {
                     NSColor.textColor.setStroke()
                     check.stroke()
                 } else {
-                    NSColor.separatorColor.setStroke()
+                    NSColor.secondaryLabelColor.setStroke()   // an empty box must read as something to click
                     path.stroke()
                 }
                 NSGraphicsContext.current?.restoreGraphicsState()
@@ -339,6 +339,17 @@ extension NoteTextEngine {
             .map { $0.offsetBy(dx: origin.x, dy: origin.y) }
     }
 
+    /// The bar of every run of quote lines, in view coordinates.
+    static func quoteBars(in tv: NSTextView) -> [NSRect] {
+        guard let lm = tv.layoutManager as? NoteLayoutManager, let tc = tv.textContainer else { return [] }
+        lm.ensureLayout(for: tc)
+        let origin = tv.textContainerOrigin
+        let quotes = lm.blocks(of: .quote, in: NSRange(location: 0, length: lm.textStorage?.length ?? 0))
+        var runs: [NSRange] = []
+        for para in quotes where !runs.contains(where: { NSLocationInRange(para.location, $0) }) { runs.append(lm.quoteRun(around: para)) }
+        return runs.compactMap { lm.quoteBarRect(for: $0) }.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+    }
+
     /// Grid of every table, in view coordinates.
     static func tableGrids(in tv: NSTextView) -> [TableGrid] {
         guard let lm = tv.layoutManager as? NoteLayoutManager, let tc = tv.textContainer else { return [] }
@@ -360,6 +371,14 @@ extension NoteLayoutManager {
         NSColor.quaternaryLabelColor.setFill()
         for para in blocks(of: .fence, in: chars) {
             if let rect = codeRect(for: para) { NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y), xRadius: 4, yRadius: 4).fill() }
+        }
+        // One bar per run of quote lines: drawn piecewise, translucent pieces would overlap into seams.
+        var drawnRuns = Set<Int>()
+        for para in blocks(of: .quote, in: chars) {
+            let run = quoteRun(around: para)
+            guard drawnRuns.insert(run.location).inserted, let rect = quoteBarRect(for: run) else { continue }
+            NSColor.secondaryLabelColor.setFill()
+            NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y), xRadius: 1.5, yRadius: 1.5).fill()
         }
         for para in blocks(of: .table, in: chars) {
             guard let grid = grid(for: para), let header = grid.rows.first, let last = grid.rows.last else { continue }
@@ -406,6 +425,39 @@ extension NoteLayoutManager {
         let out = Self.codeOutset
         return NSRect(x: -out, y: used.minY - out, width: tc.size.width + 2 * out, height: used.height + 2 * out)
     }
+
+    /// The bar left of the quote lines in `para`: as tall as their lines, inside the quote's indent. Container
+    /// coordinates.
+    func quoteBarRect(for para: NSRange) -> NSRect? {
+        guard let tc = textContainers.first else { return nil }
+        let glyphs = glyphRange(forCharacterRange: para, actualCharacterRange: nil)
+        var union: NSRect?
+        enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in union = union.map { $0.union(rect) } ?? rect }
+        guard let lines = union else { return nil }
+        return NSRect(x: tc.lineFragmentPadding + Self.quoteBarInset, y: lines.minY, width: Self.quoteBarWidth, height: lines.height)
+    }
+
+    /// The quote paragraph `para` together with the quote paragraphs right before and after it.
+    func quoteRun(around para: NSRange) -> NSRange {
+        guard let storage = textStorage else { return para }
+        let ns = storage.string as NSString
+        func isQuote(_ loc: Int) -> Bool {
+            NoteBuffer.kind(fromAttribute: storage.attribute(.noteBlockKind, at: loc, effectiveRange: nil)) == .quote
+        }
+        var start = para.location, end = NSMaxRange(para)
+        while start > 0 {
+            let prev = ns.paragraphRange(for: NSRange(location: start - 1, length: 0))
+            guard isQuote(prev.location) else { break }
+            start = prev.location
+        }
+        while end < ns.length, isQuote(end) {
+            end = NSMaxRange(ns.paragraphRange(for: NSRange(location: end, length: 0)))
+        }
+        return NSRange(location: start, length: end - start)
+    }
+
+    static let quoteBarWidth: CGFloat = 3
+    static let quoteBarInset: CGFloat = 2
 
     /// Rows and column edges of a table, in container coordinates.
     func grid(for para: NSRange) -> NoteTextEngine.TableGrid? {
