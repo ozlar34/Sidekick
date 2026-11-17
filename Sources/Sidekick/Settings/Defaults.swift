@@ -16,6 +16,17 @@ enum PanelSizes {
     static let maxSidebarWidth: CGFloat = 280
     /// The editor always keeps this width: the sidebar gives way first.
     static let minEditorWidth: CGFloat = 200
+    /// Gap between the panel and the screen's right, top and bottom edges: the panel floats, so all four rounded
+    /// corners show.
+    static let screenMargin: CGFloat = 8
+
+    /// The panel's frame on a screen whose usable area (menu bar and Dock left out) is `visible`.
+    static func panelFrame(width: CGFloat, in visible: CGRect) -> CGRect {
+        CGRect(x: visible.maxX - width - screenMargin,
+               y: visible.minY + screenMargin,
+               width: width,
+               height: visible.height - 2 * screenMargin)
+    }
 
     static func panelWidth(_ wanted: CGFloat) -> CGFloat {
         max(minPanelWidth, min(maxPanelWidth, wanted))

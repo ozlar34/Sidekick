@@ -61,13 +61,8 @@ final class PanelController {
                    ?? NSScreen.main
                    ?? NSScreen.screens[0]
 
-        let visible = screen.visibleFrame  // already accounts for menu bar/dock
-        return NSRect(
-            x: visible.maxX - panelWidth,
-            y: visible.origin.y,
-            width: panelWidth,
-            height: visible.height
-        )
+        // visibleFrame already leaves out the menu bar and the Dock.
+        return PanelSizes.panelFrame(width: panelWidth, in: screen.visibleFrame)
     }
 
     /// Pure helper extracted for unit testing (see OffScreenFrameTests).

@@ -37,4 +37,16 @@ final class PanelSizesTests: XCTestCase {
         XCTAssertEqual(PanelSizes.panelWidth(900), PanelSizes.maxPanelWidth)
         XCTAssertEqual(PanelSizes.panelWidth(500), 500)
     }
+
+    /// The panel floats: a gap to the right, top and bottom edges of the usable screen area.
+    func test_panelFrame_floatsInsideTheVisibleArea() {
+        let visible = CGRect(x: 1000, y: 40, width: 1500, height: 900)
+        let frame = PanelSizes.panelFrame(width: 480, in: visible)
+        let m = PanelSizes.screenMargin
+        XCTAssertGreaterThan(m, 0)
+        XCTAssertEqual(frame.maxX, visible.maxX - m)
+        XCTAssertEqual(frame.minY, visible.minY + m)
+        XCTAssertEqual(frame.maxY, visible.maxY - m)
+        XCTAssertEqual(frame.width, 480)
+    }
 }

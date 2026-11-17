@@ -103,7 +103,8 @@ final class DebugHarness {
             case ("POST", "/type"):        return (200, try type(req.json))
             case ("POST", "/select"):      return (200, try select(req.json))
             case ("POST", "/screenshot"):  return (200, try screenshot(req.json))
-            default:                       return (404, ["error": "no route \(req.method) \(req.path)"])
+            case ("POST", "/appearance"):  return (200, try appearance(req.json))
+            default:                      return (404, ["error": "no route \(req.method) \(req.path)"])
             }
         } catch let e as HarnessError {
             return (400, ["error": e.message])
@@ -249,6 +250,18 @@ final class DebugHarness {
         let visible = panel?.isVisible ?? false
         if show != visible { app.panelController.toggle() }
         return ["panelVisible": panel?.isVisible ?? false]
+    }
+
+    /// Forces the app's appearance: `{"mode": "light" | "dark" | "system"}`, so light mode can be checked without
+    /// changing the Mac's setting.
+    private func appearance(_ json: [String: Any]) throws -> [String: Any] {
+        switch json["mode"] as? String {
+        case "light":  NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark":   NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "system": NSApp.appearance = nil
+        default:       throw fail("mode must be light, dark or system")
+        }
+        return ["appearance": NSApp.effectiveAppearance.name.rawValue]
     }
 
     private func open(_ json: [String: Any]) throws -> [String: Any] {
