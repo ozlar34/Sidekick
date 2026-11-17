@@ -1,31 +1,22 @@
 import Foundation
+import NoteDocument
 import SwiftUI
 
 /// Pure-function formatters for note row title + preview. Extracted so
 /// formatting can be unit-tested without SwiftUI view instantiation.
 enum NoteRowFormatting {
-    /// All meaningful lines in body order: non-empty, non-heading, with leading
-    /// `- `/`* `/`> ` markers stripped (only when followed by whitespace, per IN-02).
-    static func meaningfulLines(in body: String) -> [String] {
-        var result: [String] = []
-        for line in body.split(separator: "\n", omittingEmptySubsequences: true) {
-            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { continue }
-            if trimmed.hasPrefix("#") { continue }
-            let stripped: String
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("> ") {
-                stripped = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-            } else {
-                stripped = trimmed
-            }
-            guard !stripped.isEmpty else { continue }
-            result.append(stripped)
-        }
-        return result
-    }
-
+    /// The row's one-line preview: the first line of the note's text as the editor shows it (no markdown markers,
+    /// a link by its label), skipping headings, dividers, code blocks and tables. Nil for a note without such a line.
     static func firstMeaningfulLine(for body: String) -> String? {
-        return meaningfulLines(in: body).first
+        for block in NoteDocument(markdown: body).blocks {
+            switch block.kind {
+            case .heading, .divider, .fence, .table: continue
+            case .paragraph, .bullet, .numbered, .checklist, .quote:
+                let text = block.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { return text }
+            }
+        }
+        return nil
     }
 
     private static let timeOfDayFormatter: DateFormatter = {
@@ -98,27 +89,50 @@ struct NoteRowView: View {
     /// While searching: the note's first line that matches, shown under the title.
     var snippet: String? = nil
 
+    @State private var isHovered = false
+
+    private var isSelected: Bool { note.id == selectedID }
+
+    /// The line under the title: the search snippet while searching, else the note's first line of text.
+    private var detail: String? {
+        snippet ?? NoteRowFormatting.firstMeaningfulLine(for: note.body)
+    }
+
+    private var time: String? {
+        note.modified.map { NoteRowFormatting.formattedModifiedTime($0) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(note.title.isEmpty ? "Untitled" : note.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            if let snippet {
-                Text(snippet)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if note.pinned {
+                    Spacer(minLength: 0)
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Pinned")
+                }
             }
 
-            if let modified = note.modified {
-                Text(NoteRowFormatting.formattedModifiedTime(modified))
+            // One line: the time, then the preview (or the search snippet), cut with "…".
+            HStack(spacing: 6) {
+                if let time {
+                    Text(time)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Text(detail ?? "No additional text")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
         .padding(.leading, 6)
@@ -126,6 +140,12 @@ struct NoteRowView: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.15)
+                      : isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        )
+        .onHover { isHovered = $0 }
         .help(note.title.isEmpty ? "Untitled" : note.title)
         .contextMenu {
             if note.pinned {

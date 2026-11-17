@@ -25,7 +25,7 @@ sk.click(x, y, mods=["shift"])                 # mods: cmd/shift/opt/ctrl; count
 sk.shot("/path/out.png")                        # returns inkFraction — 0 means blank editor
 ```
 
-`/click` returns the resulting `selection`; `/select` sets it. `POST /appearance {"mode": "light"|"dark"|"system"}` forces the app's appearance (check every visual change in both). `/screenshot` captures the panel window only; for the panel against the screen edge use `screencapture -x -R x,y,w,h` (top-left origin). Fixture titles: "Above the rule" (HRs), "Heading one", "Plain paragraph first.", links note (open by id; title is raw line 1).
+`/click` returns the resulting `selection`; `/select` sets it. `POST /search {"query": "..."}` sets the sidebar search. `POST /appearance {"mode": "light"|"dark"|"system"}` forces the app's appearance (check every visual change in both). `/screenshot` captures the panel window only; for the panel against the screen edge use `screencapture -x -R x,y,w,h` (top-left origin). Fixture titles: "Above the rule" (HRs), "Heading one", "Plain paragraph first.", links note (open by id; title is raw line 1).
 
 Gotchas
 - `/open` by `title` needs an exact match; use `id`.

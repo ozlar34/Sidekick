@@ -85,19 +85,9 @@ struct NoteListView: View {
     // and regular rows. Each ForEach now only differs in its onMove closure.
     @ViewBuilder
     private func row(_ note: Note, snippet: String? = nil) -> some View {
+        // The row draws its own selection and hover highlight.
         NoteRowView(note: note, store: store, selectedID: $selectedID, snippet: snippet)
-            .background(
-                RoundedRectangle(cornerRadius: Self.highlightCornerRadius)
-                    .fill(note.id == selectedID
-                          ? Color.accentColor.opacity(Self.highlightOpacity)
-                          : Color.clear)
-            )
             .contentShape(Rectangle())
             .onTapGesture { selectedID = note.id }
     }
-
-    // IN-01: named constants for the selection-highlight visual identity,
-    // previously inline literals repeated across the three row blocks.
-    private static let highlightCornerRadius: CGFloat = 6
-    private static let highlightOpacity: Double = 0.15
 }

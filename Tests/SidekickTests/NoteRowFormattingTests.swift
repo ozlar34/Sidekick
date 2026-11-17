@@ -41,4 +41,22 @@ final class NoteRowFormattingTests: XCTestCase {
         let result = NoteRowFormatting.formattedModifiedTime(lastYear, now: now)
         XCTAssertTrue(result.contains("2024"), "expected year in older-than-this-year label, got: \(result)")
     }
+
+    // MARK: - Row preview
+
+    /// The preview is the text the editor shows: no markdown markers, a link by its label, headings skipped.
+    func test_preview_isTheFirstShownLineWithoutMarkdown() {
+        let body = "# Title\n\n---\nSome *italic* and a [link](https://x.io) here.\nSecond line"
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: body), "Some italic and a link here.")
+    }
+
+    func test_preview_ofAChecklistOrQuote_dropsTheMarker() {
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "- [ ] Coffee beans\n"), "Coffee beans")
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "> Small steps\n"), "Small steps")
+    }
+
+    func test_preview_isNil_whenOnlyHeadingsOrEmpty() {
+        XCTAssertNil(NoteRowFormatting.firstMeaningfulLine(for: ""))
+        XCTAssertNil(NoteRowFormatting.firstMeaningfulLine(for: "# Only a heading\n\n"))
+    }
 }

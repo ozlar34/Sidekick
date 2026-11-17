@@ -104,6 +104,7 @@ final class DebugHarness {
             case ("POST", "/select"):      return (200, try select(req.json))
             case ("POST", "/screenshot"):  return (200, try screenshot(req.json))
             case ("POST", "/appearance"):  return (200, try appearance(req.json))
+            case ("POST", "/search"):      return (200, search(req.json))
             default:                      return (404, ["error": "no route \(req.method) \(req.path)"])
             }
         } catch let e as HarnessError {
@@ -262,6 +263,12 @@ final class DebugHarness {
         default:       throw fail("mode must be light, dark or system")
         }
         return ["appearance": NSApp.effectiveAppearance.name.rawValue]
+    }
+
+    /// Sets the sidebar's search text: `{"query": "..."}` (empty clears it). The field itself keeps no focus.
+    private func search(_ json: [String: Any]) -> [String: Any] {
+        app.panelController.panelState.searchQuery = json["query"] as? String ?? ""
+        return ["query": app.panelController.panelState.searchQuery]
     }
 
     private func open(_ json: [String: Any]) throws -> [String: Any] {
