@@ -49,4 +49,12 @@ final class PanelSizesTests: XCTestCase {
         XCTAssertEqual(frame.maxY, visible.maxY - m)
         XCTAssertEqual(frame.width, 480)
     }
+
+    /// A usable area shorter than the margins (a tiny or odd screen) still gives a panel of the minimum height.
+    func test_panelFrame_keepsTheMinimumHeight_onATinyVisibleArea() {
+        for height in [CGFloat(0), 10, 2 * PanelSizes.screenMargin, PanelSizes.minPanelHeight] {
+            let frame = PanelSizes.panelFrame(width: 480, in: CGRect(x: 0, y: 0, width: 800, height: height))
+            XCTAssertEqual(frame.height, PanelSizes.minPanelHeight, "visible height \(height)")
+        }
+    }
 }
