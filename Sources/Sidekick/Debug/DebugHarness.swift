@@ -107,6 +107,7 @@ final class DebugHarness {
             case ("POST", "/search"):      return (200, search(req.json))
             case ("POST", "/focus"):       return (200, try focus(req.json))
             case ("POST", "/delete"):      return (200, deleteSelected())
+            case ("POST", "/settings"):    return (200, openSettings())
             default:                      return (404, ["error": "no route \(req.method) \(req.path)"])
             }
         } catch let e as HarnessError {
@@ -271,6 +272,13 @@ final class DebugHarness {
     private func search(_ json: [String: Any]) -> [String: Any] {
         app.panelController.panelState.searchQuery = json["query"] as? String ?? ""
         return ["query": app.panelController.panelState.searchQuery]
+    }
+
+    /// Opens the Settings window as Settings… ⌘, does; returns its window number (for `screencapture -l`).
+    private func openSettings() -> [String: Any] {
+        app.openSettings(nil)
+        let window = NSApp.windows.first { $0.title == "Sidekick Settings" && $0.isVisible }
+        return ["windowNumber": window?.windowNumber ?? NSNull()]
     }
 
     /// Deletes the selected note the way Note > Delete does (that item has no shortcut to send).
