@@ -65,7 +65,7 @@ struct SettingsView: View {
                     Button("Browse...") { browseFolder() }.buttonStyle(.bordered)
                 }
             }
-            LabeledContent("Default Width") {
+            LabeledContent("Panel Width") {
                 HStack {
                     TextField("", value: $panelWidth, format: .number)
                         .frame(width: 60)
@@ -77,7 +77,7 @@ struct SettingsView: View {
                                 ctrl.resizePanel(to: clamped)
                             }
                         }
-                    Text("pt").foregroundStyle(.secondary)
+                    Text("pt (\(Int(PanelSizes.minPanelWidth))–\(Int(PanelSizes.maxPanelWidth)))").foregroundStyle(.secondary)
                 }
             }
             Toggle("Show in Dock", isOn: $showInDock)
