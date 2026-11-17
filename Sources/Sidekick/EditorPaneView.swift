@@ -30,14 +30,6 @@ struct EditorPaneView: View {
     /// The title's size: a body H1 is 28 semibold, so the title is 28 bold and leads by weight.
     private static let titleSize: CGFloat = 28
 
-    /// Footer text below the editor body. "Edited 2:14 PM" — Created date
-    /// is intentionally hidden because legacy notes pre-date the field and
-    /// filesystem birth time isn't preserved across folder moves.
-    private var metadataLine: String {
-        guard let edited = note.modified else { return "" }
-        return "Edited \(NoteRowFormatting.formattedModifiedTime(edited))"
-    }
-
     /// The open note owns the text: nothing about it passes through view state.
     @ViewBuilder private var editorBody: some View {
         if let open = store.openNote(note.id) {
@@ -117,18 +109,6 @@ struct EditorPaneView: View {
                     .frame(height: 2)
                     .allowsHitTesting(false)
                 }
-
-            // Created / Edited footer — Apple Notes style. Sits inside the editor pane VStack so the
-            // scroll view's clip bounds shrink by its height.
-            HStack {
-                Spacer()
-                Text(metadataLine)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .padding(.vertical, 6)
-            .background(Color(.textBackgroundColor))
 
             // Save-failure toast, bottom of editor. Every note whose save failed counts, not only the one shown.
             if !store.failedSaveIDs.isEmpty {

@@ -59,6 +59,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(aboutItem)
         appMenu.addItem(NSMenuItem.separator())
 
+        // Settings… ⌘, — the Mac's usual way in, beside the panel's gear and the status item's menu.
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(NSMenuItem.separator())
+
         appMenu.addItem(NSMenuItem(
             title: "Quit Sidekick",
             action: #selector(NSApplication.terminate(_:)),

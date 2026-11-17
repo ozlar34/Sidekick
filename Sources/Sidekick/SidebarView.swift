@@ -89,6 +89,7 @@ struct SidebarView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.primary)
                         Spacer()
+                        SettingsButton()
                         Button {
                             Task { @MainActor in
                                 do {
@@ -117,24 +118,6 @@ struct SidebarView: View {
                     Divider()
 
                     NoteListView(store: store, selectedID: $panelState.selectedNoteID, query: panelState.searchQuery)
-
-                    Divider()
-
-                    HStack {
-                        Spacer()
-
-                        Button(action: {
-                            (NSApp.delegate as? AppDelegate)?.openSettings()
-                        }) {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 14, weight: .medium))
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Settings")
-                        .accessibilityLabel("Settings")
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
                 }
             }
             .frame(width: PanelSizes.sidebarWidth(wanted: CGFloat(sidebarWidth), panelWidth: panelWidth))
@@ -287,6 +270,21 @@ struct SidebarView: View {
                 NSLog("[Sidekick] createFolder rebind failed: \(error.localizedDescription)")
             }
         }
+    }
+}
+
+/// Opens the Settings window.
+struct SettingsButton: View {
+    var body: some View {
+        Button {
+            (NSApp.delegate as? AppDelegate)?.openSettings()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 13, weight: .medium))
+        }
+        .buttonStyle(.borderless)
+        .help("Settings (⌘,)")
+        .accessibilityLabel("Settings")
     }
 }
 

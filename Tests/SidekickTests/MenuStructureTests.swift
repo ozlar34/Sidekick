@@ -42,14 +42,18 @@ final class MenuStructureTests: XCTestCase {
         let appSubmenu = NSApp.mainMenu?.items.first?.submenu
         XCTAssertNotNil(appSubmenu, "App submenu must exist")
 
-        guard let items = appSubmenu?.items, items.count >= 3 else {
-            XCTFail("App submenu must have at least About, separator, Quit")
+        guard let items = appSubmenu?.items, items.count >= 5 else {
+            XCTFail("App submenu must have About, separator, Settings…, separator, Quit")
             return
         }
         XCTAssertEqual(items[0].title, "About Sidekick", "First item: About Sidekick (D-M-02)")
-        XCTAssertTrue(items[1].isSeparatorItem, "Separator between About and Quit")
-        XCTAssertEqual(items[2].title, "Quit Sidekick", "Third item: Quit Sidekick")
-        XCTAssertEqual(items[2].keyEquivalent, "q", "Quit keeps ⌘Q")
+        XCTAssertTrue(items[1].isSeparatorItem, "Separator after About")
+        XCTAssertEqual(items[2].title, "Settings…")
+        XCTAssertEqual(items[2].keyEquivalent, ",", "Settings opens with ⌘,")
+        XCTAssertEqual(items[2].action, #selector(AppDelegate.openSettings(_:)))
+        XCTAssertTrue(items[3].isSeparatorItem, "Separator before Quit")
+        XCTAssertEqual(items[4].title, "Quit Sidekick", "Last item: Quit Sidekick")
+        XCTAssertEqual(items[4].keyEquivalent, "q", "Quit keeps ⌘Q")
     }
 
     // MARK: - D-M-03 — File submenu (MENU-01 + KBD-02)
