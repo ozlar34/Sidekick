@@ -92,6 +92,11 @@ struct EditorPaneView: View {
                     .padding(.vertical, 4)
             }
             .background(Color(.controlBackgroundColor))
+            // The hairline under the zone: in light mode the zone and the body are both white, so without it
+            // nothing marks where the toolbar ends.
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color(.separatorColor)).frame(height: 1).allowsHitTesting(false)
+            }
 
             if let open = store.openNote(note.id) {
                 OpenNoteStatusView(openNote: open)
