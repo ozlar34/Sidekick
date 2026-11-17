@@ -4,7 +4,13 @@
 set -e
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 S=${TMPDIR:-/tmp}/sidekick-debug; mkdir -p "$S"
-NOTES=$1; PORT=${2:-4567}
+NOTES=$(cd "$1" && pwd); PORT=${2:-4567}
+# A notes folder inside the repo (the tracked fixtures) is copied to a fresh scratch folder first: the app can rewrite the
+# folder it runs on (saves, and the one-time migration after a prefs reset renames every file), so it never runs on tracked files.
+case "$NOTES" in "$REPO"/*)
+  COPY=$S/notes; rm -rf "$COPY"; mkdir -p "$COPY"; cp -R "$NOTES"/. "$COPY"/
+  echo "debug-launch: running on a copy of $NOTES at $COPY"; NOTES=$COPY ;;
+esac
 APP=$S/SidekickDebug.app
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$REPO/.build/debug/Sidekick" "$APP/Contents/MacOS/Sidekick"

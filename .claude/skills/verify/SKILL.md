@@ -31,4 +31,5 @@ Gotchas
 - `/open` by `title` needs an exact match; use `id`.
 - `--debug-port 0` is rejected (harness not started, logged to stderr); always pass a real port. Check the listener with `lsof -a -nP -p $(pgrep -x Sidekick) -iTCP -sTCP:LISTEN`.
 - NSLog output from the LaunchServices launch does not reach `log show`; to read harness log lines run `.build/debug/Sidekick --debug-port <n> ... 2>&1 | tee` directly.
+- A notes folder inside the repo is copied to `$TMPDIR/sidekick-debug/notes` at each launch (the script prints the path), so the app never writes to the tracked fixtures: read saved files there, not in `fixtures/`. To see the first-run welcome window, delete `firstRunSeen`, `panelWidth` and `lastSelectedNoteFilename` from `com.oguzoral.SidekickDebug`; this also runs the one-time file migration, on the copy.
 - Stop with `pkill -x Sidekick`. Debug bundle id is `com.oguzoral.SidekickDebug`, so prefs never touch the real app's domain.
