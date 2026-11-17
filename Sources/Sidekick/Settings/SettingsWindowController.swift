@@ -19,8 +19,11 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Sidekick Settings"
         window.isReleasedWhenClosed = false
         window.level = .floating // ensures Settings stays above the floating SidekickPanel but below system alerts
+        let hostingView = NSHostingView(rootView: SettingsView())
+        window.contentView = hostingView
+        // As tall as the form, so all five rows show without scrolling.
+        window.setContentSize(hostingView.fittingSize)
         window.center()
-        window.contentView = NSHostingView(rootView: SettingsView())
         self.init(window: window)
     }
 

@@ -66,7 +66,7 @@ struct SettingsView: View {
                 }
             }
             LabeledContent("Panel Width") {
-                PanelWidthField(width: $panelWidth)
+                PanelWidthSlider(width: $panelWidth)
             }
             Toggle("Show in Dock", isOn: $showInDock)
                 .onChange(of: showInDock) { _, newValue in
@@ -160,41 +160,30 @@ struct SettingsView: View {
     }
 }
 
-/// The Panel Width row. You type freely: the value is kept inside the limits only on Enter or when the field loses
-/// focus (clamping on every keystroke turned the "56" of a half-typed "560" into 320). The arrows step 10 pt.
-/// A width set by dragging the panel edge shows here too.
-private struct PanelWidthField: View {
+/// The Panel Width row: a slider from 320 to 560 pt. Dragging it resizes the open panel live.
+/// A width set by dragging the panel edge shows here too (the edge drag saves the same default).
+private struct PanelWidthSlider: View {
     @Binding var width: Double
-    @State private var draft: Double = 0
-    @FocusState private var focused: Bool
 
-    private static let step: Double = 10
     private static let range = Double(PanelSizes.minPanelWidth)...Double(PanelSizes.maxPanelWidth)
 
     var body: some View {
-        HStack(spacing: 4) {
-            TextField("", value: $draft, format: .number)
-                .frame(width: 60)
-                .focused($focused)
-                .onSubmit { apply(draft) }
-                .onChange(of: focused) { _, isFocused in if !isFocused { apply(draft) } }
-            Stepper("Panel Width", value: Binding(get: { width }, set: { apply($0) }), in: Self.range, step: Self.step)
-                .labelsHidden()
-            Text("pt (\(Int(Self.range.lowerBound))–\(Int(Self.range.upperBound)))").foregroundStyle(.secondary)
+        Slider(value: Binding(get: { width }, set: { apply($0) }), in: Self.range) {
+            Text("Panel Width")
         }
-        .onAppear { draft = width }
-        .onChange(of: width) { _, newWidth in if !focused { draft = newWidth } }
-        .onDisappear { apply(draft) }
+        .labelsHidden()
     }
 
-    /// Keeps `value` inside the limits, stores it and resizes the panel if it is on screen.
+    /// Stores the width and gives it to the panel: resized now if it is on screen, used at the next summon if not.
     private func apply(_ value: Double) {
-        let clamped = Double(PanelSizes.panelWidth(CGFloat(value)))
-        draft = clamped
+        let clamped = Double(PanelSizes.panelWidth(CGFloat(value.rounded())))
         guard clamped != width else { return }
         width = clamped
-        if let ctrl = (NSApp.delegate as? AppDelegate)?.panelController, ctrl.panel?.isVisible == true {
+        guard let ctrl = (NSApp.delegate as? AppDelegate)?.panelController else { return }
+        if ctrl.panel?.isVisible == true {
             ctrl.resizePanel(to: clamped)
+        } else {
+            ctrl.panelWidth = clamped
         }
     }
 }
