@@ -86,7 +86,7 @@ final class MigrationTests: XCTestCase {
         try OldFormatFixture.write(into: notes)
         let original = try FolderTree.snapshot(notes)
 
-        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0); return nil },
                                   persistFolder: { _ in })
         await store.reload()
 
@@ -100,7 +100,7 @@ final class MigrationTests: XCTestCase {
 
         // A second store on the same folder (a restart) changes nothing.
         let settled = try FolderTree.snapshot(notes)
-        let store2 = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+        let store2 = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0); return nil },
                                    persistFolder: { _ in })
         await store2.reload()
         XCTAssertEqual(try FolderTree.snapshot(notes), settled)
@@ -280,7 +280,7 @@ final class MigrationTests: XCTestCase {
         let goodIndex = try Data(contentsOf: indexURL)
         try Data("{ not json".utf8).write(to: indexURL)           // the migration fails
 
-        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0); return nil },
                                   persistFolder: { _ in })
         await store.reload()
         XCTAssertNotNil(store.migrationError)
@@ -292,7 +292,7 @@ final class MigrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: notes.appendingPathComponent(OrderFile.filename).path))
 
         try goodIndex.write(to: indexURL)                         // the index is repaired; next launch
-        let store2 = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+        let store2 = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0); return nil },
                                    persistFolder: { _ in })
         await store2.reload()
 
@@ -363,7 +363,7 @@ final class MigrationTests: XCTestCase {
         try Data("a\n".utf8).write(to: notes.appendingPathComponent("some-slug.md"))
         try Data("{ not json".utf8).write(to: notes.appendingPathComponent(".index.json"))
         let before = try FolderTree.snapshot(parent)
-        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0) },
+        let store = try NoteStore(folder: notes, startWatcherImmediately: false, trash: { try FileManager.default.removeItem(at: $0); return nil },
                                   persistFolder: { _ in })
         XCTAssertNil(store.migrationNotice)
 

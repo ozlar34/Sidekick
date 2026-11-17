@@ -9,15 +9,17 @@ import Foundation
 actor IOActor {
 
     let folder: URL
-    /// Moves a file to the Trash. Tests inject a plain removal so they never touch the real Trash.
-    private let trash: @Sendable (URL) throws -> Void
+    /// Moves a file to the Trash and returns where it went (nil: the file is gone for good, so a delete cannot be
+    /// undone). Tests inject a plain removal or a move to a scratch folder so they never touch the real Trash.
+    private let trash: @Sendable (URL) throws -> URL?
 
-    init(folder: URL, trash: (@Sendable (URL) throws -> Void)? = nil) {
+    init(folder: URL, trash: (@Sendable (URL) throws -> URL?)? = nil) {
         self.folder = folder
         self.trash = trash ?? { url in
             var resultURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
             NSLog("[Sidekick] trashed \(url.lastPathComponent) → \(resultURL?.path ?? "?")")
+            return resultURL as URL?
         }
     }
 
@@ -91,9 +93,25 @@ actor IOActor {
         return vals?.contentModificationDate
     }
 
-    func trashNote(filename: String) throws {
-        let url = folder.appendingPathComponent(filename)
-        try trash(url)
+    /// Moves the note's file to the Trash; returns where it went (nil when it cannot be brought back).
+    func trashNote(filename: String) throws -> URL? {
+        try trash(folder.appendingPathComponent(filename))
+    }
+
+    /// Moves a trashed note back into the folder as `filename`, or as "<title> 2.md", ... when another file has
+    /// taken that name since. Returns the filename it has now. A move never replaces a file.
+    func restoreNote(from trashed: URL, filename: String) throws -> String {
+        let base = String(filename.dropLast(3))
+        var n = 1
+        while true {
+            let name = TitleRules.candidate(base: base, number: n) + ".md"
+            do {
+                try FileManager.default.moveItem(at: trashed, to: folder.appendingPathComponent(name))
+                return name
+            } catch CocoaError.fileWriteFileExists {
+                n += 1
+            }
+        }
     }
 
     // MARK: - Order file

@@ -109,6 +109,12 @@ final class PanelController {
             fatalError("PanelController.store must be set before toggle() is invoked")
         }
 
+        panel.undoDeleteIfPending = { [weak panel, weak store, panelState] in
+            guard let store, store.lastDeleted != nil, panel?.firstResponder?.undoManager?.canUndo != true else { return false }
+            undoLastDelete(store: store, panelState: panelState)
+            return true
+        }
+
         let rootView = SidebarView(store: store, panelState: panelState)
             .environment(\.setDocumentEdited) { [weak panel] edited in
                 panel?.isDocumentEdited = edited

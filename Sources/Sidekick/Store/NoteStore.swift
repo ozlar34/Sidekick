@@ -28,12 +28,14 @@ final class NoteStore: ObservableObject {
     /// store), until a save of that note succeeds. The pane shows the retry message while this is not
     /// empty, so a failure of a note that is no longer shown is still reported.
     @Published private(set) var failedSaveIDs: Set<UUID> = []
+    /// The note deleted last, while its delete can still be undone (see `undoDelete()`).
+    @Published private(set) var lastDeleted: DeletedNote?
 
     private var folder: URL
     /// The folder the store is bound to.
     var notesFolderURL: URL { folder }
     private let persistFolder: (URL) -> Void
-    private let trash: (@Sendable (URL) throws -> Void)?
+    private let trash: (@Sendable (URL) throws -> URL?)?
     private var io: IOActor
     /// Session ids by filename. Nothing on disk holds an id: a file the store has not seen gets a new
     /// one, and a rename made by the store carries the id over.
@@ -66,7 +68,7 @@ final class NoteStore: ObservableObject {
     ///     spin-up. Production callers always use the default `true`.
     ///     DEBUG preview fixtures pass `false` per D-PF-04.
     init(folder: URL, startWatcherImmediately: Bool = true,
-         trash: (@Sendable (URL) throws -> Void)? = nil,
+         trash: (@Sendable (URL) throws -> URL?)? = nil,
          persistFolder: ((URL) -> Void)? = nil) throws {
         try FileManager.default.createDirectory(
             at: folder,
@@ -243,8 +245,12 @@ final class NoteStore: ObservableObject {
     }
 
     private func deleteImpl(_ id: UUID) async throws {
-        guard let note = notes.first(where: { $0.id == id }) else { return }
-        try await io.trashNote(filename: note.filename)
+        guard let position = notes.firstIndex(where: { $0.id == id }) else { return }
+        let note = notes[position]
+        let trashed = try await io.trashNote(filename: note.filename)
+        lastDeleted = trashed.map {
+            DeletedNote(id: id, title: note.title, filename: note.filename, trashedURL: $0, pinned: note.pinned, position: position)
+        }
         if var arranged = await arrangement() {
             arranged.removeAll { $0.filename == note.filename }
             await saveOrderBestEffort(arranged)
@@ -255,6 +261,32 @@ final class NoteStore: ObservableObject {
         failedSaveIDs.remove(id)
         lastAuthoredBodyByID[id] = nil
         for i in notes.indices { notes[i].order = i }
+    }
+
+    /// Brings the last deleted note back from the Trash, with its id, its pin and its place in the list, and
+    /// returns its id. Nil when there is nothing to undo. Throws when the file is no longer in the Trash; the
+    /// delete then cannot be undone any more.
+    func undoDelete() async throws -> UUID? {
+        try await serialized { try await self.undoDeleteImpl() }
+    }
+
+    private func undoDeleteImpl() async throws -> UUID? {
+        guard let deleted = lastDeleted else { return nil }
+        lastDeleted = nil
+        let name = try await io.restoreNote(from: deleted.trashedURL, filename: deleted.filename)
+        idsByName[name] = deleted.id
+        if var arranged = await arrangement() {
+            arranged.removeAll { $0.filename == name }
+            arranged.insert(.init(filename: name, pinned: deleted.pinned), at: min(deleted.position, arranged.count))
+            await saveOrderBestEffort(arranged)
+        }
+        await applyDisk()
+        return deleted.id
+    }
+
+    /// The undo of the delete of `id` is no longer offered. A later delete keeps its own undo.
+    func forgetDeleted(_ id: UUID) {
+        if lastDeleted?.id == id { lastDeleted = nil }
     }
 
     func reloadNote(id: UUID) async {
@@ -391,6 +423,7 @@ final class NoteStore: ObservableObject {
         // 3. Rebuild the downstream collaborators pointing at newFolder.
         //    IOActor.folder is `let`, so we reconstruct rather than mutate.
         self.folder = newFolder
+        lastDeleted = nil  // its file would come back into the old folder
         self.io = IOActor(folder: newFolder, trash: trash)
         self.watcher = FolderWatcher(url: newFolder)
 
@@ -564,4 +597,15 @@ final class NoteStore: ObservableObject {
         let liveIDs = Set(materialized.map(\.id))
         lastAuthoredBodyByID = lastAuthoredBodyByID.filter { liveIDs.contains($0.key) }
     }
+}
+
+/// A note just moved to the Trash, kept so the delete can be undone: where its file went and where it stood.
+struct DeletedNote: Equatable {
+    let id: UUID
+    let title: String
+    let filename: String
+    let trashedURL: URL
+    let pinned: Bool
+    /// Its index in the list (pinned notes first), where an undo puts it back.
+    let position: Int
 }

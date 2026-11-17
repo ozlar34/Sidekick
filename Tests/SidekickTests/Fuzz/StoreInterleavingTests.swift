@@ -63,7 +63,7 @@ final class StoreInterleavingTests: XCTestCase {
 
     private func makeStore(_ folder: TempFolder) async throws -> (NoteStore, [UUID]) {
         let store = try NoteStore(folder: folder.url, startWatcherImmediately: false,
-                                  trash: { try FileManager.default.removeItem(at: $0) })
+                                  trash: { try FileManager.default.removeItem(at: $0); return nil })
         var ids: [UUID] = []
         for i in 0..<Self.slots {
             let n = try await store.create()

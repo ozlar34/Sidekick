@@ -10,12 +10,21 @@ final class SidekickPanel: NSPanel {
     override var canBecomeKey: Bool { true }   // required so Escape reaches us
     override var canBecomeMain: Bool { false } // stays a utility window
 
+    /// Undoes the last delete when one can be undone and the focused view has nothing of its own to undo; returns
+    /// whether it did. Set by PanelController.
+    var undoDeleteIfPending: (() -> Bool)?
+
     /// G-05: nonactivating panels bypass Cocoa's global menu-bar key-equivalent
     /// dispatcher — Cmd+Z / Cmd+Shift+Z / Cmd+Q reach the *previously active*
     /// app's menu bar, not ours. Manually scan NSApp.mainMenu so items like
     /// Undo/Redo/Cut/Copy/Paste/Quit route to our first responder (the
     /// NSTextView inside SwiftUI TextEditor).
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // ⌘Z right after a delete undoes the delete, when the focused text has no undo of its own.
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers == "z", undoDeleteIfPending?() == true {
+            return true
+        }
         if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
             return true
         }

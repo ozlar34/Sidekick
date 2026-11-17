@@ -117,22 +117,31 @@ struct SidebarView: View {
                 sidebarDividerHandle(panelWidth: panelWidth)
             }
 
-            // Editor — plain opaque background
-            Group {
-                if store.notes.isEmpty {
-                    // True empty-state — no notes exist.
-                    EmptyStateView(symbol: "note.text", title: "No Notes Yet",
-                                   message: "Your notes are plain Markdown files in one folder.",
-                                   action: (label: "New Note (⌘N)", perform: createNote))
-                        .background(Color(.textBackgroundColor))
-                } else if let note = selectedNote {
-                    EditorPaneView(store: store, panelState: panelState, note: note, selectedID: $panelState.selectedNoteID)
-                } else {
-                    // Notes exist but none selected (stale UUID mid-reassignment, or
-                    // transient between delete → onChange reassign).
-                    EmptyStateView(symbol: "sidebar.left", title: "No Note Selected",
-                                   message: "Pick a note from the sidebar.")
-                        .background(Color(.textBackgroundColor))
+            // Editor — plain opaque background, with the undo bar of a delete under it
+            VStack(spacing: 0) {
+                Group {
+                    if store.notes.isEmpty {
+                        // True empty-state — no notes exist.
+                        EmptyStateView(symbol: "note.text", title: "No Notes Yet",
+                                       message: "Your notes are plain Markdown files in one folder.",
+                                       action: (label: "New Note (⌘N)", perform: createNote))
+                            .background(Color(.textBackgroundColor))
+                    } else if let note = selectedNote {
+                        EditorPaneView(store: store, panelState: panelState, note: note, selectedID: $panelState.selectedNoteID)
+                    } else {
+                        // Notes exist but none selected (stale UUID mid-reassignment, or
+                        // transient between delete → onChange reassign).
+                        EmptyStateView(symbol: "sidebar.left", title: "No Note Selected",
+                                       message: "Pick a note from the sidebar.")
+                            .background(Color(.textBackgroundColor))
+                    }
+                }
+                if let deleted = store.lastDeleted {
+                    UndoDeleteBar(deleted: deleted) { undoLastDelete(store: store, panelState: panelState) }
+                        .task(id: deleted.id) {
+                            try? await Task.sleep(for: UndoDeleteBar.shownFor)
+                            if !Task.isCancelled { store.forgetDeleted(deleted.id) }
+                        }
                 }
             }
         }

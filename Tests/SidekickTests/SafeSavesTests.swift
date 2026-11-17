@@ -25,7 +25,7 @@ final class SafeSavesTests: XCTestCase {
         let folder = TempFolder()
         let persisted = PersistedFolders()
         let store = try NoteStore(folder: folder.url, startWatcherImmediately: false,
-                                  trash: { try FileManager.default.removeItem(at: $0) },
+                                  trash: { try FileManager.default.removeItem(at: $0); return nil },
                                   persistFolder: { persisted.paths.append($0.path) })
         var ids: [UUID] = []
         for body in bodies {
@@ -302,7 +302,7 @@ final class SafeSavesTests: XCTestCase {
     func testRealWatcherReportsAnOutsideWriteToTheOpenNote() async throws {
         let folder = TempFolder()
         let store = try NoteStore(folder: folder.url, startWatcherImmediately: true,
-                                  trash: { try FileManager.default.removeItem(at: $0) },
+                                  trash: { try FileManager.default.removeItem(at: $0); return nil },
                                   persistFolder: { _ in })
         let n = try await store.create()
         try await store.update(n.id, title: "", body: "alpha\n")

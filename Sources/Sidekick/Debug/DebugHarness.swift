@@ -106,6 +106,7 @@ final class DebugHarness {
             case ("POST", "/appearance"):  return (200, try appearance(req.json))
             case ("POST", "/search"):      return (200, search(req.json))
             case ("POST", "/focus"):       return (200, try focus(req.json))
+            case ("POST", "/delete"):      return (200, deleteSelected())
             default:                      return (404, ["error": "no route \(req.method) \(req.path)"])
             }
         } catch let e as HarnessError {
@@ -270,6 +271,12 @@ final class DebugHarness {
     private func search(_ json: [String: Any]) -> [String: Any] {
         app.panelController.panelState.searchQuery = json["query"] as? String ?? ""
         return ["query": app.panelController.panelState.searchQuery]
+    }
+
+    /// Deletes the selected note the way Note > Delete does (that item has no shortcut to send).
+    private func deleteSelected() -> [String: Any] {
+        app.deleteNote(nil)
+        return ["deleted": app.panelController.panelState.selectedNoteID.map { $0.uuidString } ?? NSNull()]
     }
 
     /// Puts the caret in the note's title field: `{"target": "title", "caret": "end"|"start"}` (end by default).

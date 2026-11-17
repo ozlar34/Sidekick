@@ -12,7 +12,7 @@ final class FilesAreTruthTests: XCTestCase {
 
     private func makeStore(_ folder: TempFolder, watcher: Bool = false) throws -> NoteStore {
         try NoteStore(folder: folder.url, startWatcherImmediately: watcher,
-                      trash: { try FileManager.default.removeItem(at: $0) }, persistFolder: { _ in })
+                      trash: { try FileManager.default.removeItem(at: $0); return nil }, persistFolder: { _ in })
     }
 
     private func write(_ name: String, _ text: String, in folder: TempFolder, modified: TimeInterval? = nil) throws {
@@ -162,7 +162,7 @@ final class FilesAreTruthTests: XCTestCase {
         let damaged = OrderFile.filename + ".damaged"
         try write(damaged, "older damage", in: folder)
         try write(OrderFile.filename, "newer damage", in: folder)
-        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0) })
+        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0); return nil })
         guard case .damaged = await io.loadOrder() else { return XCTFail("expected damaged") }
         XCTAssertEqual(try bytes(damaged, in: folder), Data("older damage".utf8), "an earlier file is never deleted or replaced")
         let aside = try listing(folder).filter { $0.hasPrefix(damaged) && $0 != damaged }
@@ -231,7 +231,7 @@ final class FilesAreTruthTests: XCTestCase {
 
     func testCreatingANoteNeverMakesANameWithCharactersObsidianRejects() async throws {
         let folder = TempFolder()
-        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0) })
+        let io = IOActor(folder: folder.url, trash: { try FileManager.default.removeItem(at: $0); return nil })
         let first = try await io.createNote(base: "N?*\"<>|\\:x")
         let second = try await io.createNote(base: "N?*\"<>|\\:x")
         XCTAssertEqual([first, second], ["N--------x.md", "N--------x 2.md"])
