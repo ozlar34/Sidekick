@@ -55,6 +55,19 @@ final class NoteRowFormattingTests: XCTestCase {
         XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "> Small steps\n"), "Small steps")
     }
 
+    /// A code block or a table at the top is skipped: the preview is the first line of text after it.
+    func test_preview_skipsALeadingCodeBlockOrTable() {
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "```\nlet x = 1\n```\nAfter the code.\n"), "After the code.")
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "| A | B |\n| --- | --- |\n| 1 | 2 |\nAfter the table.\n"),
+                       "After the table.")
+    }
+
+    /// A quote or a checklist at the top is the preview, not the paragraph after it.
+    func test_preview_ofALeadingQuoteOrChecklist_isThatLine() {
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "> Small steps\nA paragraph.\n"), "Small steps")
+        XCTAssertEqual(NoteRowFormatting.firstMeaningfulLine(for: "- [x] Book dentist\nA paragraph.\n"), "Book dentist")
+    }
+
     func test_preview_isNil_whenOnlyHeadingsOrEmpty() {
         XCTAssertNil(NoteRowFormatting.firstMeaningfulLine(for: ""))
         XCTAssertNil(NoteRowFormatting.firstMeaningfulLine(for: "# Only a heading\n\n"))
