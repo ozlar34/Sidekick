@@ -29,6 +29,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelController.store = store
     }
 
+    private var firstRunController: FirstRunWindowController?
+
+    /// Shows the one-time welcome window on a first launch (see `FirstRun.shouldShow`).
+    private func showFirstRunIfNeeded(folder: URL) {
+        guard FirstRun.shouldShow() else { return }
+        let controller = FirstRunWindowController(
+            folder: folder,
+            openSettings: { [weak self] in self?.openSettings() },
+            startWriting: { [weak self] in self?.panelController.toggle() })
+        firstRunController = controller
+        controller.show()
+    }
+
     @objc func openSettings(_ sender: Any? = nil) {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController()
@@ -447,6 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !ok {
                 NSLog("[Sidekick] failed to register ⌃⌥⌘N — is another app claiming it?")
             }
+            showFirstRunIfNeeded(folder: folder)
         } catch {
             NSLog("[Sidekick] NoteStore init failed: \(error.localizedDescription) — hotkey not registered")
         }
