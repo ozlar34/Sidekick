@@ -344,10 +344,8 @@ extension NoteTextEngine {
         guard let lm = tv.layoutManager as? NoteLayoutManager, let tc = tv.textContainer else { return [] }
         lm.ensureLayout(for: tc)
         let origin = tv.textContainerOrigin
-        let quotes = lm.blocks(of: .quote, in: NSRange(location: 0, length: lm.textStorage?.length ?? 0))
-        var runs: [NSRange] = []
-        for para in quotes where !runs.contains(where: { NSLocationInRange(para.location, $0) }) { runs.append(lm.quoteRun(around: para)) }
-        return runs.compactMap { lm.quoteBarRect(for: $0) }.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+        return lm.quoteRuns(in: NSRange(location: 0, length: lm.textStorage?.length ?? 0)).compactMap { lm.quoteBarRect(for: $0) }
+            .map { $0.offsetBy(dx: origin.x, dy: origin.y) }
     }
 
     /// Grid of every table, in view coordinates.
@@ -373,10 +371,8 @@ extension NoteLayoutManager {
             if let rect = codeRect(for: para) { NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y), xRadius: 4, yRadius: 4).fill() }
         }
         // One bar per run of quote lines: drawn piecewise, translucent pieces would overlap into seams.
-        var drawnRuns = Set<Int>()
-        for para in blocks(of: .quote, in: chars) {
-            let run = quoteRun(around: para)
-            guard drawnRuns.insert(run.location).inserted, let rect = quoteBarRect(for: run) else { continue }
+        for run in quoteRuns(in: chars) {
+            guard let rect = quoteBarRect(for: run) else { continue }
             NSColor.secondaryLabelColor.setFill()
             NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y), xRadius: 1.5, yRadius: 1.5).fill()
         }
@@ -435,6 +431,12 @@ extension NoteLayoutManager {
         enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in union = union.map { $0.union(rect) } ?? rect }
         guard let lines = union else { return nil }
         return NSRect(x: tc.lineFragmentPadding + Self.quoteBarInset, y: lines.minY, width: Self.quoteBarWidth, height: lines.height)
+    }
+
+    /// Each run of consecutive quote paragraphs that meets `chars`, once, in text order.
+    func quoteRuns(in chars: NSRange) -> [NSRange] {
+        var seen = Set<Int>()
+        return blocks(of: .quote, in: chars).map { quoteRun(around: $0) }.filter { seen.insert($0.location).inserted }
     }
 
     /// The quote paragraph `para` together with the quote paragraphs right before and after it.
