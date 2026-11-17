@@ -23,7 +23,7 @@ struct FirstRunView: View {
             }
 
             section(title: "Your notes") {
-                Text(folderPath)
+                Text((folderPath as NSString).abbreviatingWithTildeInPath)  // "~/…": shorter, and no user name
                     .font(.system(size: 12, design: .monospaced))
                     .lineLimit(2).truncationMode(.middle)
                     .textSelection(.enabled)
