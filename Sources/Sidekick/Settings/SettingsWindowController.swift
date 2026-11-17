@@ -25,6 +25,18 @@ final class SettingsWindowController: NSWindowController {
         window.setContentSize(hostingView.fittingSize)
         window.center()
         self.init(window: window)
+        hostingView.rootView = SettingsView(onHeightChange: { [weak self] in self?.fitToForm() })
+    }
+
+    /// Sets the window to the form's height again, keeping its top edge in place. Runs on the next turn of the
+    /// main loop, after SwiftUI has laid out the changed form.
+    private func fitToForm() {
+        DispatchQueue.main.async { [weak self] in
+            guard let window = self?.window, let content = window.contentView else { return }
+            var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: content.fittingSize))
+            frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+            window.setFrame(frame, display: true, animate: true)
+        }
     }
 
     func show() {

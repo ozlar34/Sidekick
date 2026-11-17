@@ -45,6 +45,9 @@ struct SettingsView: View {
     @State private var conflictAppName: String? = nil
     @State private var previousShortcut: KeyboardShortcuts.Shortcut? = nil
 
+    /// Called when the form changes height (the conflict warning shows or goes), so the window can fit it again.
+    var onHeightChange: () -> Void = {}
+
     var body: some View {
         Form {
             LabeledContent("Global Shortcut") {
@@ -81,6 +84,7 @@ struct SettingsView: View {
         .padding(.horizontal, 32)
         .padding(.vertical, 16)
         .frame(width: 400)
+        .onChange(of: conflictAppName) { _, _ in onHeightChange() }
         .onAppear {
             launchAtLogin = (SMAppService.mainApp.status == .enabled)
             previousShortcut = KeyboardShortcuts.getShortcut(for: .togglePanel)
