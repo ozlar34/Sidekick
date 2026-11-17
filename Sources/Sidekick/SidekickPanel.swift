@@ -6,12 +6,12 @@ import AppKit
 /// stays `false` so the panel never claims main-window status.
 ///
 /// Pattern source: RESEARCH.md §Pattern 3 / Cindori tutorial / StandingDeskTimer MenuPanel.
-final class SidekickPanel: NSPanel {
+final class SidekickPanel: NSPanel, NSWindowDelegate {
     override var canBecomeKey: Bool { true }   // required so Escape reaches us
     override var canBecomeMain: Bool { false } // stays a utility window
 
-    /// Undoes the last delete when one can be undone and the focused view has nothing of its own to undo; returns
-    /// whether it did. Set by PanelController.
+    /// Undoes the last delete when it is still the newest undoable action (nothing typed since); returns whether it
+    /// did. Set by PanelController.
     var undoDeleteIfPending: (() -> Bool)?
 
     /// G-05: nonactivating panels bypass Cocoa's global menu-bar key-equivalent
@@ -20,7 +20,7 @@ final class SidekickPanel: NSPanel {
     /// Undo/Redo/Cut/Copy/Paste/Quit route to our first responder (the
     /// NSTextView inside SwiftUI TextEditor).
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // ⌘Z right after a delete undoes the delete, when the focused text has no undo of its own.
+        // ⌘Z right after a delete undoes the delete, when nothing was typed since.
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
            event.charactersIgnoringModifiers == "z", undoDeleteIfPending?() == true {
             return true
@@ -71,6 +71,16 @@ final class SidekickPanel: NSPanel {
         isOpaque = false           // required for vibrancy to composite behind the window
         hasShadow = true
         animationBehavior = .none  // we animate frame manually
+        delegate = self
+    }
+
+    /// The window's own undo history: the title field and anything else that is not the note.
+    private let panelUndoManager = UndoManager()
+
+    /// ⌘Z and Edit > Undo send `undo:` to the window, which asks here which undo manager to use. Each note keeps
+    /// its own undo history (`NoteContent.undoManager`), so while the editor is focused that is the one.
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        (firstResponder as? NoteTextView)?.undoManager ?? panelUndoManager
     }
 
     /// Round the content view's corners to match macOS Sequoia HUD/utility

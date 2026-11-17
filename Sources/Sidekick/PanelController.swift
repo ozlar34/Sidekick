@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Owns the `SidekickPanel` lifecycle: lazy creation, slide-in/slide-out
@@ -22,6 +23,10 @@ final class PanelController {
     var store: NoteStore?
     let panelState = PanelState()
     private var escMonitor: Any?
+    /// The delete that is still the newest undoable action: set by a delete, cleared by any text the user changes
+    /// after it, so ⌘Z undoes whatever came last.
+    private var newestDeleteID: UUID?
+    private var deleteTracking: [AnyCancellable] = []
 
     var panelWidth: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: Defaults.panelWidth)
@@ -109,8 +114,13 @@ final class PanelController {
             fatalError("PanelController.store must be set before toggle() is invoked")
         }
 
-        panel.undoDeleteIfPending = { [weak panel, weak store, panelState] in
-            guard let store, store.lastDeleted != nil, panel?.firstResponder?.undoManager?.canUndo != true else { return false }
+        store.$lastDeleted.sink { [weak self] deleted in self?.newestDeleteID = deleted?.id }.store(in: &deleteTracking)
+        // Any text the user changes after the delete (note body or title) is newer than the delete.
+        NotificationCenter.default.publisher(for: NSText.didChangeNotification)
+            .sink { [weak self] _ in self?.newestDeleteID = nil }
+            .store(in: &deleteTracking)
+        panel.undoDeleteIfPending = { [weak self, weak store, panelState] in
+            guard let store, let deleted = store.lastDeleted, self?.newestDeleteID == deleted.id else { return false }
             undoLastDelete(store: store, panelState: panelState)
             return true
         }
