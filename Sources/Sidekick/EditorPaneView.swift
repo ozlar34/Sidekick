@@ -27,6 +27,9 @@ struct EditorPaneView: View {
     // would discard edits.
     @State private var hasPendingEdits: Bool = false
 
+    /// The title's size: a body H1 is 28 semibold, so the title is 28 bold and leads by weight.
+    private static let titleSize: CGFloat = 28
+
     /// Footer text below the editor body. "Edited 2:14 PM" — Created date
     /// is intentionally hidden because legacy notes pre-date the field and
     /// filesystem birth time isn't preserved across folder moves.
@@ -64,13 +67,13 @@ struct EditorPaneView: View {
                 TitleField(
                     text: $localTitle,
                     placeholder: "Untitled",
-                    font: NSFont.systemFont(ofSize: 22, weight: .semibold),
+                    font: NSFont.systemFont(ofSize: Self.titleSize, weight: .bold),
                     controller: titleController,
                     onTab: focusBody,
                     onSubmit: focusBody,
                     onCommit: commitTitle
                 )
-                    .frame(height: 28)
+                    .frame(height: Self.titleSize + 10)
                     .onChange(of: localTitle) { _, newValue in
                         // Skip the onAppear / note-switch reseed — it would
                         // re-write the same body to disk and bump mtime.

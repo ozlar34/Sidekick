@@ -54,10 +54,13 @@ struct TitleField: NSViewRepresentable {
         tf.delegate = context.coordinator
         tf.target = context.coordinator
         tf.action = #selector(Coordinator.submit(_:))
-        // Single-line behavior: don't wrap, scroll horizontally on overflow.
+        // Single line: a title too long for the field ends in "…" (a scrollable cell cut it mid-letter instead).
+        // While editing, the field editor still scrolls to the caret.
         tf.cell?.wraps = false
         tf.cell?.usesSingleLineMode = true
-        tf.cell?.isScrollable = true
+        tf.cell?.isScrollable = false
+        tf.cell?.lineBreakMode = .byTruncatingTail
+        tf.cell?.truncatesLastVisibleLine = true
         tf.stringValue = text
         controller.textField = tf
         context.coordinator.watchWindowResign(of: tf)

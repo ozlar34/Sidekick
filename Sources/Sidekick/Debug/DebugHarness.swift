@@ -105,6 +105,7 @@ final class DebugHarness {
             case ("POST", "/screenshot"):  return (200, try screenshot(req.json))
             case ("POST", "/appearance"):  return (200, try appearance(req.json))
             case ("POST", "/search"):      return (200, search(req.json))
+            case ("POST", "/focus"):       return (200, try focus(req.json))
             default:                      return (404, ["error": "no route \(req.method) \(req.path)"])
             }
         } catch let e as HarnessError {
@@ -269,6 +270,27 @@ final class DebugHarness {
     private func search(_ json: [String: Any]) -> [String: Any] {
         app.panelController.panelState.searchQuery = json["query"] as? String ?? ""
         return ["query": app.panelController.panelState.searchQuery]
+    }
+
+    /// Puts the caret in the note's title field: `{"target": "title", "caret": "end"|"start"}` (end by default).
+    private func focus(_ json: [String: Any]) throws -> [String: Any] {
+        guard let panel else { throw fail("no panel") }
+        guard json["target"] as? String == "title" else { throw fail("target must be title") }
+        guard let field = Self.findTitleField(in: panel.contentView) else { throw fail("title field not mounted") }
+        panel.makeFirstResponder(field)
+        if let editor = field.currentEditor() {
+            let end = (field.stringValue as NSString).length
+            editor.selectedRange = NSRange(location: json["caret"] as? String == "start" ? 0 : end, length: 0)
+            editor.scrollRangeToVisible(editor.selectedRange)
+        }
+        return ["firstResponder": panel.firstResponder.map { String(describing: Swift.type(of: $0)) } ?? NSNull()]
+    }
+
+    private static func findTitleField(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let tf = view as? NSTextField, tf.isEditable, tf.placeholderString == "Untitled" { return tf }
+        for sub in view.subviews { if let tf = findTitleField(in: sub) { return tf } }
+        return nil
     }
 
     private func open(_ json: [String: Any]) throws -> [String: Any] {
