@@ -28,7 +28,7 @@ final class NoteStore: ObservableObject {
     /// store), until a save of that note succeeds. The pane shows the retry message while this is not
     /// empty, so a failure of a note that is no longer shown is still reported.
     @Published private(set) var failedSaveIDs: Set<UUID> = []
-    /// The note deleted last, while its delete can still be undone (see `undoDelete()`).
+    /// The note deleted last, until it is brought back or another delete takes its place (see `undoDelete()`).
     @Published private(set) var lastDeleted: DeletedNote?
 
     private var folder: URL
@@ -282,11 +282,6 @@ final class NoteStore: ObservableObject {
         }
         await applyDisk()
         return deleted.id
-    }
-
-    /// The undo of the delete of `id` is no longer offered. A later delete keeps its own undo.
-    func forgetDeleted(_ id: UUID) {
-        if lastDeleted?.id == id { lastDeleted = nil }
     }
 
     func reloadNote(id: UUID) async {

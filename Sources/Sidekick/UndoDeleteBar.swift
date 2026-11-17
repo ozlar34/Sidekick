@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// The bar under the editor after a delete: the note went to the Trash, and Undo brings it back. It goes away on
-/// its own after `UndoDeleteBar.shownFor`, or when the next delete takes its place.
+/// its own after `UndoDeleteBar.shownFor`, or when the next delete takes its place. ⌘Z can still undo the delete
+/// after the bar is gone (see `PanelController`).
 struct UndoDeleteBar: View {
-    static let shownFor: Duration = .seconds(6)
+    static let shownFor: Duration = .seconds(4)
 
     let deleted: DeletedNote
     let undo: () -> Void

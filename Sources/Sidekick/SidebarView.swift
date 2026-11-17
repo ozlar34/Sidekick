@@ -8,6 +8,8 @@ struct SidebarView: View {
     @AppStorage(Defaults.sidebarWidth) private var sidebarWidth: Double = Double(PanelSizes.defaultSidebarWidth)
     @State private var showMissingFolderSheet = false
     @State private var createError: Bool = false
+    /// The delete whose undo bar has had its time; the delete itself can still be undone with ⌘Z.
+    @State private var undoBarTimedOut: UUID?
     @FocusState private var searchFocused: Bool
 
     private var panelController: PanelController? {
@@ -136,11 +138,11 @@ struct SidebarView: View {
                             .background(Color(.textBackgroundColor))
                     }
                 }
-                if let deleted = store.lastDeleted {
+                if let deleted = store.lastDeleted, deleted.id != undoBarTimedOut {
                     UndoDeleteBar(deleted: deleted) { undoLastDelete(store: store, panelState: panelState) }
                         .task(id: deleted.id) {
                             try? await Task.sleep(for: UndoDeleteBar.shownFor)
-                            if !Task.isCancelled { store.forgetDeleted(deleted.id) }
+                            if !Task.isCancelled { undoBarTimedOut = deleted.id }
                         }
                 }
             }

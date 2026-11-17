@@ -68,7 +68,7 @@ final class DeleteUndoTests: XCTestCase {
         XCTAssertNil(restored)
     }
 
-    func testForgettingAnOlderDeleteKeepsTheNewerOne() async throws {
+    func testOnlyTheLatestDeleteCanBeUndone() async throws {
         let folder = TempFolder(), bin = TempFolder()
         for name in ["A.md", "B.md"] { try write(name, "x\n", in: folder) }
         let store = try makeStore(folder, trash: bin)
@@ -76,9 +76,9 @@ final class DeleteUndoTests: XCTestCase {
         let a = store.notes[0], b = store.notes[1]
         try await store.delete(a.id)
         try await store.delete(b.id)
-        store.forgetDeleted(a.id)
-        XCTAssertEqual(store.lastDeleted?.id, b.id, "the timer of an older delete must not hide the newer undo")
-        store.forgetDeleted(b.id)
-        XCTAssertNil(store.lastDeleted)
+        XCTAssertEqual(store.lastDeleted?.id, b.id)
+        let restored = try await store.undoDelete()
+        XCTAssertEqual(restored, b.id)
+        XCTAssertEqual(store.notes.map(\.id), [b.id], "A stays in the Trash")
     }
 }
