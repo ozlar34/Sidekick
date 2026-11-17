@@ -78,11 +78,8 @@ struct SidebarView: View {
     private func content(panelWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             // ResizeHandleView is attached as .overlay(alignment: .leading) below
-            // Sidebar — fully opaque windowBackground. Borderless panels
-            // can't blend vibrancy against window chrome (there isn't any), so
-            // any translucency just bleeds the desktop through. Solid fill it is.
             ZStack {
-                Color(.windowBackgroundColor)
+                SidebarSurface()
                 VStack(spacing: 0) {
                     HStack {
                         Text("Notes")
@@ -262,6 +259,20 @@ struct SidebarView: View {
             }
         }
     }
+}
+
+/// The sidebar's background: the frosted sidebar material, which shows what is behind the panel blurred and tinted.
+/// Behind-window blending works in a borderless panel because the panel is not opaque (`SidekickPanel`). The state is
+/// forced to active: a non-activating panel would otherwise draw the flat gray inactive look.
+struct SidebarSurface: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .sidebar
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// Opens the Settings window.
